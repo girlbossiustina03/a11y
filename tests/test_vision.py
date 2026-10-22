@@ -89,3 +89,33 @@ class VisualServiceTests(CompanionFixture, unittest.TestCase):
         evidence = self.provider.contexts[-1]['evidence']
         self.assertFalse(evidence['window_metadata_present'])
         self.assertEqual(evidence['missing_window_metadata_means'], 'unknown, not an empty desktop')
+
+
+class ModelImageTests(unittest.TestCase):
+    def frame(self, width, height):
+        import base64
+        from PyQt6.QtCore import QBuffer, QByteArray, QIODevice, Qt
+        from PyQt6.QtGui import QImage
+        image = QImage(width, height, QImage.Format.Format_RGB32)
+        image.fill(Qt.GlobalColor.white)
+        data = QByteArray()
+        buffer = QBuffer(data)
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        image.save(buffer, 'PNG')
+        return 'data:image/png;base64,'+base64.b64encode(bytes(data)).decode()
+
+    def test_model_copy_is_narrower_and_keeps_aspect_ratio(self):
+        import base64
+        import importlib.util
+        if importlib.util.find_spec('PyQt6') is None:
+            self.skipTest('PyQt6 missing')
+        from PyQt6.QtGui import QImage
+        from companion.vision import ScreenVision
+        scaled = ScreenVision.model_image(self.frame(1440, 900))
+        image = QImage.fromData(base64.b64decode(scaled.split(',', 1)[1]))
+        self.assertEqual((image.width(), image.height()), (768, 480))
+        small = self.frame(700, 400)
+        self.assertEqual(ScreenVision.model_image(small), small)
+        with patch.dict('os.environ', {'A11Y_MODEL_IMAGE_WIDTH': '1440'}):
+            original = self.frame(1440, 900)
+            self.assertEqual(ScreenVision.model_image(original), original)

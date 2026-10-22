@@ -129,5 +129,18 @@ class StreamTransportTests(unittest.TestCase):
             server.close()
 
 
+class KeepAliveTests(unittest.TestCase):
+    def test_model_stays_loaded_between_requests_by_default_and_is_configurable(self):
+        from unittest.mock import patch
+        from companion.ollama import keep_alive
+        with patch.dict('os.environ', {}, clear=True):
+            self.assertEqual(keep_alive(), '30m')
+        with patch.dict('os.environ', {'A11Y_OLLAMA_KEEP_ALIVE': '5m'}):
+            self.assertEqual(keep_alive(), '5m')
+        with patch.dict('os.environ', {'A11Y_OLLAMA_KEEP_ALIVE': '5m; rm'}):
+            with self.assertRaises(ProviderError):
+                keep_alive()
+
+
 if __name__ == '__main__':
     unittest.main()

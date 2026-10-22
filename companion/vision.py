@@ -93,6 +93,36 @@ class ScreenVision:
         return data
 
     @staticmethod
+    def model_image(image_data):
+        """A narrower copy of a frame for the model only.
+
+        A live log measured ~2,100 prompt tokens (~4 s) for a 1440-px frame. Image
+        tokens scale with area, so 768 px is about a quarter of them. Screen text
+        reaches the model as OCR regions, so the image mainly carries layout and
+        icons. Click guards and OCR keep using the full frame; coordinates are
+        fractions, so they are unchanged. A11Y_MODEL_IMAGE_WIDTH (512-2048) tunes it."""
+        import base64
+        try:
+            width = int(os.getenv('A11Y_MODEL_IMAGE_WIDTH', '768'))
+        except ValueError:
+            width = 768
+        width = max(512, min(width, 2048))
+        try:
+            from PyQt6.QtCore import QBuffer, QByteArray, QIODevice, Qt
+            from PyQt6.QtGui import QImage
+        except ImportError:
+            return image_data
+        image = QImage.fromData(base64.b64decode(image_data.split(',', 1)[1]))
+        if image.isNull() or image.width() <= width:
+            return image_data
+        scaled = image.scaledToWidth(width, Qt.TransformationMode.SmoothTransformation)
+        data = QByteArray()
+        buffer = QBuffer(data)
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        scaled.save(buffer, 'PNG')
+        return 'data:image/png;base64,'+base64.b64encode(bytes(data)).decode()
+
+    @staticmethod
     def click_guard(image_data, visual, action):
         """Keep hashes/geometry only, not screenshot pixels, while awaiting approval."""
         import base64

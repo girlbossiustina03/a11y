@@ -63,6 +63,16 @@ def error_category(code, payload):
     return 'missing' if code == 404 else 'request'
 
 
+def keep_alive():
+    # Ollama's default 5 minutes unloaded the model between requests; a live log
+    # showed 2.8 s of reload before the first reply. Set A11Y_OLLAMA_KEEP_ALIVE=5m
+    # (or 0) to free memory sooner.
+    value = os.getenv('A11Y_OLLAMA_KEEP_ALIVE', '30m').strip()
+    if not value or len(value) > 8 or not all(c.isdigit() or c in 'smh-' for c in value):
+        raise ProviderError('A11Y_OLLAMA_KEEP_ALIVE must look like 30m, 2h, 0 or -1.')
+    return value
+
+
 def grammar_schema(schema):
     """Large string-length grammar expansions can fail; executors enforce bounds."""
     if isinstance(schema, list):
@@ -286,7 +296,7 @@ class OllamaProvider:
         wire_schema = grammar_schema(schema)
         schema_key = (model, json.dumps(wire_schema, sort_keys=True))
         body = {'model': model, 'messages': [{'role': 'system', 'content': system}] + messages,
-            'stream': True, 'format': wire_schema, 'keep_alive': '5m',
+            'stream': True, 'format': wire_schema, 'keep_alive': keep_alive(),
             'options': {'temperature': 0.2, 'num_ctx': context_length, 'num_predict': max_tokens}}
         requested_thinking = thinking
         thinking = os.getenv('A11Y_OLLAMA_THINKING', 'default').lower()

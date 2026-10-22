@@ -120,7 +120,7 @@ uploads, installation, authentication, permissions or settings changes have risk
 and REQUIRE review. Never enter passwords, secrets or shell commands. Do not perform
 an unrequested action to make progress. Do not repeat an uncertain action. If the last
 action had no visible effect, ask the user instead of repeatedly clicking/typing.
-Return only the JSON object, with one short message (at most 256 characters) and ONE
+Return only the JSON object, with one short message (at most 20 words) and ONE
 action. Do not narrate a plan or repeat screen metadata. Messages must state what you observe and the next step; never say already done before
 execution. Available actions are strictly limited by the schema. No shell or scripts.'''
 
@@ -353,6 +353,7 @@ class ComputerTask:
             if self.cancelled.is_set() or not desktop.enabled or not vision.enabled or desktop.generation != desktop_generation or vision.generation != vision_generation:
                 raise ValueError('Computer task stopped or access was paused. No next action was submitted.')
 
+        model_image = None
         correction = None
         for attempt in range(2):
             check_active()
@@ -361,11 +362,16 @@ class ComputerTask:
             check_active()
             inference_at = time.monotonic()
             fast_pass = fast_available and attempt == 0
+            if not fast_pass and model_image is None:
+                scale = getattr(type(vision), 'model_image', None)
+                model_image = scale(image_data) if callable(scale) else image_data
+                stages['image_scaled_ms'] = round((time.monotonic()-inference_at)*1000)
+                inference_at = time.monotonic()
             final = ((correction+'\n\n') if correction else '')+(TEXT_PASS if fast_pass else IMAGE_PASS)
             request_messages = messages + [{'role': 'user', 'content': final}]
             try:
                 raw = provider.complete_structured(SYSTEM, request_messages,
-                                                   schema=schema_for(snapshot.get('platform'), fast_pass), image_data=None if fast_pass else image_data,
+                                                   schema=schema_for(snapshot.get('platform'), fast_pass), image_data=None if fast_pass else model_image,
                                                    max_tokens=1200, thinking=False, **cancel_kwargs)
             finally:
                 stages['model'].append({'mode': 'text' if fast_pass else 'image', 'ms': round((time.monotonic()-inference_at)*1000)})
