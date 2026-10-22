@@ -100,7 +100,7 @@ Only one app action is proposed at a time. After its confirmation the app observ
 there is no unattended sequence, arbitrary shell tool, or automatic retry of presses.
 Opening an app, opening a NEW window, focusing an existing app, closing ONE window,
 and quitting an app are distinct operations. Never substitute focus_app for opening
-a new window or quitting/closing. Use installed_apps to open Stremio or another app.
+a new window or quitting/closing. The app resolves named apps to open from its catalog.
 Use app_windows title and desktop bounds to select a lower-right or named window;
 window closing does NOT require screenshots when AX window metadata identifies it.
 If there are multiple matching windows, ask a clarification. Never close all windows
@@ -306,7 +306,7 @@ class Companion:
                     'effective': self.adaptation.effective(self.identity)}
         if mode == 'verify' and hasattr(self.provider, 'complete_structured'):
             observation = {'last_action_result': self.last_action_result,
-                'desktop_context': self.desktop_context.context() if self.desktop_context else {},
+                'desktop_context': {key: value for key, value in self.desktop_context.context().items() if key != 'installed_apps'} if self.desktop_context else {},
                 'visual_context': visual_context, 'fresh_image': bool(image_data)}
             report = self.provider.complete_structured(VERIFY_SYSTEM,
                 [{'role': 'user', 'content': json.dumps(observation, ensure_ascii=False)}],
@@ -325,11 +325,14 @@ class Companion:
         preferences = self.adaptation.effective(self.identity)
         desktop_generation = self.desktop_context.generation if self.desktop_context else None
         desktop = self.desktop_context.context() if self.desktop_context else {'enabled': False, 'status': 'off'}
+        # The installed-app catalog (about 11k characters on a typical Mac) is resolved
+        # by the app itself for launch requests; sending it made every chat reply slower.
+        model_desktop = {key: value for key, value in desktop.items() if key != 'installed_apps'}
         context = {'capabilities': {'native_companion': self.desktop_context is not None,
                                   'screen_observation_tool': self.desktop_context is not None}, 'visual_context': visual_context, 'evidence': {'fresh_image': bool(image_data),
                    'window_metadata_present': bool(desktop.get('window')),
                    'missing_window_metadata_means': 'unknown, not an empty desktop',
-                   'focused_window_is_not_all_visible_windows': True}, 'desktop_context': desktop, 'mode': mode, 'preferences': preferences, 'sources': sources,
+                   'focused_window_is_not_all_visible_windows': True}, 'desktop_context': model_desktop, 'mode': mode, 'preferences': preferences, 'sources': sources,
                    'workflow': workflow, 'screen_supplied': bool(image_data), 'request': request,
                    'screen_geometry': screen_geometry, 'request_plan': request_plan,
                    'last_action_result': self.last_action_result,

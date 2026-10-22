@@ -180,6 +180,13 @@ def validate_step(raw, desktop, snapshot, *, goal_mode=None, screen=None, text_r
     action = raw['action']
     if not isinstance(action, dict) or not isinstance(action.get('type'), str) or action['type'] not in TOOLS:
         raise ValidationError('That task action is not supported.')
+    if action['type'] == 'launch_app' and isinstance(action.get('bundle_id'), str):
+        from .desktop_context import BROWSER_IDS
+        from .app_names import resolve_app
+        resolved = [app['bundle_id'] for app in resolve_app(action['bundle_id'], catalog)] if catalog else []
+        if action['bundle_id'] in BROWSER_IDS or (len(resolved) == 1 and resolved[0] in BROWSER_IDS):
+            raise ValidationError('Do not launch the browser as a separate step. browse_url opens the browser itself: '
+                                  'navigate directly to the requested site with browser_mode as requested.')
     if action['type'] == 'launch_app' and isinstance(action.get('bundle_id'), str) and catalog:
         if not any(app['bundle_id'] == action['bundle_id'] for app in catalog):
             from .app_names import resolve_app
@@ -229,6 +236,9 @@ class ComputerTask:
         self.cancelled = threading.Event()
         self.pending = None
         self.last_proposal = None
+        # Apps where the text-only pass already failed to produce an action. Live
+        # logs showed it failing on every Teams step, doubling each step's cost.
+        self.text_pass_misses = set()
         # The request interpreter can classify scope in the same call that routes
         # the goal; only tasks started without that plan need a separate call.
         self.timings = []
@@ -252,6 +262,20 @@ class ComputerTask:
         self.status = status
         self.pending = None
         self.cancelled.set()
+
+    def repeats(self, action):
+        """How many of the latest receipts are this same click/press in a row."""
+        if action['type'] not in ('click_point', 'press_control'):
+            return 0
+        label = action.get('label', '').casefold().strip()
+        if len(label) <= 1:
+            return 0  # Calculator digits and keys can legitimately repeat.
+        count = 0
+        for receipt in reversed(self.receipts):
+            if receipt.get('type') != action['type'] or (receipt.get('label') or '').casefold().strip() != label:
+                break
+            count += 1
+        return count
 
     def record(self, receipt):
         self.pending = None
@@ -294,7 +318,9 @@ class ComputerTask:
         regions = screen_text(visual, snapshot)
         # A text pass over one or two OCR fragments almost always ends in
         # needs_vision; skip straight to the image instead of paying twice.
-        fast_available = len(regions) >= 3 or (isinstance(visual.get('text_regions'), list) and bool(snapshot.get('controls')))
+        app_key = (snapshot.get('app') or {}).get('bundle_id', '')
+        fast_available = ((len(regions) >= 3 or (isinstance(visual.get('text_regions'), list) and bool(snapshot.get('controls'))))
+                          and app_key not in self.text_pass_misses)
         stages['text_regions'] = len(regions)
         stages['controls'] = len(snapshot.get('controls') or [])
         if progress:
@@ -346,6 +372,7 @@ class ComputerTask:
             timing('task.model.finished', inference_at, step=len(self.receipts)+1, attempt=attempt+1, mode='text' if fast_pass else 'image')
             check_active()
             if fast_pass and isinstance(raw, dict) and raw.get('status') in ('needs_vision', 'needs_user') and raw.get('action') is None:
+                self.text_pass_misses.add(app_key)
                 correction = 'Full screen image is now attached. Resolve the missing visual evidence for the original goal. Do not invent success, and do not repeat an action: no action has run on this observation.'
                 continue
             try:
@@ -353,7 +380,19 @@ class ComputerTask:
                                      text_regions=regions, catalog=self._catalog or ())
                 if fast_pass and step['status'] == 'action' and step['action']['type'] == 'click_point' and not text_grounded_click(step['action'], regions, snapshot, visual['screen']):
                     raise ValidationError('That point is not grounded in OCR text or a current accessible control. Inspect the supplied full image before choosing a click.')
+                if step['status'] == 'action' and self.repeats(step['action']) >= 2:
+                    if attempt:
+                        stages['total_ms'] = round((time.monotonic()-step_started)*1000)
+                        self.timings.append(stages)
+                        return {'status': 'needs_user', 'action': None, 'message':
+                                'I already did “'+step['action'].get('label', step['action']['type'])+'” twice without visible progress, '
+                                'so I stopped instead of repeating it. ' + step['message'][:200]}
+                    raise ValidationError('“'+step['action'].get('label', step['action']['type'])+'” already ran twice in a row and the goal '
+                        'did not progress. Do not repeat it. If the current screen already shows the requested information, '
+                        'report it with status=done and quote the evidence; otherwise choose a different target.')
             except ValidationError as error:
+                if fast_pass:
+                    self.text_pass_misses.add(app_key)
                 timing('task.step.invalid', inference_at, step=len(self.receipts)+1, attempt=attempt+1,
                        status_action_mismatch=isinstance(raw, dict) and raw.get('status') in ('done', 'needs_user') and raw.get('action') is not None)
                 if attempt:

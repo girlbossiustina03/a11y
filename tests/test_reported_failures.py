@@ -190,6 +190,70 @@ class StopDuringInferenceTests(Harness):
         self.assertIsNone(task.pending)
 
 
+class LiveTeamsLogTests(Harness):
+    """From a live macOS log: 10 slow steps, each text pass then image pass, six
+    identical Activity clicks, and a separate Safari launch before navigating."""
+    regions = TEAMS_REGIONS
+    activity = {'status': 'action', 'message': 'Activity has a badge.', 'risk': 'navigation',
+                'action': {'type': 'click_point', 'x': .05, 'y': .21, 'label': 'Activity section with notification badge'}}
+
+    def setUp(self):
+        super().setUp()
+        self.desktop.bridge.value['controls'] = []
+
+    def test_text_pass_is_skipped_for_an_app_after_it_failed_once(self):
+        task = ComputerTask('Open Teams and check tasks', automatic=True, goal_mode='inspect')
+        need = {'status': 'needs_vision', 'message': 'Need pixels.', 'risk': 'navigation', 'action': None}
+        self.provider.complete_structured.side_effect = [need, self.activity, self.activity]
+        self.propose(task)
+        task.record({'type': 'click_point', 'label': 'Something else', 'status': 'submitted'})
+        self.propose(task)
+        modes = [call.kwargs['image_data'] is not None for call in self.provider.complete_structured.call_args_list]
+        self.assertEqual(modes, [False, True, True])
+
+    def test_third_identical_click_is_corrected_and_then_stopped(self):
+        task = ComputerTask('Open Teams and check tasks', automatic=True, goal_mode='inspect')
+        for _ in range(2):
+            task.record({'type': 'click_point', 'label': 'Activity section with notification badge', 'status': 'submitted'})
+        done = {'status': 'done', 'message': 'Activity lists 2 assignments due Friday.', 'risk': 'navigation', 'action': None}
+        self.provider.complete_structured.side_effect = [self.activity, done]
+        self.assertEqual(self.propose(task)['status'], 'done')
+        self.assertIn('already ran twice', self.provider.complete_structured.call_args.args[1][-1]['content'])
+        self.provider.complete_structured.side_effect = [self.activity, self.activity]
+        step = self.propose(task)
+        self.assertEqual(step['status'], 'needs_user')
+        self.assertIsNone(task.pending)
+
+    def test_digit_presses_may_repeat(self):
+        task = ComputerTask('compute 22+1', goal_mode='inspect')
+        for _ in range(2):
+            task.record({'type': 'press_control', 'label': '2', 'status': 'submitted'})
+        self.assertEqual(task.repeats({'type': 'press_control', 'label': '2'}), 0)
+
+    def test_browser_is_not_launched_as_a_separate_step(self):
+        safari = [{'name': 'Safari', 'bundle_id': 'com.apple.Safari'}]
+        self.desktop.bridge.value['installed_apps'] = safari
+        self.desktop.bridge.catalog = Mock(return_value=safari)
+        task = ComputerTask('open teams in a new safari window and check tasks', automatic=True, goal_mode='inspect')
+        browse = {'status': 'action', 'message': 'Open Teams.', 'risk': 'navigation',
+                  'action': {'type': 'browse_url', 'bundle_id': 'com.apple.Safari', 'url': 'https://teams.microsoft.com/',
+                             'browser_mode': 'window', 'label': 'Open Teams'}}
+        self.provider.complete_structured.side_effect = [
+            {'status': 'action', 'message': 'Launch Safari.', 'risk': 'navigation', 'action': {'type': 'launch_app', 'bundle_id': 'Safari'}}, browse]
+        step = self.propose(task)
+        self.assertEqual(step['action']['type'], 'browse_url')
+        self.assertIn('browse_url opens the browser itself', self.provider.complete_structured.call_args.args[1][-1]['content'])
+
+
+class PendingTextTests(unittest.TestCase):
+    def test_conversation_is_never_reported_as_pending_work(self):
+        plan = preserve_desktop_goal({'operation': 'answer', 'app_name': '', 'target': '', 'remaining_request': 'yo wyd'}, 'yo wyd')
+        self.assertEqual(plan['remaining_request'], '')
+        plan = preserve_desktop_goal({'operation': 'launch_app', 'app_name': 'Teams', 'target': '', 'remaining_request': 'check my tasks'},
+                                     'open teams and check my tasks')
+        self.assertEqual(plan['operation'], 'computer_task')
+
+
 class ThinEvidenceTests(Harness):
     regions = [region('OK', .5, .5)]
 

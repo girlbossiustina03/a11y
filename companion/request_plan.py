@@ -186,6 +186,13 @@ def highlight_only(request):
 def preserve_desktop_goal(plan, request):
     """Preserve follow-up work across app launches, browser and input shortcuts."""
     plan = validate_plan(plan)
+    remaining = plan.get('remaining_request', '').strip()
+    if remaining and (plan['operation'] in ('answer', 'plan', 'inspect_screen', 'inspect_media', 'highlight', 'computer_task', 'capture_once')
+                      or remaining.casefold() == request.strip().casefold() and plan['operation'] not in (
+                          'browser_open', 'browser_search', 'new_window', 'launch_app', 'focus_app')):
+        # Conversation and whole-goal operations cover the request; a model echoing
+        # it as "remaining" produced "Still pending: yo wyd".
+        plan = dict(plan, remaining_request='')
     if plan['operation'] in ACTIVATING_OPERATIONS and highlight_only(request):
         # A model may route "mark where the close button is" to clicking or
         # closing. Highlighting is the only operation such a request authorizes.
