@@ -25,6 +25,9 @@ class FixtureBridge:
             'available_apps': [{'name': 'Terminal', 'bundle_id': 'com.apple.Terminal'},
                                {'name': 'Finder', 'bundle_id': 'com.apple.finder'}],
             'installed_apps': [{'name': 'Terminal', 'bundle_id': 'com.apple.Terminal'},
+                               {'name': 'System Settings', 'bundle_id': 'com.apple.systempreferences'},
+                               {'name': 'TextEdit', 'bundle_id': 'com.apple.TextEdit'},
+                               {'name': 'Safari', 'bundle_id': 'com.apple.Safari'},
                                {'name': 'Stremio', 'bundle_id': 'com.example.fixture.stremio'}],
             'app_windows': [
                 {'window_id': 'com.apple.Terminal:0', 'name': 'Terminal', 'bundle_id': 'com.apple.Terminal',
@@ -47,6 +50,12 @@ def main():
     provider = OllamaProvider(AIConfig(base_url=os.getenv('A11Y_OLLAMA_URL', 'http://127.0.0.1:11434'), model=args.model, timeout=180))
     cases = [
         ('open installed Stremio', 'open up Stremio please', 'launch_app', 'bundle_id', 'com.example.fixture.stremio'),
+        ('Settings alias', 'open settings', 'launch_app', 'bundle_id', 'com.apple.systempreferences'),
+        ('Mac settings alias', "open mac's settings", 'launch_app', 'bundle_id', 'com.apple.systempreferences'),
+        ('Notepad alias', 'open notepad', 'launch_app', 'bundle_id', 'com.apple.TextEdit'),
+        ('Safari search', 'open up a new safari tab and search for youtube', 'browse_url', 'url', 'https://duckduckgo.com/?q=youtube'),
+        ('website navigation', 'open https://www.wikipedia.org in Safari', 'browse_url', 'url', 'https://www.wikipedia.org'),
+        ('own capture control', 'press capture screen once on the a11y window', 'capture_once', None, None),
         ('new Terminal window', 'open up a new terminal then', 'new_window', 'bundle_id', 'com.apple.Terminal'),
         ('focus existing Terminal', 'bring Terminal to the front', 'focus_app', 'bundle_id', 'com.apple.Terminal'),
         ('close lower-right window', 'close the lower right terminal please', 'close_window', 'window_id', 'com.apple.Terminal:1'),
@@ -74,7 +83,7 @@ def main():
                 response = app.ask(request, mode='assist')
                 action = response.get('desktop_action') or {}
                 record['intent'] = app.last_request_plan
-                record['action'] = {key: action[key] for key in ('type', 'bundle_id', 'window_id') if key in action}
+                record['action'] = {key: action[key] for key in ('type', 'bundle_id', 'window_id', 'url') if key in action}
                 record['pass'] = (action.get('type') == expected_type
                                   and (field is None or action.get(field) == value)
                                   and response['target'] is None)

@@ -278,3 +278,26 @@ operation evaluator with synthetic metadata (including the reported user phrases
 its local Ollama connection is blocked in this coding sandbox, so no semantic score
 is claimed. Real app-launch, Terminal new-window menu behavior, specific-window close,
 and capture exclusion must still be exercised in the relaunched desktop build.
+
+
+## Browser navigation and confirmed visual clicks — current milestone
+
+- [x] Isolate current-request intent before action grounding; restrict verification
+  to observations rather than new actions.
+- [x] Resolve common app aliases against the installed catalog and verify launches
+  through native process state rather than window visibility guesses.
+- [x] Open HTTP(S) websites/search queries in an installed supported browser after
+  confirmation, without requiring a screenshot.
+- [x] Bind a proposed visual click to a fresh image; preview, confirm, recapture,
+  reject changed/expired targets, and submit one native click with no automatic retry.
+- [x] Route requests for the companion's own capture control to its reviewed UI.
+- [x] Extend the real-model app evaluator to sixteen cases without executing actions.
+
+146 Python tests pass and both Swift helpers compile. The tests cover mocked native
+submission and synthetic images, not real-model grounding quality or actual browser
+and click execution. Local Ollama remains unreachable from this coding sandbox.
+Next priority: run evaluate_app_actions.py and evaluate_movement.py on-device, then
+exercise one harmless browser navigation and a confirmed click on a benign control.
+Guaranteed new tabs, page reading/DOM tools, typing, scrolling and unattended task
+loops remain unfinished. Preserve the one-action observation boundary while adding
+these capabilities.

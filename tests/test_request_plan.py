@@ -91,7 +91,7 @@ class RequestPlanningTests(CompanionFixture, unittest.TestCase):
 
     def test_verification_schema_has_no_action_field_or_original_instruction(self):
         provider = self.app.provider = StagedProvider('launch_app', 'Stremio')
-        self.app.last_action_result = {'type': 'launch_app', 'application_state': {'running': True}, 'task_completed': False}
+        self.app.last_action_result = {'type': 'press_control', 'application_state': {'running': True}, 'task_completed': False}
         provider.complete_structured.return_value = {'message': 'Stremio is running. Its window contents are not available.'}
         result = self.app.ask('open Stremio', mode='verify')
         provider.interpret_request.assert_not_called()

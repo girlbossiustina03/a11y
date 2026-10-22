@@ -9,6 +9,8 @@ from .models import Identity, text, validate_response, ValidationError
 from .ollama import provider_from_env, OllamaProvider
 from .storage import Store
 from .onboarding import Introduction
+from .app_names import resolve_app
+from urllib.parse import urlencode, urlsplit
 from .request_plan import response_schema, enforce_operation, VERIFY_SYSTEM, VERIFY_SCHEMA, GROUNDING_SYSTEM, validate_plan
 
 DESKTOP_INSTRUCTIONS = """
@@ -258,6 +260,16 @@ class Companion:
         if request_plan is not None:
             request_plan = validate_plan(request_plan)
             self.last_request_plan = request_plan
+        if mode == 'verify' and (self.last_action_result or {}).get('type') == 'launch_app':
+            receipt = self.last_action_result
+            state = receipt.get('application_state', {})
+            if receipt.get('bundle_id') and self.desktop_context:
+                state = self.desktop_context.app_state(receipt['bundle_id']) or state
+            if isinstance(state.get('running'), bool):
+                name = receipt.get('label', 'Open the app').removeprefix('Open ')
+                message = (name+' is running'+(' and active.' if state.get('active') else '.')) if state['running'] else ('macOS accepted the launch request, but I could not confirm that '+name+' stayed running.')
+                return {'desktop_action': None, 'target': None, 'workflow': None, 'sources': [], 'message': message,
+                        'effective': self.adaptation.effective(self.identity)}
         if mode == 'verify' and hasattr(self.provider, 'complete_structured'):
             observation = {'last_action_result': self.last_action_result,
                 'desktop_context': self.desktop_context.context() if self.desktop_context else {},
@@ -305,11 +317,12 @@ class Companion:
         system = SYSTEM+DESKTOP_INSTRUCTIONS
         if request_plan:
             operation = request_plan['operation']
-            if operation == 'launch_app':
+            if operation == 'capture_once':
+                prebuilt = {'request_kind': 'answer', 'message': 'Ready to capture once. You will review the screenshot before anything is sent.',
+                    'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': {'type': 'capture_once'}}
+            elif operation == 'launch_app':
                 catalog = self.desktop_context.installed_apps()
-                normalized = lambda name: ''.join(character for character in name.casefold() if character.isalnum())
-                wanted = normalized(request_plan['app_name'])
-                matches = [app for app in catalog if wanted and normalized(app['name']) == wanted]
+                matches = resolve_app(request_plan['app_name'], catalog)
                 if len(matches) == 1:
                     app = matches[0]
                     prebuilt = {'request_kind': operation, 'message': 'Ready to open '+app['name']+'. Confirm below.',
@@ -318,7 +331,25 @@ class Companion:
                 else:
                     prebuilt = {'request_kind': 'answer', 'message': 'I could not identify one installed app named “'+request_plan['app_name']+'”. Please give its exact application name.',
                                 'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
-            elif operation in ('move_object', 'highlight', 'inspect_screen') and not image_data:
+            elif operation in ('browser_search', 'browser_open'):
+                matches = resolve_app(request_plan['app_name'] or 'Safari', self.desktop_context.installed_apps())
+                browsers = {'com.apple.Safari', 'com.google.Chrome', 'org.mozilla.firefox', 'com.microsoft.edgemac'}
+                matches = [app for app in matches if app['bundle_id'] in browsers]
+                target = request_plan['target'].strip()
+                url = 'https://duckduckgo.com/?'+urlencode({'q': target}) if operation == 'browser_search' else target
+                if operation == 'browser_open' and '://' not in url:
+                    url = 'https://'+url
+                parsed = urlsplit(url)
+                if len(matches) == 1 and target and parsed.scheme in ('http', 'https') and parsed.hostname and not parsed.username and not parsed.password:
+                    app = matches[0]
+                    label = ('Search '+app['name']+' for “'+target+'”') if operation == 'browser_search' else ('Open '+target+' in '+app['name'])
+                    prebuilt = {'request_kind': 'answer', 'message': 'Ready to '+label[0].lower()+label[1:]+'. Safari controls tab/window placement.',
+                        'source_ids': [], 'workflow': None, 'target': None,
+                        'desktop_action': {'type': 'browse_url', 'bundle_id': app['bundle_id'], 'url': url, 'label': label}}
+                else:
+                    prebuilt = {'request_kind': 'answer', 'message': 'Please name an installed browser and a search query or HTTP(S) website address.',
+                        'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
+            elif operation in ('move_object', 'highlight', 'inspect_screen', 'click_point') and not image_data:
                 prebuilt = {'request_kind': operation if operation != 'inspect_screen' else 'answer',
                     'message': 'I need a fresh look to identify that. Enable local screen vision below.',
                     'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': {'type': 'request_screen'}}
@@ -363,9 +394,9 @@ class Companion:
                 messages = [{'role': 'user', 'content': json.dumps(dict(context, correction=correction), ensure_ascii=False)},
                             {'role': 'user', 'content': request}]
         action = response.get('desktop_action') or {}
-        if action.get('type') in ('launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'press_control'):
+        if action.get('type') in ('launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'press_control', 'browse_url', 'click_point'):
             label = action.get('confirmation_label', action['label'])
-            response['message'] = 'Ready to '+label[0].lower()+label[1:]+'. Confirm below.'
+            response['message'] = 'Ready to '+label[0].lower()+label[1:]+'. Confirm below.'+(' Tab/window placement follows your browser settings.' if action['type'] == 'browse_url' else '')
         used = set(response['source_ids'])
         if response['workflow']:
             used.update(s for step in response['workflow']['steps'] for s in step['source_ids'])

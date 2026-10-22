@@ -53,6 +53,11 @@ class MacDesktopBridge:
     def activate(self, bundle_id):
         return self.call('--activate', bundle_id)
 
+    def click(self, action, guard):
+        screen = guard['screen']
+        return self.call('--click', str(screen['x']+action['x']*screen['width']),
+                         str(screen['y']+action['y']*screen['height']), str(guard['display_id']), json.dumps(screen))
+
     def catalog(self):
         return self.call('--catalog').get('installed_apps', [])
 
@@ -61,6 +66,8 @@ class MacDesktopBridge:
 
     def application_action(self, action):
         kind = action['type']
+        if kind == 'browse_url':
+            return self.call('--browse', action['bundle_id'], action['url'])
         if kind == 'close_window':
             return self.call('--close-window', action['bundle_id'], action['window_id'].rsplit(':', 1)[1],
                              action['window_title'], json.dumps(action['bounds']))
@@ -214,7 +221,20 @@ class DesktopContext:
                         'confirmation_label': ('Press “'+control['label']+'” in '+context.get('app', {}).get('name', 'the app')) if kind == 'press_control' else 'Highlight '+control['label']}
         raise ValueError('The requested desktop target was not observed or is no longer available.')
 
+    def authorize_browser(self, action):
+        allowed = {'com.apple.Safari', 'com.google.Chrome', 'org.mozilla.firefox', 'com.microsoft.edgemac'}
+        app = next((app for app in self.installed_apps() if app['bundle_id'] == action['bundle_id'] and app['bundle_id'] in allowed), None)
+        if app is None:
+            raise ValueError('Choose an installed supported browser.')
+        return dict(action)
+
     def application_action(self, proposal):
+        if proposal['type'] == 'browse_url':
+            result = self.bridge.application_action(self.authorize_browser(proposal))
+            if not result.get('submitted'):
+                raise RuntimeError('The browser did not confirm accepting that address. Nothing will be retried automatically.')
+            self.collect_once()
+            return result
         fields = ('type', 'window_id') if proposal['type'] == 'close_window' else ('type', 'bundle_id')
         current = self.authorize_action({key: proposal[key] for key in fields})
         if proposal['type'] == 'close_window' and any(current[key] != proposal.get(key) for key in ('window_title', 'bounds', 'bundle_id')):
