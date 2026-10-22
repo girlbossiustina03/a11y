@@ -14,7 +14,7 @@ from .app_names import resolve_app
 from .media import describe_music, describe_play_result
 from .input_actions import INPUT_TYPES
 from urllib.parse import urlencode, urlsplit
-from .request_plan import response_schema, enforce_operation, VERIFY_SYSTEM, VERIFY_SCHEMA, GROUNDING_SYSTEM, validate_plan, preserve_browser_goal
+from .request_plan import response_schema, enforce_operation, VERIFY_SYSTEM, VERIFY_SCHEMA, GROUNDING_SYSTEM, validate_plan, preserve_desktop_goal
 
 DESKTOP_INSTRUCTIONS = """
 A running app or window title NEVER proves media is playing, a song is selected,
@@ -250,7 +250,7 @@ class Companion:
             return None
         users = [item['content'][:500] for item in self.history(limit=4) if item['role'] == 'user']
         users.extend(item['content'][:500] for item in self.desktop_session if item['role'] == 'user')
-        self.last_request_plan = preserve_browser_goal(interpreter(request, users[-2:]), request)
+        self.last_request_plan = preserve_desktop_goal(interpreter(request, users[-2:]), request)
         return self.last_request_plan
 
     def ask(self, request, *, mode='answer', workflow_id=None, image_data=None, visual_context=None, screen_geometry=None, request_plan=None):
@@ -265,7 +265,7 @@ class Companion:
         elif mode != 'verify' and request_plan is None:
             request_plan = self.prepare_request(request)
         if request_plan is not None:
-            request_plan = preserve_browser_goal(request_plan, request)
+            request_plan = preserve_desktop_goal(request_plan, request)
             self.last_request_plan = request_plan
         if mode == 'verify' and (self.last_action_result or {}).get('type') == 'play_media':
             receipt = self.last_action_result
@@ -409,6 +409,31 @@ class Companion:
                 else:
                     prebuilt = {'request_kind': 'answer', 'message': 'Please name an installed browser and a search query or HTTP(S) website address.',
                         'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
+            elif operation in ('close_window', 'quit_app', 'focus_app') and desktop.get('enabled') and request_plan['app_name']:
+                # Resolve the named app from the fresh observation instead of asking the model to
+                # copy ids; small local models often get that wrong. The action is still confirmed.
+                running = {app['bundle_id']: app for app in desktop.get('available_apps', [])}
+                if operation == 'close_window':
+                    # Window owners count too; quitting and focusing need an app the bridge lists.
+                    for window in desktop.get('app_windows', []):
+                        running.setdefault(window['bundle_id'], {'name': window['name'], 'bundle_id': window['bundle_id']})
+                matches = resolve_app(request_plan['app_name'], list(running.values()))
+                if len(matches) != 1:
+                    prebuilt = {'request_kind': 'answer', 'message': 'I can’t see one open app named “'+request_plan['app_name']+'”. '
+                                'Make sure its window is open, or give its exact name.',
+                                'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
+                elif operation != 'close_window':
+                    prebuilt = {'request_kind': operation, 'message': 'Proposed.', 'source_ids': [], 'workflow': None, 'target': None,
+                                'desktop_action': {'type': operation, 'bundle_id': matches[0]['bundle_id']}}
+                else:
+                    windows = [w for w in desktop.get('app_windows', []) if w['bundle_id'] == matches[0]['bundle_id'] and w.get('can_close')]
+                    if len(windows) == 1:
+                        prebuilt = {'request_kind': operation, 'message': 'Proposed.', 'source_ids': [], 'workflow': None, 'target': None,
+                                    'desktop_action': {'type': operation, 'window_id': windows[0]['window_id']}}
+                    elif not windows:
+                        prebuilt = {'request_kind': 'answer', 'message': matches[0]['name']+' has no open window I can close.',
+                                    'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
+                    # Several windows: the model picks one using the request's target description.
             elif operation in ('move_object', 'highlight', 'inspect_screen', 'click_point') and not image_data:
                 prebuilt = {'request_kind': operation if operation != 'inspect_screen' else 'answer',
                     'message': 'I need a fresh look to identify that. Enable local screen vision below.',

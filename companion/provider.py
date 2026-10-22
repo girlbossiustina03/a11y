@@ -49,7 +49,11 @@ class ChatProvider:
     def __init__(self, config=None):
         self.config = config or AIConfig.from_env()
 
-    def complete(self, system, messages, *, image_data=None):
+    def complete_structured(self, system, messages, *, schema, image_data=None, max_tokens=3000, thinking=None):
+        return self.complete(system+'\nReturn only JSON matching this schema:\n'+json.dumps(schema),
+                             messages, image_data=image_data, max_tokens=max_tokens)
+
+    def complete(self, system, messages, *, image_data=None, max_tokens=None):
         self.config.validate()
         messages = [dict(m) for m in messages]
         if image_data:
@@ -59,6 +63,8 @@ class ChatProvider:
         body = {'model': (self.config.vision_model or self.config.model) if image_data else self.config.model,
                 'messages': [{'role': 'system', 'content': system}] + messages,
                 'response_format': {'type': 'json_object'}, 'stream': False}
+        if max_tokens is not None:
+            body['max_tokens'] = max_tokens
         headers = {'Content-Type': 'application/json'}
         if self.config.key:
             headers['Authorization'] = f'Bearer {self.config.key}'

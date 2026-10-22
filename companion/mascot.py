@@ -1,13 +1,73 @@
 """Interactive mascot conversation. Artwork is independently replaceable."""
 import math
 import os
-from .theme import MASCOT_STYLE
+from .theme import MASCOT_STYLE, MENU_STYLE
 from .icons import control_icon
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QFrame, QVBoxLayout, QHBoxLayout, QPushButton,
     QPlainTextEdit, QLineEdit, QLabel, QAbstractButton, QMenu, QScrollArea, QGraphicsDropShadowEffect)
 from PyQt6.QtCore import Qt, QTimer, QPoint, QPointF, QRectF, QElapsedTimer, pyqtSignal, QRect, QSize, QEvent
 from PyQt6.QtGui import QPainter, QPainterPath, QColor, QPen, QShortcut, QKeySequence, QPixmap, QFontMetrics
+
+
+class RoundedMenu(QMenu):
+    """A translucent popup with one rounded surface, without a native square frame."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName('companionMenu')
+        self.setWindowFlags(self.windowFlags() | Qt.WindowType.FramelessWindowHint |
+                            Qt.WindowType.NoDropShadowWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_MacShowFocusRect, False)
+        self.setStyleSheet(MENU_STYLE+'\nQMenu#companionMenu {background:transparent;border:0;padding:7px;}')
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor('#48484e'), 1))
+        painter.setBrush(QColor('#2c2c2e'))
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(.5, .5, -.5, -.5), 12, 12)
+        painter.end()
+        super().paintEvent(event)
+
+
+class RoundControl(QPushButton):
+    """Antialiased circles without overlapping stylesheet/native focus outlines."""
+    def __init__(self, *, primary=False):
+        super().__init__()
+        self.primary = primary
+        # QWidget styles can paint a second surface underneath paintEvent.
+        self.setStyleSheet('QPushButton {background:transparent;border:0;padding:0;min-height:0;}'
+                           'QPushButton:hover,QPushButton:focus,QPushButton:pressed,QPushButton:disabled '
+                           '{background:transparent;border:0;}')
+        self.setAttribute(Qt.WidgetAttribute.WA_MacShowFocusRect, False)
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        fill = '#0a84ff' if self.primary else '#343439'
+        if not self.isEnabled():
+            fill = '#3a3a40'
+        elif self.isDown():
+            fill = '#0766ca' if self.primary else '#29292f'
+        elif self.underMouse():
+            fill = '#2994ff' if self.primary else '#45454d'
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(fill))
+        painter.drawEllipse(QRectF(self.rect()).adjusted(.75, .75, -.75, -.75))
+        if self.hasFocus():
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(QColor('#a3cfff'), 1.5))
+            painter.drawEllipse(QRectF(self.rect()).adjusted(2, 2, -2, -2))
+        size = self.iconSize()
+        bounds = QRect((self.width()-size.width())//2, (self.height()-size.height())//2,
+                       size.width(), size.height())
+        self.icon().paint(painter, bounds)
+        if self.property('screenVision') is True:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor('#65d794'))
+            painter.drawEllipse(QPointF(self.width()-5, 5), 2, 2)
 
 
 class Composer(QPlainTextEdit):
@@ -37,7 +97,8 @@ class Mascot(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle('A11y · Desktop companion')
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint |
+                            Qt.WindowType.Tool | Qt.WindowType.NoDropShadowWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         # Qt Tool windows otherwise hide when another macOS app activates.
         self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
@@ -136,7 +197,7 @@ class Mascot(QWidget):
         self.entry_row.installEventFilter(self)
         self.input.returnPressed.connect(self.submit)
         self.input.editingStarted.connect(lambda: self.action_requested.emit('computer:interrupt'))
-        self.send = QPushButton()
+        self.send = RoundControl(primary=True)
         self.send.setIcon(control_icon('send'))
         self.send.setIconSize(QSize(20, 20))
         self.send.setToolTip('Send message · Enter')
@@ -145,7 +206,7 @@ class Mascot(QWidget):
         self.send.setFixedSize(42, 42)
         self.send.clicked.connect(self.submit)
         entry.addWidget(self.send, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.prompt_settings = QPushButton()
+        self.prompt_settings = RoundControl()
         self.prompt_settings.setIcon(control_icon('settings'))
         self.prompt_settings.setIconSize(QSize(20, 20))
         self.prompt_settings.setObjectName('promptSettings')
@@ -190,11 +251,11 @@ class Mascot(QWidget):
         layout.addWidget(self.character_row)
         self.controls_layout.addWidget(self.card)
         layout.addWidget(self.controls_row)
-        for surface in (self.card, self.reply_panel, self.send, self.prompt_settings):
+        for surface in (self.card, self.reply_panel):
             shadow = QGraphicsDropShadowEffect(surface)
             shadow.setBlurRadius(12)
             shadow.setOffset(0, 2)
-            shadow.setColor(QColor(0, 0, 0, 85))
+            shadow.setColor(QColor(0, 0, 0, 40))
             surface.setGraphicsEffect(shadow)
         self.setFixedWidth(420)
         self.setStyleSheet(MASCOT_STYLE)
@@ -414,7 +475,7 @@ class Mascot(QWidget):
             self.fit_on_screen(anchor)
 
     def show_menu(self, position=None):
-        menu = QMenu(self)
+        menu = RoundedMenu(self)
         menu.setAccessibleName('Companion actions')
         for title, action in [('Talk to me', 'talk'), ('Computer task…', 'computer:prompt'), ('Stop computer task', 'computer:stop'), ('Show last reply', 'reply'),
                               ('My saved tasks', 'tasks'), ('Mark current step done', 'confirm'),

@@ -61,6 +61,22 @@ class NativeTests(unittest.TestCase):
         self.assertTrue(self.window.mascot.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
         self.assertTrue(self.window.mascot.testAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow))
 
+    def test_context_menu_has_transparent_corners_and_keyboard_actions(self):
+        from companion.mascot import RoundedMenu
+        menu = RoundedMenu(self.window.mascot)
+        menu.addAction('Talk to me')
+        menu.addAction('Settings…')
+        menu.show()
+        self.qt.processEvents()
+        image = menu.grab().toImage()
+        self.assertEqual(image.pixelColor(0, 0).alpha(), 0)
+        self.assertEqual(image.pixelColor(image.width()-1, image.height()-1).alpha(), 0)
+        self.assertEqual(image.pixelColor(15, 15).alpha(), 255)
+        menu.setActiveAction(menu.actions()[0])
+        QTest.keyClick(menu, Qt.Key.Key_Down)
+        self.assertEqual(menu.activeAction(), menu.actions()[1])
+        menu.close()
+
     def test_opening_actions_execute_without_an_extra_confirmation_button(self):
         for kind in ('launch_app', 'browse_url', 'focus_app', 'new_window'):
             action = {'type': kind, 'bundle_id': 'com.apple.Safari', 'label': 'Open Safari'}
@@ -80,6 +96,22 @@ class NativeTests(unittest.TestCase):
             self.qt.processEvents()
             execute.assert_not_called()
         self.assertEqual(self.window.pending_desktop_action, action)
+
+    def test_visual_click_only_outlines_an_actual_target_rectangle(self):
+        area = self.window.mascot.screen().geometry()
+        frame = {'screen': {'x': area.x(), 'y': area.y(), 'width': area.width(), 'height': area.height()},
+                 'captured_monotonic': time.monotonic()}
+        response = {'message': 'Click Battery.', 'sources': [], 'workflow': None, 'target': None,
+                    'visual_capture': frame, 'task_step': True,
+                    'desktop_action': {'type': 'click_point', 'x': .4, 'y': .5, 'label': 'Battery',
+                                       'capture_guard': {'synthetic': True}}}
+        with patch.object(self.window.overlay, 'guide') as guide:
+            self.window.received(response)
+            guide.assert_not_called()
+            self.assertTrue(self.window.pointer.isVisible())
+            target = {'label': 'Battery', 'x': .3, 'y': .4, 'width': .2, 'height': .2}
+            self.window.received(dict(response, target=target))
+            guide.assert_called_once_with(area, target)
 
     def test_remember_access_checkbox_is_explicit_and_pause_is_persisted(self):
         self.assertFalse(self.window.remember_access.isChecked())

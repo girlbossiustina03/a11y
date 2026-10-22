@@ -2,6 +2,7 @@
 import base64
 import json
 from pathlib import Path
+import sys
 import time
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QByteArray, QBuffer, QIODevice, QPoint, QUrl, QRect, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QKeySequence, QShortcut, QDesktopServices
@@ -82,6 +83,7 @@ class RequestWorker(QThread):
 class TaskStepWorker(QThread):
     result = pyqtSignal(object)
     failed = pyqtSignal(str)
+    progress = pyqtSignal(str)
 
     def __init__(self, task, desktop, vision, provider, geometry, parent=None):
         super().__init__(parent)
@@ -89,7 +91,8 @@ class TaskStepWorker(QThread):
 
     def run(self):
         try:
-            self.result.emit(self.task.propose(self.desktop, self.vision, self.provider, self.geometry))
+            self.result.emit(self.task.propose(self.desktop, self.vision, self.provider, self.geometry,
+                                              progress=self.progress.emit))
         except (ValueError, RuntimeError) as error:
             self.failed.emit(str(error))
         except Exception:
@@ -614,9 +617,14 @@ class CompanionWindow(QMainWindow):
                 self.mascot_home('A screen click needs a fresh local capture. Enable screen vision and ask again.')
                 return
             self.hide()
-            preview = {'label': 'Proposed click: '+action['label'],
-                'x': max(0, action['x']-.009), 'y': max(0, action['y']-.012), 'width': .018, 'height': .024}
-            self.overlay.guide(capture['geometry'], preview)
+            # A point is not a control's bounding box. Only outline a supplied
+            # target rectangle containing this point; otherwise show the pointer.
+            target = response.get('target')
+            if (target and target['x'] <= action['x'] <= target['x']+target['width']
+                    and target['y'] <= action['y'] <= target['y']+target['height']):
+                self.overlay.guide(capture['geometry'], target)
+            else:
+                self.overlay.hide()
             self.pointer.point_at(capture['geometry'], action['x'], action['y'], action['label'],
                 reduced_motion=self.service.adaptation.effective(self.service.identity)['reduced_motion'])
         if not response.get('task_step') and self.pending_desktop_action and self.pending_desktop_action['type'] in ('launch_app', 'browse_url', 'focus_app', 'new_window', 'play_media'):
@@ -981,7 +989,8 @@ class CompanionWindow(QMainWindow):
                 ['Images stay off disk. Nothing is recorded between messages.',
                  'Close confidential windows first. Pause vision whenever you like.',
                  'Stays enabled across launches until you pause it. Change restoration in Settings.',
-                 'macOS will ask for Screen Recording access.'], 'Enable and remember'):
+                 'macOS will ask for Screen Recording access.' if sys.platform == 'darwin'
+                 else 'A11y excludes its windows from each capture.'], 'Enable and remember'):
             self.retry_after_vision = False
             return
         if not approved:
@@ -1151,6 +1160,10 @@ class CompanionWindow(QMainWindow):
         worker = TaskStepWorker(task, self.desktop_monitor, self.vision, self.service.provider,
                                 {'x': area.x(), 'y': area.y()}, self)
         self.worker = worker
+        worker.progress.connect(lambda message: self.say(
+            f'Computer task · step {len(task.receipts)+1} of {task.max_steps}\n{message}',
+            [('Stop task', 'computer:stop')], compact=True)
+            if self.computer_task is task and not task.cancelled.is_set() else None)
         worker.result.connect(lambda result: self.receive_computer_step(task, result))
         worker.failed.connect(lambda message: self.failed(message) if self.computer_task is task and not task.cancelled.is_set() else None)
         worker.finished.connect(lambda: self.set_busy(False))

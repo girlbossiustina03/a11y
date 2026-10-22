@@ -87,6 +87,63 @@ class TaskTests(unittest.TestCase):
         self.assertIn('Find a help page', self.provider.complete_structured.call_args.args[1][0]['content'])
         self.assertIn('Help', self.provider.complete_structured.call_args.args[1][0]['content'])
         self.assertEqual(self.provider.complete_structured.call_args.kwargs['image_data'], 'data:image/png;base64,synthetic')
+        self.assertEqual(self.provider.complete_structured.call_args.kwargs['max_tokens'], 1200)
+        self.assertIs(self.provider.complete_structured.call_args.kwargs['thinking'], False)
+
+    def test_progress_changes_after_capture_and_before_model_inference(self):
+        events = []
+        self.provider.complete_structured.side_effect = lambda *args, **kwargs: (
+            events.append('model') or {'status': 'done', 'message': 'Found tasks.', 'risk': 'navigation', 'action': None})
+        self.task.propose(self.desktop, self.vision, self.provider, {'x': 0, 'y': 0},
+                          progress=lambda message: events.append(message))
+        self.assertEqual(events, ['Choosing the next action with the local model…', 'model'])
+
+    def test_visual_clicks_do_not_require_accessibility_control_names(self):
+        self.desktop.bridge.value['controls'] = []
+        first = self.respond({'type': 'click_point', 'x': .2, 'y': .3, 'label': 'Blank document area'})
+        self.assertEqual(first['action']['type'], 'click_point')
+        self.assertFalse(first['review'])
+        self.assertIn('capture_guard', first['action'])
+        self.task.record({'type': 'click_point', 'status': 'submitted'})
+        second = self.respond({'type': 'type_text', 'text': 'A prince travels between planets and learns about friendship.'})
+        self.assertEqual(second['action']['type'], 'type_text')
+        self.assertFalse(second['review'])
+        self.task.record({'type': 'type_text', 'status': 'submitted'})
+        third = self.respond({'type': 'click_point', 'x': .7, 'y': .6, 'label': 'Document area'})
+        self.assertEqual(third['action']['x'], .7)
+        self.task.record({'type': 'click_point', 'status': 'submitted'})
+        self.assertEqual(self.respond(status='done')['status'], 'done')
+        self.assertEqual(self.vision.capture.call_count, 4)
+
+    def test_task_can_press_a_current_accessible_control_without_coordinate_guessing(self):
+        first = self.respond({'type': 'press_control', 'control_id': 'control-0'})
+        self.assertEqual(first['action']['type'], 'press_control')
+        self.assertEqual(first['action']['label'], 'New Folder')
+        self.assertFalse(first['review'])
+        self.assertIn('observation_id', first['action'])
+        with self.assertRaises(ValidationError):
+            self.respond({'type': 'press_control', 'control_id': 'unobserved-control'})
+
+    def test_missing_accessibility_labels_can_be_reconsidered_as_a_visual_click(self):
+        self.desktop.bridge.value['controls'] = []
+        self.provider.complete_structured.side_effect = [
+            {'status': 'needs_user', 'message': 'No accessibility control for the editor.', 'risk': 'navigation', 'action': None},
+            {'status': 'action', 'message': 'Click the visible editor.', 'risk': 'navigation',
+             'action': {'type': 'click_point', 'x': .4, 'y': .5, 'label': 'Editor'}}]
+        result = self.task.propose(self.desktop, self.vision, self.provider, {'x': 0, 'y': 0})
+        self.assertEqual(result['action']['type'], 'click_point')
+        self.assertEqual(self.provider.complete_structured.call_count, 2)
+        self.assertEqual(self.vision.capture.call_count, 1)
+
+    def test_stop_during_capture_does_not_start_model_inference(self):
+        capture = self.vision.capture.side_effect
+        def stop(*args, **kwargs):
+            self.task.stop()
+            return capture(*args, **kwargs)
+        self.vision.capture.side_effect = stop
+        with self.assertRaisesRegex(ValueError, 'stopped'):
+            self.task.propose(self.desktop, self.vision, self.provider, {'x': 0, 'y': 0})
+        self.provider.complete_structured.assert_not_called()
 
     def test_mutations_enter_and_review_mode_pause_for_confirmation(self):
         for action, risk in [({'type': 'press_key', 'key': 'enter'}, 'navigation'),

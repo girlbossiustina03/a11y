@@ -33,7 +33,9 @@ execute Enter. A request with unresolved additional work is only partially handl
 For taking a screenshot once or pressing A11y’s own Capture screen once button,
 use capture_once. The app invokes its own capture UI; it need not locate that button
 in an image because companion windows are deliberately excluded from screen vision.
-For a browser request involving search (including "new Safari tab and search for
+The multi-step rule takes precedence over the following browser shortcuts: "open
+Teams and check if I have tasks" is computer_task with the FULL goal, not browser_open.
+For a browser request involving only search (including "new Safari tab and search for
 YouTube"), use browser_search with app_name Safari and target the search query only.
 For opening a website/address in a browser, use browser_open with target its HTTP(S)
 address. Never use new_window for a browser search or replace it with screen guidance.
@@ -156,13 +158,15 @@ Current pixels override older metadata. If evidence is insufficient, ask a short
 clarification with request_kind=answer and no action/target. No shell commands.'''
 
 
-def preserve_browser_goal(plan, request):
-    """A browser opening with remaining work is a task, not a completed shortcut."""
+def preserve_desktop_goal(plan, request):
+    """Preserve follow-up work across app launches, browser and input shortcuts."""
     plan = validate_plan(plan)
-    is_browser = plan['operation'] in ('browser_open', 'browser_search') or (
-        plan['operation'] in ('new_window', 'launch_app', 'focus_app') and
-        plan['app_name'].strip().casefold() in ('safari', 'chrome', 'google chrome', 'firefox', 'edge', 'microsoft edge'))
-    if is_browser and plan.get('remaining_request', '').strip():
+    is_shortcut = plan['operation'] in ('browser_open', 'browser_search', 'new_window',
+        'launch_app', 'focus_app', 'type_text', 'press_key', 'scroll', 'click_point', 'press_control')
+    if plan['operation'] in ('click_point', 'press_control') or is_shortcut and plan.get('remaining_request', '').strip():
         from .models import text
         return dict(plan, operation='computer_task', target=text(request, 'computer task', 2000), remaining_request='')
     return plan
+
+
+preserve_browser_goal = preserve_desktop_goal  # Compatibility for existing integrations.

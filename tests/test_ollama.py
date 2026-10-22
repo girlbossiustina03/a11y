@@ -35,6 +35,39 @@ class OllamaTests(unittest.TestCase):
                 {'capabilities': ['embedding']}, {'capabilities': ['completion', 'vision']}]
             self.assertEqual(provider.list_models(), [{'name': 'chat', 'vision': True}])
 
+    def test_browser_coverage_recovers_work_omitted_by_first_interpretation(self):
+        provider = self.provider()
+        goal = 'open teams in a new safari window and look if i have any tasks i need to be doing'
+        first = {'operation': 'browser_open', 'app_name': 'Safari', 'target': 'https://teams.microsoft.com',
+                 'browser_mode': 'window', 'remaining_request': ''}
+        with patch.object(provider, 'complete', side_effect=[first, {'requires_followup_actions': True}]) as complete:
+            plan = provider.interpret_request(goal)
+        self.assertEqual(plan['operation'], 'computer_task')
+        self.assertEqual(plan['target'], goal)
+        self.assertIn(goal, complete.call_args.args[1][0]['content'])
+        self.assertEqual(plan['browser_mode'], 'window')
+
+    def test_browser_coverage_keeps_simple_navigation_and_rejects_invalid_checks(self):
+        provider = self.provider()
+        first = {'operation': 'browser_open', 'app_name': 'Safari', 'target': 'https://youtube.com',
+                 'browser_mode': 'window', 'remaining_request': ''}
+        with patch.object(provider, 'complete', side_effect=[first, {'requires_followup_actions': False}]):
+            self.assertEqual(provider.interpret_request('open youtube')['operation'], 'browser_open')
+        for invalid in ({}, {'requires_followup_actions': 'false'}, {'requires_followup_actions': False, 'action': 'click'}):
+            with patch.object(provider, 'complete', side_effect=[first, invalid]):
+                with self.assertRaisesRegex(ProviderError, 'No action was sent'):
+                    provider.interpret_request('open youtube')
+
+    def test_generic_app_coverage_recovers_omitted_followup_work(self):
+        provider = self.provider()
+        for goal in ('open Calculator and sum 2 + 2', 'open Notepad and write a summary of The Little Prince',
+                     'open Preview and rotate the image', 'open my drawing app and draw a circle'):
+            first = {'operation': 'launch_app', 'app_name': 'Requested app', 'target': '', 'remaining_request': ''}
+            with patch.object(provider, 'complete', side_effect=[first, {'requires_followup_actions': True}]):
+                plan = provider.interpret_request(goal)
+            self.assertEqual(plan['operation'], 'computer_task')
+            self.assertEqual(plan['target'], goal)
+
     def test_text_model_cannot_silently_accept_screen_capture(self):
         provider = self.provider()
         with patch.object(provider, 'request', return_value={'capabilities': ['completion']}):
@@ -68,6 +101,62 @@ class OllamaTests(unittest.TestCase):
             with patch.object(provider, 'request', return_value=result):
                 with self.assertRaises(ProviderError):
                     provider.complete('system', [{'role': 'user', 'content': 'Question'}])
+
+    def test_desktop_step_budget_disables_supported_thinking_and_retains_message_bound(self):
+        from companion.computer_task import SCHEMA
+        provider = self.provider()
+        provider.metadata['local-model'] = {'capabilities': ['completion', 'vision', 'thinking']}
+        with patch.dict('os.environ', {'A11Y_OLLAMA_THINKING': 'default'}), patch.object(provider, 'request', return_value={'done': True, 'message': {'content': '{}'}}) as request:
+            provider.complete_structured('system', [{'role': 'user', 'content': 'Screen'}], schema=SCHEMA,
+                                         image_data='data:image/png;base64,abc', max_tokens=1200, thinking=False)
+        body = request.call_args.args[1]
+        self.assertIs(body['think'], False)
+        self.assertEqual(body['options']['num_predict'], 1200)
+        self.assertEqual(body['format']['properties']['message']['maxLength'], 256)
+
+    def test_explicit_thinking_override_is_respected(self):
+        provider = self.provider()
+        provider.metadata['local-model'] = {'capabilities': ['completion', 'thinking']}
+        with patch.dict('os.environ', {'A11Y_OLLAMA_THINKING': 'true'}), patch.object(provider, 'request', return_value={'done': True, 'message': {'content': '{}'}}) as request:
+            provider.complete('system', [{'role': 'user', 'content': 'Screen'}], thinking=False)
+        self.assertIs(request.call_args.args[1]['think'], True)
+
+    def test_token_exhaustion_is_not_reported_as_a_long_user_request(self):
+        provider = self.provider()
+        provider.metadata['local-model'] = {'capabilities': ['completion']}
+        with patch.object(provider, 'request', return_value={'done': True, 'done_reason': 'length', 'message': {'content': '{"action":'}}) as request:
+            with self.assertRaisesRegex(ProviderError, 'output-token limit'):
+                provider.complete('system', [{'role': 'user', 'content': 'Screen'}])
+        request.assert_called_once()
+
+    def test_timing_logs_backend_costs_without_private_content(self):
+        provider = self.provider()
+        provider.metadata['local-model'] = {'capabilities': ['completion', 'vision']}
+        response = {'done': True, 'done_reason': 'length', 'total_duration': 82_759_000_000,
+                    'prompt_eval_duration': 9_326_000_000, 'eval_duration': 73_432_000_000,
+                    'eval_count': 3000, 'prompt_eval_count': 6031,
+                    'message': {'content': 'private-response', 'thinking': 'private-thought'}}
+        with patch.object(provider, 'request', return_value=response), patch('builtins.print') as output:
+            with self.assertRaises(ProviderError):
+                provider.complete('private-system', [{'role': 'user', 'content': 'private-screen'}],
+                                  image_data='data:image/png;base64,private-image')
+        logged = '\n'.join(call.args[0] for call in output.call_args_list)
+        self.assertNotIn('private-', logged)
+        record = json.loads(output.call_args_list[-1].args[0].removeprefix('A11y timing '))
+        self.assertEqual(record['eval_ms'], 73432)
+        self.assertEqual(record['prompt_eval_ms'], 9326)
+        self.assertEqual(record['eval_count'], 3000)
+        self.assertTrue(record['truncated'])
+
+    def test_timing_failure_logs_do_not_echo_provider_errors(self):
+        provider = self.provider()
+        provider.metadata['local-model'] = {'capabilities': ['completion']}
+        with patch.object(provider, 'request', side_effect=ProviderError('private-error')), patch('builtins.print') as output:
+            with self.assertRaises(ProviderError):
+                provider.complete('private-system', [{'role': 'user', 'content': 'private-input'}])
+        logged = '\n'.join(call.args[0] for call in output.call_args_list)
+        self.assertIn('ollama.failed', logged)
+        self.assertNotIn('private-', logged)
 
     def test_no_remote_endpoint_or_cloud_forwarding(self):
         for endpoint in ['http://remote.example:11434', 'https://ollama.com', 'file:///tmp/ollama']:

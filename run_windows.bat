@@ -1,7 +1,7 @@
 @echo off
 rem Launch the A11y desktop companion natively on Windows.
 rem Double-click this file, or run: run_windows.bat [--panel] [--admin]
-setlocal
+setlocal EnableExtensions EnableDelayedExpansion
 
 rem Windows-side virtual environment, kept on the local disk (faster than the WSL share).
 set "VENV=%USERPROFILE%\.venvs\a11y"
@@ -14,7 +14,18 @@ pushd "%~dp0"
 
 if not exist "%VENV%\Scripts\python.exe" (
     echo Creating the Python environment in %VENV% ...
-    py -3 -m venv "%VENV%" || goto :no_python
+    set "PY_CMD="
+    py -3 --version >nul 2>&1 && set "PY_CMD=py -3"
+    if not defined PY_CMD (
+        python --version >nul 2>&1 && set "PY_CMD=python"
+    )
+    if not defined PY_CMD (
+        if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" (
+            set "PY_CMD="%LOCALAPPDATA%\Programs\Python\Python312\python.exe""
+        )
+    )
+    if not defined PY_CMD goto :no_python
+    !PY_CMD! -m venv "%VENV%" || goto :no_python
     "%VENV%\Scripts\python.exe" -m pip install -r requirements.txt || goto :failed
 )
 

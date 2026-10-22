@@ -65,11 +65,35 @@ class RequestPlanningTests(CompanionFixture, unittest.TestCase):
         self.assertEqual(result['desktop_action']['type'], 'request_screen')
         provider.complete_structured.assert_not_called()
 
+    def test_named_app_actions_resolve_without_model_ids(self):
+        window = {'window_id': 'com.apple.Terminal:1', 'name': 'Terminal', 'bundle_id': 'com.apple.Terminal',
+                  'title': 'zsh', 'can_close': True, 'bounds': {'x': 650, 'y': 410, 'width': 500, 'height': 300}}
+        self.bridge.value['app_windows'] = [window]
+        self.bridge.value['available_apps'] = [{'name': 'Terminal', 'bundle_id': 'com.apple.Terminal'}]
+        self.monitor.enabled = True
+        self.monitor.collect_once()
+        for operation, expected in [('close_window', {'type': 'close_window', 'window_id': 'com.apple.Terminal:1'}),
+                                    ('quit_app', {'type': 'quit_app', 'bundle_id': 'com.apple.Terminal'}),
+                                    ('focus_app', {'type': 'focus_app', 'bundle_id': 'com.apple.Terminal'})]:
+            provider = self.app.provider = StagedProvider(operation, 'terminal')
+            result = self.app.ask(operation.replace('_', ' ')+' terminal')
+            provider.complete_structured.assert_not_called()
+            self.assertEqual({k: result['desktop_action'][k] for k in expected}, expected)
+            if operation != 'focus_app':
+                self.assertIn('Confirm below', result['message'])
+        self.app.provider = StagedProvider('quit_app', 'Discord')
+        result = self.app.ask('close discord')
+        self.assertIsNone(result['desktop_action'])
+        self.assertIn('Discord', result['message'])
+
     def test_wrong_operation_is_rejected_independently_of_model_self_classification(self):
         provider = self.app.provider = StagedProvider('close_window')
+        # Two Terminal windows: choosing "the lower right" one is left to the model.
         self.bridge.value['app_windows'] = [{'window_id': 'com.apple.Terminal:1', 'name': 'Terminal',
             'bundle_id': 'com.apple.Terminal', 'title': 'zsh', 'can_close': True,
-            'bounds': {'x': 650, 'y': 410, 'width': 500, 'height': 300}}]
+            'bounds': {'x': 650, 'y': 410, 'width': 500, 'height': 300}},
+            {'window_id': 'com.apple.Terminal:0', 'name': 'Terminal', 'bundle_id': 'com.apple.Terminal',
+             'title': 'logs', 'can_close': True, 'bounds': {'x': 0, 'y': 0, 'width': 500, 'height': 300}}]
         self.monitor.enabled = True
         self.monitor.collect_once()
         base = {'message': 'Proposed operation.', 'source_ids': [], 'workflow': None, 'target': None}
@@ -115,9 +139,11 @@ class IntentTransportTests(unittest.TestCase):
     def test_intent_call_uses_small_schema_and_no_screen_or_assistant_history(self):
         provider = OllamaProvider(AIConfig(base_url='http://127.0.0.1:11434', model='test'))
         provider.metadata['test'] = {'capabilities': ['completion', 'thinking']}
-        with patch.object(provider, 'request', return_value={'done': True, 'message': {'content': json.dumps({'operation': 'launch_app', 'app_name': 'Stremio', 'target': ''})}}) as request:
+        with patch.object(provider, 'request', side_effect=[
+                {'done': True, 'message': {'content': json.dumps({'operation': 'launch_app', 'app_name': 'Stremio', 'target': ''})}},
+                {'done': True, 'message': {'content': '{"requires_followup_actions":false}'}}]) as request:
             plan = provider.interpret_request('open up stremio please', ['close Terminal'])
-        body = request.call_args.args[1]
+        body = request.call_args_list[0].args[1]
         self.assertFalse(body['think'])
         self.assertEqual(body['options']['num_predict'], 400)
         self.assertEqual(body['format']['required'], ['operation', 'app_name', 'target', 'browser_mode', 'remaining_request'])

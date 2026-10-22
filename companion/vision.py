@@ -39,6 +39,8 @@ class ScreenVision:
                 raise RuntimeError('Could not build screen vision. Check Xcode Command Line Tools.')
 
     def call(self, *args):
+        if sys.platform == 'win32':
+            return self.windows_call(*args)
         self.prepare()
         try:
             result = subprocess.run([str(self.binary), '--exclude-pid', str(os.getpid()), *args],
@@ -51,6 +53,18 @@ class ScreenVision:
             return data
         except (OSError, subprocess.TimeoutExpired, ValueError):
             raise RuntimeError('Screen vision could not capture a frame. Check Screen Recording permission.') from None
+
+    def windows_call(self, *args):
+        from .windows_screen import WindowsScreenBridge
+        try:
+            if not hasattr(self, 'windows_bridge'):
+                self.windows_bridge = WindowsScreenBridge()
+            data = self.windows_bridge.call(*args)
+        except (OSError, AttributeError, ValueError):
+            raise RuntimeError('Screen vision could not capture a frame on this version of Windows.') from None
+        if data.get('error'):
+            raise RuntimeError(str(data['error']))
+        return data
 
     def request_access(self):
         return self.call('--request-access')

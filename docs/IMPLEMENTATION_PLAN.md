@@ -390,3 +390,125 @@ inference call in JSON mode with the schema in the prompt; other errors do not r
 worker handoff, schema-only fallback, cache behavior, private-error suppression and
 non-schema/second-error nonretry. The specific live HTTP 400 cause remains unconfirmed;
 local Ollama access is still blocked. Native helpers were unchanged in this pass.
+
+## Desktop inference latency and incomplete responses
+
+The reported request consumed 3,000 generated tokens before stopping without a
+complete response. Desktop steps now request 1,200 output tokens, a schema-enforced
+256-character explanation and disabled thinking when supported. An explicit
+A11Y_OLLAMA_THINKING override still wins. Ordinary chat/workflow budgets stay intact.
+The UI distinguishes screen capture from model inference; cancellation during
+capture prevents starting inference. Token exhaustion reports the actual cause and
+never executes a partial action. The compatible provider supports the same structured
+step interface, with runtime validation retained.
+
+Validation: regression coverage checks budgets, thinking defaults/overrides, message
+bounds, inference progress, token exhaustion and cancellation. Local Ollama remains
+unreachable from this tool environment, so live-model latency is not measured here.
+
+Per-step timing records now go to the launcher's existing stdout log: metadata,
+capture, inference and optional reconsideration are separate events. Ollama records
+wall time plus reported load/prompt/generation durations and token counts, including
+truncation. Start events flush immediately so an in-flight stage is identifiable.
+Records exclude goals, screen/app contents, images, responses and reasoning.
+
+## Full browser goals and compact control outlines
+
+When the initial browser interpretation reports no remaining work, an independent
+small semantic check now verifies whether fulfilling the original request requires
+reading/interacting with the page. If so, route the full original goal to the task
+loop before opening anything. Malformed coverage checks fail closed. This covers
+the reported Teams failure even when the first model omits remaining_request.
+Simple website/search requests retain direct navigation. This adds one bounded
+text-only inference to those browser shortcuts; live classification still needs
+verification with the selected local model.
+
+Inspected the actual desktop screenshot. Replaced layered stylesheet/native circular
+button outlines with antialiased painted controls and an inset keyboard focus ring.
+Screen vision uses a small green status dot rather than a thick green perimeter.
+Softened the prompt's idle border. Rendered and inspected the compact controls
+offscreen; live compositor appearance requires relaunching the companion.
+
+Follow-up: the running build matched the code, but the actual desktop still showed
+heavy extra rims absent from the offscreen render. Disabled the translucent tool
+window's native drop shadow and cleared stylesheet underpainting on painted round
+controls. Softened settings/action button borders and kept focus borders at one
+pixel to avoid size jumps. Attempting a separate Cocoa preview from the sandbox
+failed on macOS service access; the compositor result must be checked after relaunch.
+
+## General app goals, not just browser workflows
+
+Any supported desktop shortcut with remaining requested work now becomes a full
+computer task before execution. The independent coverage check also applies to
+app launches/focus/new windows, recovering omitted follow-up instructions for any
+app. Calculator arithmetic and TextEdit drafting are regression examples, not
+separate executors. Old partial receipts still report unfinished work accurately.
+
+The shared screenshot loop now exposes native press_control and new_window in
+addition to visual point clicks, typing, keys and scrolling. Visible targets do
+not need AX labels for a point click; blocked proposals are reconsidered once
+against the same supplied image. Requested document composition may generate
+draft text for the focused editor. Screenshots are refreshed after every action;
+coordinate guards, focused-field checks, cancellation and review of sensitive
+changes remain enforced. Raised the bounded task allowance from 8 to 24 actions.
+
+Validation includes general-app routing with and without omitted follow-up work,
+visual click/type/click/completion with no accessibility controls, native control
+IDs and invalid IDs, and the existing Qt worker observe/execute/reobserve loop.
+Model-generated targeting and actual macOS Calculator/TextEdit completion remain
+unverified: this environment cannot connect to the user's local Ollama listener.
+
+Open-source options reviewed: browser-use (https://github.com/browser-use/browser-use)
+provides browser agents, and MLX-VLM (https://github.com/Blaizzy/mlx-vlm) provides
+Apple Silicon multimodal inference. Neither has been installed or integrated.
+A browser adapter would complement the desktop executor; local inference speed
+must be measured before changing runtimes or claiming an improvement.
+
+## Direct clicks and unified pointer/highlight appearance
+
+Direct click_point/press_control user requests now start the same observe/action/
+verification loop as multi-step goals, rather than stopping at a confirmation
+proposal. Reading a Settings sidebar page is explicitly navigation; changing a
+setting value remains a reviewed change. Execution still uses the existing native
+Quartz click bridge and fresh target guard; no third-party click driver is needed.
+
+Replaced the blue pointer/badge and double-stroked yellow highlight with a small
+white arrow and a single thin white target outline. Both windows disable native
+drop shadows and remain click-through/non-focusing. Labels remain in the accessible
+companion response. Removed the invented rectangle surrounding a click point: an
+outline is shown only when a supplied target box actually contains that point.
+Rendered and visually inspected the pointer/highlight together on a neutral settings
+row. The fresh actual desktop screenshot had no pointer visible, so it cannot
+validate the live compositor appearance. The active log still reported build
+97ad1623b2, predating general routing; a full quit/relaunch is required to load it.
+
+## Rounded popup and PR #2 / PR #3 integration
+
+Inspected Desktop/Screenshot 2026-10-23 at 00.52.24.png: the action menu had a
+square native frame behind its rounded stylesheet surface. RoundedMenu now uses a
+frameless translucent popup, no native shadow, and one painted rounded surface.
+Rendered the popup and checked transparent corner pixels, opaque content and
+keyboard selection in a regression test. Live macOS compositor validation remains
+pending relaunch.
+
+Integrated PR #2 (060e95d) and PR #3 (50bcf0f) against their actual merge bases,
+preserving current task routing, automatic app launch, aliases, source validation,
+consent persistence and all local UI fixes. Resolved overlapping desktop/service/
+test changes and the README conflict. Reused the shared app resolver for named
+close/quit/focus and added the PR's whole-word app-name matching. Kept one automatic
+launch path; the redundant PR worker callback was omitted to avoid double execution.
+
+Windows now includes Start-menu Store apps and request-time GDI screen capture.
+Permission checks do not capture frames; known protected windows block capture
+even in the background. Windows coordinate clicks/typing remain unsupported.
+Fixed PR #3's Python-command expansion inside the batch launcher block, and updated
+README limits/platform claims to match the combined implementation.
+
+Validation: 243 Python tests, 4 web tests, compileall and whitespace/conflict-marker
+checks pass. Actual Windows execution is unverified on this macOS environment.
+Backup of pre-integration working files:
+/private/tmp/a11y-before-pr2-pr3-20261023-010152.
+Git metadata is read-only, so the resolved content is in working files and the user
+must record the merge parents/commit. Verified the two-head merge-recording command
+in an isolated repository: it preserves dirty resolved files and commits three
+parents (main, PR #2, PR #3). No commits or pushes were made to the actual repository.

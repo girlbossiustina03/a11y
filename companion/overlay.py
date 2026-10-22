@@ -1,6 +1,6 @@
 """Click-through, expiring highlight. Coordinates use Qt's logical screen geometry."""
 from PyQt6.QtCore import Qt, QRectF, QTimer
-from PyQt6.QtGui import QColor, QPainter, QPen
+from PyQt6.QtGui import QColor, QPainter, QPen, QPainterPath
 from PyQt6.QtWidgets import QWidget
 from .models import Target
 
@@ -10,7 +10,7 @@ class GuidanceOverlay(QWidget):
         super().__init__()
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
                             | Qt.WindowType.Tool | Qt.WindowType.WindowTransparentForInput
-                            | Qt.WindowType.WindowDoesNotAcceptFocus)
+                            | Qt.WindowType.WindowDoesNotAcceptFocus | Qt.WindowType.NoDropShadowWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
@@ -21,6 +21,8 @@ class GuidanceOverlay(QWidget):
 
     def guide(self, geometry, target):
         self.target = Target.parse(target)
+        self.setAccessibleName('Highlighted interface target')
+        self.setAccessibleDescription(self.target.label)
         self.setGeometry(geometry)
         self.show()
         self.update()
@@ -33,17 +35,10 @@ class GuidanceOverlay(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = QRectF(t.x*self.width(), t.y*self.height(), t.width*self.width(), t.height*self.height())
-        p.setPen(QPen(QColor('#101c23'), 8))
-        p.drawRoundedRect(rect, 6, 6)
-        p.setPen(QPen(QColor('#ffd166'), 4))
-        p.drawRoundedRect(rect, 6, 6)
-        label = QRectF(max(8, min(rect.x(), self.width()-370)),
-                       max(8, rect.y()-72), min(360, self.width()-16), 64)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor('#172f33'))
-        p.drawRoundedRect(label, 8, 8)
-        p.setPen(QColor('white'))
-        p.drawText(label.adjusted(10, 4, -10, -4), Qt.TextFlag.TextWordWrap, t.label)
+        # One quiet outline; descriptions remain in the companion's accessible reply.
+        p.setBrush(QColor(255, 255, 255, 12))
+        p.setPen(QPen(QColor('#f5f5f7'), 1.5))
+        p.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 7, 7)
 
 
 class CompanionPointer(QWidget):
@@ -53,11 +48,11 @@ class CompanionPointer(QWidget):
         from PyQt6.QtCore import QPropertyAnimation, QEasingCurve
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
                             | Qt.WindowType.Tool | Qt.WindowType.WindowTransparentForInput
-                            | Qt.WindowType.WindowDoesNotAcceptFocus)
+                            | Qt.WindowType.WindowDoesNotAcceptFocus | Qt.WindowType.NoDropShadowWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
-        self.setFixedSize(100, 62)
+        self.setFixedSize(28, 36)
         self.setWindowTitle('A11y companion pointer')
         self.setAccessibleName('A11y target pointer')
         self.animation = QPropertyAnimation(self, b'pos', self)
@@ -95,16 +90,18 @@ class CompanionPointer(QWidget):
         self.target_point = None
 
     def paintEvent(self, event):
-        from PyQt6.QtCore import QPointF
-        from PyQt6.QtGui import QPolygonF
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor('#09141e'), 2))
-        painter.setBrush(QColor('#74cbff'))
-        painter.drawPolygon(QPolygonF([QPointF(1, 1), QPointF(4, 29), QPointF(12, 22),
-                                      QPointF(18, 34), QPointF(24, 31), QPointF(18, 19), QPointF(29, 18)]))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor('#172531'))
-        painter.drawRoundedRect(QRectF(26, 32, 66, 25), 12, 12)
-        painter.setPen(QColor('#d5efff'))
-        painter.drawText(QRectF(26, 32, 66, 25), Qt.AlignmentFlag.AlignCenter, 'A11y')
+        painter.setPen(QPen(QColor('#303036'), 1.25, Qt.PenStyle.SolidLine,
+                            Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        painter.setBrush(QColor('#ffffff'))
+        arrow = QPainterPath()
+        arrow.moveTo(1, 1)
+        arrow.lineTo(1, 25)
+        arrow.lineTo(7.5, 19.5)
+        arrow.lineTo(12.5, 31)
+        arrow.lineTo(17, 29)
+        arrow.lineTo(12, 18)
+        arrow.lineTo(21, 18)
+        arrow.closeSubpath()
+        painter.drawPath(arrow)

@@ -66,12 +66,29 @@ class MediaRequestTests(CompanionFixture, unittest.TestCase):
             self.assertEqual(result['desktop_action']['goal'], goal)
             self.assertNotIn('this part has not', result['message'])
 
-    def test_remaining_work_is_visible_after_partial_action_verification(self):
+    def test_app_shortcuts_with_followup_work_enter_the_general_loop(self):
+        for app, goal, remainder in (
+                ('Calculator', 'open the macos calculator app and in it sum 2 + 2', 'in it sum 2 + 2'),
+                ('Notepad', 'open up notepad and in it write a summary of little prince', 'write a summary of little prince'),
+                ('Preview', 'open Preview and rotate my image', 'rotate my image')):
+            self.app.provider = StagedProvider('launch_app', app)
+            self.app.provider.interpret_request.return_value['remaining_request'] = remainder
+            result = self.app.ask(goal)
+            self.assertEqual(result['desktop_action']['type'], 'start_task')
+            self.assertEqual(result['desktop_action']['goal'], goal)
+
+    def test_direct_click_requests_enter_the_observe_act_verify_loop(self):
+        for operation in ('click_point', 'press_control'):
+            self.app.provider = StagedProvider(operation, 'System Settings', 'Battery')
+            goal = 'click on the Battery setting yourself'
+            result = self.app.ask(goal)
+            self.assertEqual(result['desktop_action']['type'], 'start_task')
+            self.assertEqual(result['desktop_action']['goal'], goal)
+            self.assertNotIn('Confirm below', result['message'])
+
+    def test_old_partial_receipts_still_report_unexecuted_work(self):
         self.app.provider = StagedProvider('launch_app', 'Music')
-        self.app.provider.interpret_request.return_value['remaining_request'] = 'Play Last Christmas'
-        result = self.app.ask('open Music and play Last Christmas')
-        self.assertIn('Still pending', result['message'])
         self.app.last_action_result = {'type': 'launch_app', 'bundle_id': 'com.apple.Music', 'label': 'Open Music',
-                                      'remaining_request': result['desktop_action']['remaining_request']}
+                                      'remaining_request': 'Play Last Christmas'}
         result = self.app.ask('verify', mode='verify')
         self.assertIn('Still pending: Play Last Christmas', result['message'])

@@ -28,4 +28,11 @@ def resolve_app(name, catalog):
     aliases = {normalized(alias) for alias in ALIASES.get(wanted, ())}
     known_ids = {'systemsettings': 'com.apple.systempreferences', 'systempreferences': 'com.apple.systempreferences', 'textedit': 'com.apple.TextEdit', 'notes': 'com.apple.Notes', 'safari': 'com.apple.Safari'}
     bundle_ids = {known_ids[alias] for alias in aliases if alias in known_ids}
-    return [app for app in catalog if normalized(app['name']) in aliases or app['bundle_id'] in bundle_ids]
+    matches = [app for app in catalog if normalized(app['name']) in aliases or app['bundle_id'] in bundle_ids]
+    if matches:
+        return matches
+    # PR #2: "Teams" can match "Microsoft Teams". Preserve ambiguity rather
+    # than choosing a random app, and never use arbitrary substring matches.
+    words = lambda value: {normalized(word) for word in value.split()} - {''}
+    requested = words(name)
+    return [app for app in catalog if requested and requested <= words(app['name'])]
