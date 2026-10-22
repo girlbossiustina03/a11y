@@ -98,6 +98,63 @@ class TaskTests(unittest.TestCase):
                           progress=lambda message: events.append(message))
         self.assertEqual(events, ['Choosing the next action with the local model…', 'model'])
 
+    def enable_ocr(self):
+        capture = self.vision.capture.side_effect
+        self.vision.capture.side_effect = lambda *args, **kwargs: dict(capture(*args, **kwargs),
+            text_regions=[{'text': 'Battery', 'x': .2, 'y': .3, 'width': .2, 'height': .1}])
+
+    def test_ocr_step_uses_text_only_inference_but_keeps_a_screenshot_click_guard(self):
+        self.enable_ocr()
+        result = self.respond({'type': 'click_point', 'x': .25, 'y': .35, 'label': 'Battery'})
+        self.assertIsNone(self.provider.complete_structured.call_args.kwargs['image_data'])
+        self.assertIn('Battery', self.provider.complete_structured.call_args.args[1][0]['content'])
+        self.assertIn('capture_guard', result['action'])
+        self.assertTrue(self.vision.capture.call_args.kwargs['fast_text'])
+        self.vision.click_guard.assert_called_once()
+
+    def test_ocr_missing_icon_falls_back_to_full_image_once(self):
+        self.enable_ocr()
+        self.provider.complete_structured.side_effect = [
+            {'status': 'needs_vision', 'message': 'Need to inspect the icon.', 'risk': 'navigation', 'action': None},
+            {'status': 'action', 'message': 'Click icon.', 'risk': 'navigation',
+             'action': {'type': 'click_point', 'x': .8, 'y': .8, 'label': 'Icon'}}]
+        result = self.task.propose(self.desktop, self.vision, self.provider, {'x': 0, 'y': 0})
+        calls = self.provider.complete_structured.call_args_list
+        self.assertIsNone(calls[0].kwargs['image_data'])
+        self.assertEqual(calls[1].kwargs['image_data'], 'data:image/png;base64,synthetic')
+        self.assertEqual(result['action']['x'], .8)
+        self.assertEqual(self.vision.capture.call_count, 1)
+
+    def test_ocr_cannot_execute_an_ungrounded_point(self):
+        self.enable_ocr()
+        self.desktop.bridge.value['controls'] = []
+        self.provider.complete_structured.return_value = {'status': 'action', 'message': 'Click icon.', 'risk': 'navigation',
+            'action': {'type': 'click_point', 'x': .8, 'y': .8, 'label': 'Icon'}}
+        self.task.propose(self.desktop, self.vision, self.provider, {'x': 0, 'y': 0})
+        self.assertEqual(self.provider.complete_structured.call_count, 2)
+        self.assertIsNotNone(self.provider.complete_structured.call_args.kwargs['image_data'])
+
+    def test_inspection_rejects_post_control_then_replans_to_activity(self):
+        self.task.goal_mode = 'inspect'
+        self.desktop.bridge.value['controls'] = [
+            {'id': 'post', 'label': 'Post in channel button', 'enabled': True, 'bounds': {'x': 100, 'y': 100, 'width': 80, 'height': 30}},
+            {'id': 'activity', 'label': 'Activity', 'enabled': True, 'bounds': {'x': 200, 'y': 100, 'width': 80, 'height': 30}}]
+        self.provider.complete_structured.side_effect = [
+            {'status': 'action', 'message': 'Check activity.', 'risk': 'navigation', 'action': {'type': 'press_control', 'control_id': 'post'}},
+            {'status': 'action', 'message': 'Check activity.', 'risk': 'navigation', 'action': {'type': 'press_control', 'control_id': 'activity'}}]
+        result = self.task.propose(self.desktop, self.vision, self.provider, {'x': 0, 'y': 0})
+        self.assertEqual(result['action']['control_id'], 'activity')
+        self.assertEqual(self.task.receipts, [])
+
+    def test_old_receipt_snapshots_do_not_bloat_the_next_prompt(self):
+        self.task.record({'type': 'launch_app', 'label': 'Open Safari', 'status': 'submitted',
+            'before': {'old_window_title': 'OLD_STATE'*1000}, 'after': {'old_window_title': 'OLD_STATE'*1000},
+            'native_result': {'submitted': True, 'unused_debug': 'OLD_STATE'*1000}})
+        self.respond({'type': 'scroll', 'direction': 'down'})
+        prompt = self.provider.complete_structured.call_args.args[1][0]['content']
+        self.assertNotIn('OLD_STATE', prompt)
+        self.assertIn('Open Safari', prompt)
+
     def test_visual_clicks_do_not_require_accessibility_control_names(self):
         self.desktop.bridge.value['controls'] = []
         first = self.respond({'type': 'click_point', 'x': .2, 'y': .3, 'label': 'Blank document area'})
@@ -158,6 +215,50 @@ class TaskTests(unittest.TestCase):
         self.vision.capture.assert_called_once()
         with self.assertRaises(ValidationError):
             self.respond({'type': 'press_key', 'key': 'enter'}, status='done')
+
+    def test_contradictory_status_is_repaired_before_a_visual_click_is_proposed(self):
+        for status in ('done', 'needs_user'):
+            self.task = ComputerTask('Open Battery information', automatic=True)
+            click = {'type': 'click_point', 'x': .2, 'y': .3, 'label': 'Battery sidebar'}
+            self.provider.complete_structured.side_effect = [
+                {'status': status, 'message': 'Select Battery.', 'risk': 'navigation', 'action': click},
+                {'status': 'action', 'message': 'Select Battery.', 'risk': 'navigation', 'action': click}]
+            step = self.task.propose(self.desktop, self.vision, self.provider, {'x': 0, 'y': 0})
+            self.assertEqual(step['status'], 'action')
+            self.assertIn('capture_guard', step['action'])
+            self.assertFalse(step['review'])
+            self.assertEqual(self.task.receipts, [])
+            correction = self.provider.complete_structured.call_args.args[1][-1]['content']
+            self.assertIn('No action has run', correction)
+
+    def test_failed_repair_stops_after_two_calls_without_a_pending_action(self):
+        bad = {'status': 'done', 'message': 'Click Battery.', 'risk': 'navigation',
+               'action': {'type': 'click_point', 'x': .2, 'y': .3, 'label': 'Battery'}}
+        self.provider.complete_structured.side_effect = [bad, bad]
+        with self.assertRaises(ValidationError):
+            self.task.propose(self.desktop, self.vision, self.provider, {'x': 0, 'y': 0})
+        self.assertEqual(self.provider.complete_structured.call_count, 2)
+        self.assertIsNone(self.task.pending)
+        self.vision.click_guard.assert_not_called()
+
+    def test_cancellation_before_repair_prevents_the_second_model_call(self):
+        self.provider.complete_structured.return_value = {'status': 'done', 'message': 'Click.', 'risk': 'navigation',
+                                                         'action': {'type': 'click_point', 'x': .2, 'y': .3, 'label': 'Battery'}}
+        def progress(message):
+            if message.startswith('Rechecking'):
+                self.task.stop()
+        with self.assertRaisesRegex(ValueError, 'stopped'):
+            self.task.propose(self.desktop, self.vision, self.provider, {'x': 0, 'y': 0}, progress=progress)
+        self.provider.complete_structured.assert_called_once()
+        self.assertIsNone(self.task.pending)
+
+    def test_repaired_sensitive_action_still_requires_review(self):
+        click = {'type': 'click_point', 'x': .2, 'y': .3, 'label': 'Delete document'}
+        self.provider.complete_structured.side_effect = [
+            {'status': 'done', 'message': 'Delete.', 'risk': 'change', 'action': click},
+            {'status': 'action', 'message': 'Delete.', 'risk': 'navigation', 'action': click}]
+        step = self.task.propose(self.desktop, self.vision, self.provider, {'x': 0, 'y': 0})
+        self.assertTrue(step['review'])
 
     def test_unsupported_shell_and_invalid_coordinates_never_reach_executor(self):
         for action in ({'type': 'shell', 'command': 'anything'},

@@ -22,6 +22,11 @@ class VisionTests(unittest.TestCase):
             self.assertIn('captured_monotonic', frame)
             call.assert_called_once_with('--x', '1440', '--y', '0')
 
+    def test_fast_text_requests_native_ocr_on_the_same_transient_frame(self):
+        with patch.object(self.vision, 'call', return_value={'image_data': 'data:image/png;base64,FRAME', 'text_regions': []}) as call:
+            self.vision.capture(self.provider, fast_text=True)
+        call.assert_called_once_with('--x', '0', '--y', '0', '--ocr')
+
     def test_paused_remote_and_text_only_modes_do_not_capture(self):
         with patch.object(self.vision, 'call') as call:
             with self.assertRaises(RuntimeError):

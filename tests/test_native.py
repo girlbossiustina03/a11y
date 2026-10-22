@@ -33,6 +33,9 @@ class NativeTests(unittest.TestCase):
         self.window = CompanionWindow(self.service)
         self.window.start_companion()
         self.qt.processEvents()
+        # Most widget tests exercise a user-opened conversation, not startup.
+        self.window.mascot.character.click()
+        self.qt.processEvents()
 
     def tearDown(self):
         if self.window.worker:
@@ -164,6 +167,30 @@ class NativeTests(unittest.TestCase):
             permission.return_value.start.assert_called_once()
         self.window.vision_permission = None
 
+    def test_startup_is_mascot_only_and_restoration_does_not_open_the_prompt(self):
+        self.window.start_companion()
+        self.qt.processEvents()
+        mascot = self.window.mascot
+        self.assertTrue(mascot.user_collapsed)
+        self.assertFalse(mascot.card.isVisible())
+        self.assertFalse(mascot.reply_panel.isVisible())
+        self.window.screen_permission_result({'granted': True}, quiet=True)
+        self.assertTrue(self.window.vision.enabled)
+        self.assertFalse(mascot.card.isVisible())
+        self.assertNotIn('Screen vision is on', mascot.bubble.toPlainText())
+        mascot.character.click()
+        self.qt.processEvents()
+        self.assertTrue(mascot.card.isVisible())
+
+    def test_background_permission_result_does_not_replace_an_open_conversation(self):
+        self.window.mascot.present('Current task response', compact=True)
+        self.window.screen_permission_result({'granted': True}, quiet=True)
+        self.assertEqual(self.window.mascot.bubble.toPlainText(), 'Current task response')
+        self.window.screen_permission_failed('Permission needs attention', quiet=True)
+        self.assertFalse(self.window.vision.enabled)
+        self.assertEqual(self.window.mascot.bubble.toPlainText(), 'Current task response')
+        self.assertEqual(self.window.essentials_vision.toolTip(), 'Permission needs attention')
+
     def test_visual_pointer_is_independent_click_through_and_respects_reduced_motion(self):
         from PyQt6.QtGui import QCursor
         pointer = self.window.pointer
@@ -208,7 +235,7 @@ class NativeTests(unittest.TestCase):
         self.assertIn('requested window', self.window.mascot.bubble.toPlainText())
         self.assertTrue(self.window.mascot.isVisible())
 
-    def test_computer_task_reobserves_after_each_action_and_pauses_before_enter(self):
+    def test_fast_task_reobserves_after_each_action_and_pauses_before_enter(self):
         import base64
         from copy import deepcopy
         from unittest.mock import Mock
@@ -233,7 +260,8 @@ class NativeTests(unittest.TestCase):
         image.save(buffer, 'PNG')
         frame = {'image_data': 'data:image/png;base64,'+base64.b64encode(bytes(png)).decode(),
                  'screen': {'x': area.x(), 'y': area.y(), 'width': area.width(), 'height': area.height()},
-                 'display_id': 7, 'captured_monotonic': time.monotonic(), 'windows': []}
+                 'display_id': 7, 'captured_monotonic': time.monotonic(), 'windows': [],
+                 'text_regions': [{'text': 'Search', 'x': .25, 'y': .35, 'width': .1, 'height': .1}]}
         actions = [{'type': 'click_point', 'x': .3, 'y': .4, 'label': 'Search'},
                    {'type': 'type_text', 'text': 'accessibility'},
                    {'type': 'scroll', 'direction': 'down'},
@@ -270,7 +298,7 @@ class NativeTests(unittest.TestCase):
             self.assertIn('model reports completion', self.window.mascot.bubble.toPlainText())
             for call in self.service.provider.complete_structured.call_args_list:
                 self.assertIn('Find accessibility help', call.args[1][0]['content'])
-                self.assertTrue(call.kwargs['image_data'])
+                self.assertIsNone(call.kwargs['image_data'])
         self.assertIsNone(self.window.pending_desktop_action)
 
     def test_stop_cancels_an_automatic_step_queued_for_execution(self):
@@ -671,6 +699,75 @@ class NativeTests(unittest.TestCase):
         self.window.advanced_navigation.setChecked(True)
         for index in self.window.advanced_pages:
             self.assertFalse(self.window.panel_navigation.item(self.window.navigation_pages.index(index)).isHidden())
+
+    def test_settings_resize_without_a_bottom_status_strip(self):
+        from PyQt6.QtWidgets import QScrollArea
+        self.window.reveal()
+        self.window.resize(620, 460)
+        self.qt.processEvents()
+        self.assertEqual((self.window.width(), self.window.height()), (620, 460))
+        self.assertFalse(self.window.statusBar().isVisible())
+        self.window.statusBar().showMessage('Saved')
+        self.assertFalse(self.window.statusBar().isVisible())
+        for index in range(self.window.tabs.count()):
+            self.assertIsInstance(self.window.tabs.widget(index), QScrollArea)
+
+    def test_companion_text_is_identical_in_history_and_cloud_without_duplicates(self):
+        self.window.say('Reading Teams activity.', compact=True)
+        self.window.say('Reading Teams activity.', compact=True)
+        self.assertEqual(self.window.mascot.bubble.toPlainText(), 'Reading Teams activity.')
+        self.assertEqual(self.window.transcript.toPlainText().count('A11y: Reading Teams activity.'), 1)
+        self.window.failed('Could not read the page.')
+        message = self.window.mascot.bubble.toPlainText()
+        self.assertIn('A11y: '+message, self.window.transcript.toPlainText())
+        self.assertNotIn('progress is saved', message)
+
+    def test_own_desktop_tools_highlight_uses_visible_qt_bounds_without_minimizing(self):
+        with patch.object(self.window.overlay, 'guide') as guide:
+            self.window.show_companion_control(str(self.window.context_tab))
+            self.qt.processEvents()
+            self.assertTrue(self.window.isVisible())
+            self.assertTrue(self.window.advanced_navigation.isChecked())
+            guide.assert_called_once()
+            self.assertEqual(guide.call_args.args[1]['label'], 'Desktop tools')
+            self.assertIn('Highlighted Desktop tools', self.window.mascot.bubble.toPlainText())
+
+    def test_own_setting_request_runs_worker_and_highlights_without_screen_capture(self):
+        from test_request_plan import StagedProvider
+        provider = self.service.provider = StagedProvider('highlight', 'A11y', 'Desktop tools')
+        provider.complete_structured.return_value = {'control_id': str(self.window.context_tab)}
+        self.window.input.setPlainText('mark me where Desktop tools are in A11y')
+        with patch.object(self.window.vision, 'capture') as capture, patch.object(self.window.overlay, 'guide') as guide:
+            self.window.ask(from_mascot=True)
+            deadline = time.monotonic()+3
+            while time.monotonic() < deadline and not guide.called:
+                self.qt.processEvents()
+                QTest.qWait(5)
+            capture.assert_not_called()
+            guide.assert_called_once()
+            self.assertEqual(guide.call_args.args[1]['label'], 'Desktop tools')
+            self.assertTrue(self.window.isVisible())
+
+    def test_desktop_diagnostics_are_collapsed_and_keyboard_accessible(self):
+        self.window.reveal()
+        self.window.tabs.setCurrentIndex(self.window.context_tab)
+        self.assertTrue(self.window.desktop_diagnostics.content.isHidden())
+        toggle = self.window.desktop_diagnostics.toggle
+        toggle.setFocus()
+        QTest.keyClick(toggle, Qt.Key.Key_Space)
+        self.assertFalse(self.window.desktop_diagnostics.content.isHidden())
+        self.assertEqual(toggle.accessibleDescription(), 'Expanded')
+        self.assertTrue(self.window.history_tools.content.isHidden())
+        self.assertTrue(self.window.document_tools.content.isHidden())
+
+    def test_model_picker_applies_without_opening_technical_fields(self):
+        self.window.connection_details.toggle.setChecked(False)
+        self.window.local_models.addItem('local-test-model', 'local-test-model')
+        self.window.local_models.setCurrentIndex(self.window.local_models.count()-1)
+        self.window.connect_btn.click()
+        self.assertEqual(self.service.provider.config.model, 'local-test-model')
+        self.assertTrue(self.window.connection_details.content.isHidden())
+        self.assertEqual(self.window.connection_summary.text(), 'local-test-model')
 
 
     def test_setup_access_action_has_no_duplicate_confirmation(self):

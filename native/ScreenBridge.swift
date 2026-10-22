@@ -3,8 +3,37 @@ import AppKit
 import ScreenCaptureKit
 import CoreGraphics
 import Foundation
+import Vision
 
 @main struct ScreenBridge {
+    static func recognizeText(_ image: CGImage) throws -> [[String: Any]] {
+        var textRegions: [[String: Any]] = []
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .fast
+        request.usesLanguageCorrection = false
+        request.minimumTextHeight = 0.008
+        do {
+            try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
+        } catch {
+            let failure = error as NSError
+            guard failure.domain == VNErrorDomain && failure.code == VNErrorCode.notImplemented.rawValue else { throw error }
+            // Some systems lack the fast recognizer. OCR still avoids image-token
+            // inference when the accurate recognizer is available instead.
+            request.recognitionLevel = .accurate
+            try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
+        }
+        for observation in (request.results ?? []).prefix(200) {
+            guard let candidate = observation.topCandidates(1).first,
+                  candidate.confidence >= 0.5 else { continue }
+            let box = observation.boundingBox
+            func rounded(_ value: Double) -> Double { (value*10000).rounded()/10000 }
+            textRegions.append(["text": String(candidate.string.prefix(160)),
+                "x": rounded(box.minX), "y": rounded(1-box.maxY),
+                "width": rounded(box.width), "height": rounded(box.height)])
+        }
+        return textRegions
+    }
+
     static func emit(_ value: [String: Any]) {
         if let data = try? JSONSerialization.data(withJSONObject: value) {
             print(String(decoding: data, as: UTF8.self))
@@ -21,6 +50,20 @@ import Foundation
         if args.contains("--request-access") {
             let granted = CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess()
             emit(["granted": granted]); return
+        }
+        // Offline OCR probe for annotated/synthetic fixtures; does not capture a screen.
+        if let index = args.firstIndex(of: "--ocr-image"), index+1 < args.count {
+            guard let source = NSImage(contentsOfFile: args[index+1]),
+                  let image = source.cgImage(forProposedRect: nil, context: nil, hints: nil),
+                  image.width*image.height <= 16000000 else {
+                emit(["error": "Could not read the OCR fixture."]); return
+            }
+            let started = CFAbsoluteTimeGetCurrent()
+            do {
+                emit(["text_regions": try recognizeText(image),
+                      "ocr_ms": Int((CFAbsoluteTimeGetCurrent()-started)*1000)])
+            } catch { emit(["error": "OCR fixture recognition failed.", "error_code": (error as NSError).code]) }
+            return
         }
         guard CGPreflightScreenCaptureAccess() else {
             emit(["error": "Allow Screen & System Audio Recording for the requested Terminal/Python/bridge entry in macOS Privacy & Security, then try again."]); return
@@ -78,10 +121,17 @@ import Foundation
                 ["app": $0.owningApplication?.applicationName ?? "Application", "title": String(($0.title ?? "").prefix(160)),
                  "window_id": $0.windowID, "bounds": ["x": $0.frame.origin.x, "y": $0.frame.origin.y, "width": $0.frame.width, "height": $0.frame.height]]
             }
+            var textRegions: [[String: Any]] = []
+            let ocrStarted = CFAbsoluteTimeGetCurrent()
+            if args.contains("--ocr") {
+                do { textRegions = try recognizeText(image) }
+                catch { /* Missing OCR falls back to image analysis, never guessed text. */ }
+            }
             emit(["image_data": "data:image/png;base64,"+png.base64EncodedString(),
                   "display_id": display.displayID, "screen": ["x": bounds.origin.x, "y": bounds.origin.y, "width": bounds.width, "height": bounds.height],
                   "captured_at": ISO8601DateFormatter().string(from: Date()), "windows": windows,
-                  "companion_excluded": true])
+                  "companion_excluded": true, "text_regions": textRegions,
+                  "ocr_ms": Int((CFAbsoluteTimeGetCurrent()-ocrStarted)*1000)])
         } catch {
             emit(["error": "Screen capture failed. Check macOS Screen Recording permission and try again."])
         }

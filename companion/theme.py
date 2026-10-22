@@ -67,6 +67,8 @@ QComboBox QAbstractItemView {background:#2c2c2e;color:#f5f5f7;border:1px solid #
 QCheckBox {color:#e5e5ea;spacing:8px;}
 QCheckBox:focus {outline:1px solid #64aaff;}
 QStatusBar {background:#1c1c1e;color:#a0a0a8;font-size:11px;border-top:1px solid #38383d;}
+QScrollArea {background:transparent;border:0;}
+QScrollArea > QWidget > QWidget {background:transparent;}
 QScrollBar:vertical {background:transparent;width:7px;}
 QScrollBar::handle:vertical {background:#63636b;border-radius:3px;min-height:24px;}
 QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical {height:0;}

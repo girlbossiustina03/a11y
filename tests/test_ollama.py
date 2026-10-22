@@ -68,6 +68,16 @@ class OllamaTests(unittest.TestCase):
             self.assertEqual(plan['operation'], 'computer_task')
             self.assertEqual(plan['target'], goal)
 
+    def test_task_scope_classification_is_small_text_only_and_validated(self):
+        provider = self.provider()
+        with patch.object(provider, 'complete', return_value={'mode': 'inspect'}) as complete:
+            self.assertEqual(provider.classify_task_goal('check Teams activity'), 'inspect')
+        self.assertEqual(complete.call_args.kwargs['max_tokens'], 80)
+        self.assertNotIn('image_data', complete.call_args.kwargs)
+        with patch.object(provider, 'complete', return_value={'mode': 'anything'}):
+            with self.assertRaises(ProviderError):
+                provider.classify_task_goal('check Teams activity')
+
     def test_text_model_cannot_silently_accept_screen_capture(self):
         provider = self.provider()
         with patch.object(provider, 'request', return_value={'capabilities': ['completion']}):
@@ -112,7 +122,11 @@ class OllamaTests(unittest.TestCase):
         body = request.call_args.args[1]
         self.assertIs(body['think'], False)
         self.assertEqual(body['options']['num_predict'], 1200)
-        self.assertEqual(body['format']['properties']['message']['maxLength'], 256)
+        action_step, terminal_step = body['format']['anyOf']
+        self.assertEqual(action_step['properties']['message']['maxLength'], 256)
+        self.assertEqual(action_step['properties']['status'], {'const': 'action'})
+        self.assertFalse(any(variant.get('type') == 'null' for variant in action_step['properties']['action']['anyOf']))
+        self.assertEqual(terminal_step['properties']['action'], {'type': 'null'})
 
     def test_explicit_thinking_override_is_respected(self):
         provider = self.provider()

@@ -512,3 +512,101 @@ Git metadata is read-only, so the resolved content is in working files and the u
 must record the merge parents/commit. Verified the two-head merge-recording command
 in an isolated repository: it preserves dirty resolved files and commits three
 parents (main, PR #2, PR #3). No commits or pushes were made to the actual repository.
+
+## Contradictory task-response recovery
+
+Live build 9d00cf9e01 captured a frame in 152 ms and received the model response
+in 12.4 seconds, then rejected a terminal status carrying a non-null action.
+The tool was never invoked. Split the generation schema into disjoint action and
+terminal shapes: action requires one operation, while done/needs_user require null.
+Runtime validation remains independent of grammar support.
+
+Invalid proposals now receive one correction attempt against the same transient
+screenshot before the task fails. This shares the existing pause-reconsideration
+budget: at most two inference calls per observation. No rejected operation is
+executed or recorded as completion. Cancellation/paused access prevents retry;
+corrected operations retain all target guards and sensitive-action review. Logs
+record only attempt numbers and a status/action-mismatch boolean, never model text.
+
+Regression coverage includes done/needs_user carrying clicks, corrected guarded
+clicks, repeated malformed output, cancellation before repair and review after
+repair. Actual local-model clicking still requires live verification.
+
+## Simpler, resizable settings
+
+The main page now contains only personalization/model selection, app/screen access,
+restore access and mascot visibility. Removed live window titles, build text and
+repeated explanatory paragraphs from that page. Advanced stays beside navigation
+instead of being pinned to the bottom. Renamed the advanced pages to History,
+Documents, AI model and Desktop tools.
+
+Added keyboard-accessible disclosures: connection fields, desktop diagnostics,
+manual message/screen tools and document import are available on demand rather
+than filling each page. The model picker works without opening connection details;
+compatible-provider configuration remains expanded when needed. Preferences use
+plain labels and display save feedback beside their controls.
+
+Removed the visible bottom status bar/divider. All seven settings pages scroll,
+so hidden pages no longer impose their oversized content minimum on the whole
+window. The window resizes to 620x460, including with Advanced enabled, while its
+default 780x640 main page fits the everyday controls. Rendered and inspected the
+default and small settings/model pages. No features or access checks were removed.
+
+Validation includes resizing, hidden status strip, scrollable pages, keyboard
+disclosure operation and applying a model with technical fields collapsed. The
+full suite passes 250 tests; live macOS window-edge resizing remains to be checked
+after relaunch (Qt offscreen geometry was verified).
+
+## Quiet mascot startup
+
+Startup now collapses to the mascot after preparing a short greeting. Restoring
+screen access uses quiet permission callbacks: it updates enabled state and the
+screen indicator without showing the composer, replacing a current reply or
+announcing the technical permission message. A failed background check leaves
+access off and places its explanation in settings/tooltips. Explicit enabling
+still acknowledges the user's action with "Screen access is on." First-run setup
+remains available for users who have not reviewed onboarding/access.
+
+Regression coverage checks idle-only startup, quiet permission restoration,
+click-to-open, and preservation of an already-open conversation on success/failure.
+
+## Fast screen decisions, inspection scope and consistent activity text
+
+Restored Advanced to the bottom of settings navigation per the latest preference.
+The live log showed ~0.15-second capture but 8–11-second image/prompt processing per
+action. Added request-time macOS Vision OCR (.fast), with normalized text rectangles
+from the same excluded/protected screenshot. Tasks first use text/AX metadata without
+attaching pixels when this evidence is available. Exact AX presses and text-grounded
+clicks retain native/pixel guards. Missing icons, ungrounded points, blocked text
+proposals or uncertainty fall back to the full image within the existing two-call
+budget. No OCR output is saved or logged. Reduced prompt duplication by removing
+old before/after snapshots, redundant window lists and unused native receipt fields;
+compact JSON and a stable goal/catalog prefix reduce repeated input processing.
+
+Each Ollama task classifies its scope once. Inspection goals reject compose/post/
+send/change controls, using actual AX labels and OCR text at click positions as well
+as model labels. A rejected Post control can be reconsidered as Activity before any
+execution. Explicit drafting/change goals retain their existing review requirements.
+
+Cloud messages and History now share record_companion_message/say, including task
+progress, action receipts and failure wording. Removed duplicate task/A11y lines
+and the false claim that ephemeral computer-task progress was saved. Added a bounded
+own-UI highlight selector using actual settings section IDs and current Qt bounds:
+"Desktop tools in A11y" can reveal Advanced and highlight the row without capturing
+or minimizing A11y's intentionally screenshot-excluded window. Mark/show-where intent
+instructions explicitly distinguish highlights from clicks/closing.
+
+Validation covers text-only guarded clicks, icon fallback, ungrounded text points,
+Post-to-Activity recovery, bounded prompt history, synchronized cloud/history, and
+an actual Qt request worker selecting/highlighting A11y's own section without a
+screenshot. The Qt task integration test captures after every submitted action and
+checks the fast path omits images while still pausing before Enter. OS calls and model
+outputs remain doubled. ScreenBridge compiles with Vision; the synthetic offline
+--ocr-image probe failed recognition in this restricted environment. Thus native OCR
+runtime speed and live Ollama targeting are not verified, and no speedup is claimed.
+AX-only fast decisions remain available if OCR fails; full image fallback is retained.
+The native probe reported VNErrorNotImplemented for fast recognition; an accurate
+recognizer fallback was added for that specific error, but its probe also failed in
+this environment. This does not establish the user's host will have the same failure.
+Final validation: 262 Python tests, 4 web tests, Python compilation and Swift helper
+compilation pass. A live OCR/LLM speed measurement has not been obtained.

@@ -52,6 +52,11 @@ an EXISTING app forward; press_control presses a named control; move_object relo
 the companion toward an object/text/window; move_geometry relocates the companion to
 an edge/corner/center; highlight shows where an object is; inspect_screen explains
 current screen contents; plan creates task steps; answer handles conversation.
+"Mark/show me where" and "highlight" request highlight only, even for a close or
+delete button. They never request clicking/closing. "Mark where the left terminal's
+close button is" is highlight, not computer_task or close_window.
+When the target is inside A11y's own settings/menu, use app_name=A11y. These are
+the companion's controls, not Finder, Terminal, or the macOS desktop.
 These operations are not substitutes. "close lower right terminal" is close_window,
 app_name Terminal, not movement. "open Stremio" is launch_app, app_name Stremio,
 never Terminal. "open a new terminal" is new_window, app_name Terminal.

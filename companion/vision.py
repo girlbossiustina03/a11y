@@ -72,7 +72,7 @@ class ScreenVision:
     def check_access(self):
         return self.call('--check-access')
 
-    def capture(self, provider, *, x=0, y=0, desktop=None):
+    def capture(self, provider, *, x=0, y=0, desktop=None, fast_text=False):
         if not self.enabled:
             raise RuntimeError('Screen vision is paused. Enable it from the character’s right-click menu.')
         if not isinstance(provider, OllamaProvider):
@@ -83,7 +83,8 @@ class ScreenVision:
         if desktop and (desktop.get('status') == 'private_app' or desktop.get('focused_role') == 'secure_input'):
             raise RuntimeError('Screen vision paused for a protected app or password field.')
         generation = self.generation
-        data = self.call('--x', str(x), '--y', str(y))
+        args = ('--x', str(x), '--y', str(y))
+        data = self.call(*args, *(('--ocr',) if fast_text else ()))
         if not self.enabled or generation != self.generation:
             raise RuntimeError('Screen vision was paused before capture completed. The frame was discarded.')
         if not isinstance(data.get('image_data'), str) or not data['image_data'].startswith('data:image/png;base64,'):
