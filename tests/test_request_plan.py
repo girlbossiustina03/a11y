@@ -36,7 +36,7 @@ class RequestPlanningTests(CompanionFixture, unittest.TestCase):
         result = self.app.ask('open up stremio please')
         self.assertEqual(result['desktop_action']['type'], 'launch_app')
         self.assertEqual(result['desktop_action']['bundle_id'], 'com.fixture.stremio')
-        self.assertIn('Ready to open Stremio', result['message'])
+        self.assertIn('Open Stremio', result['message'])
         provider.complete.assert_not_called()
         provider.complete_structured.assert_not_called()
         self.assertEqual(provider.interpret_request.call_args.args[1], [])
@@ -120,7 +120,7 @@ class IntentTransportTests(unittest.TestCase):
         body = request.call_args.args[1]
         self.assertFalse(body['think'])
         self.assertEqual(body['options']['num_predict'], 400)
-        self.assertEqual(body['format']['required'], ['operation', 'app_name', 'target'])
+        self.assertEqual(body['format']['required'], ['operation', 'app_name', 'target', 'browser_mode', 'remaining_request'])
         self.assertNotIn('images', body['messages'][-1])
         self.assertEqual(plan['app_name'], 'Stremio')
 

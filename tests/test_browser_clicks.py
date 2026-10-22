@@ -46,14 +46,60 @@ class BrowserServiceTests(CompanionFixture, unittest.TestCase):
         self.assertEqual(action['type'], 'browse_url')
         self.assertEqual(action['bundle_id'], 'com.apple.Safari')
         self.assertEqual(action['url'], 'https://duckduckgo.com/?q=youtube+cats+%26+dogs')
-        self.assertIn('Tab/window placement', result['message'])
+        self.assertNotIn('Confirm below', result['message'])
         provider.complete_structured.assert_not_called()
+        self.assertFalse(self.monitor.enabled)
+
+    def test_blank_new_safari_window_needs_no_screenshot_or_accessibility_metadata(self):
+        self.bridge.catalog.return_value.append({'name': 'Safari', 'bundle_id': 'com.apple.Safari'})
+        self.app.provider = StagedProvider('new_window', 'Safari')
+        action = self.app.ask('open a new Safari window')['desktop_action']
+        self.assertEqual(action['type'], 'new_window')
+        self.assertEqual(action['bundle_id'], 'com.apple.Safari')
         self.assertFalse(self.monitor.enabled)
 
     def test_open_website_has_no_screen_guidance_requirement(self):
         self.bridge.catalog.return_value.append({'name': 'Safari', 'bundle_id': 'com.apple.Safari'})
         self.app.provider = StagedProvider('browser_open', 'Safari', 'https://www.youtube.com')
         self.assertEqual(self.app.ask('go to youtube.com in Safari')['desktop_action']['url'], 'https://www.youtube.com')
+
+    def test_native_automation_denial_and_timeout_are_reported_without_retry(self):
+        import subprocess
+        from companion.desktop_context import MacDesktopBridge
+        bridge = MacDesktopBridge('/private/tmp/a11y-bridge-unit')
+        denial = subprocess.CompletedProcess([], 1, b'{"error":"Allow Safari in Automation"}', b'')
+        with patch.object(bridge, 'prepare'), patch('companion.desktop_context.subprocess.run', return_value=denial) as run:
+            with self.assertRaisesRegex(RuntimeError, 'Allow Safari in Automation'):
+                bridge.call('--browse', 'com.apple.Safari', 'https://youtube.com', 'window')
+            run.assert_called_once()
+        with patch.object(bridge, 'prepare'), patch('companion.desktop_context.subprocess.run', side_effect=subprocess.TimeoutExpired('bridge', 45)) as run:
+            with self.assertRaisesRegex(RuntimeError, 'may have been submitted'):
+                bridge.call('--browse', 'com.apple.Safari', 'https://youtube.com', 'window')
+            run.assert_called_once()
+        with patch.object(bridge, 'prepare'), patch('companion.desktop_context.subprocess.run', return_value=subprocess.CompletedProcess([], 0, b'[]', b'')):
+            with self.assertRaisesRegex(RuntimeError, 'Desktop operation failed'):
+                bridge.call('--catalog')
+
+    def test_domain_search_navigates_but_multiword_query_stays_search(self):
+        self.bridge.catalog.return_value.append({'name': 'Safari', 'bundle_id': 'com.apple.Safari'})
+        for target, expected in [('youtube.com', 'https://youtube.com'),
+                                 ('youtube.com cats', 'https://duckduckgo.com/?q=youtube.com+cats'),
+                                 ('https://youtube.com/watch?v=1', 'https://youtube.com/watch?v=1')]:
+            self.app.provider = StagedProvider('browser_search', 'Safari', target)
+            self.assertEqual(self.app.ask('search for '+target)['desktop_action']['url'], expected)
+
+    def test_window_and_tab_mode_survive_validation_and_bridge(self):
+        from companion.desktop_context import MacDesktopBridge
+        self.bridge.catalog.return_value.append({'name': 'Safari', 'bundle_id': 'com.apple.Safari'})
+        for mode in ('window', 'tab'):
+            provider = self.app.provider = StagedProvider('browser_open', 'Safari', 'youtube.com')
+            provider.interpret_request.return_value['browser_mode'] = mode
+            action = self.app.ask('open youtube.com in a new '+mode)['desktop_action']
+            self.assertEqual(action['browser_mode'], mode)
+            bridge = MacDesktopBridge('/private/tmp/a11y-bridge-unit')
+            with patch.object(bridge, 'call', return_value={'submitted': True}) as call:
+                bridge.application_action(action)
+            self.assertEqual(call.call_args.args, ('--browse', 'com.apple.Safari', 'https://youtube.com', mode))
 
     def test_non_web_schemes_never_produce_browser_actions(self):
         self.bridge.catalog.return_value.append({'name': 'Safari', 'bundle_id': 'com.apple.Safari'})
@@ -70,6 +116,21 @@ class BrowserServiceTests(CompanionFixture, unittest.TestCase):
         provider.complete_structured.assert_not_called()
         self.bridge.app_state.return_value = {'running': False, 'observation': 'not_observed'}
         self.assertIn('could not confirm', self.app.ask('open Stremio', mode='verify')['message'])
+
+    def test_browser_verification_never_invents_failure_from_missing_window_metadata(self):
+        provider = self.app.provider = StagedProvider('browser_open', 'Safari', 'youtube.com')
+        self.app.last_action_result = {'type': 'browse_url', 'requested_url': 'https://youtube.com',
+            'native_result': {'submitted': True, 'tab_placement': 'window',
+                              'browser_observation': {'url': 'https://youtube.com/', 'window_count': 2}}}
+        result = self.app.ask('go to youtube.com', mode='verify')
+        self.assertIn('requested window', result['message'])
+        self.assertNotIn('not completed', result['message'])
+        provider.complete_structured.assert_not_called()
+        self.app.last_action_result['native_result'] = {'submitted': True}
+        result = self.app.ask('go to youtube.com', mode='verify')
+        self.assertIn('not been verified', result['message'])
+        self.assertNotIn('failed', result['message'])
+        self.assertIsNone(result['desktop_action'])
 
     def test_capture_own_button_uses_internal_capture_not_excluded_image(self):
         provider = self.app.provider = StagedProvider('capture_once', 'A11y', 'Capture screen once')
@@ -111,6 +172,17 @@ class ClickTests(unittest.TestCase):
         for number in (-1, 1, float('nan'), True):
             with self.assertRaises(ValidationError):
                 validate_response(dict(raw, desktop_action=dict(raw['desktop_action'], x=number)), set(), desktop=object(), has_screen=True)
+
+    def test_click_variants_are_bounded_and_retain_image_guard_requirement(self):
+        raw = {'request_kind': 'click_point', 'message': 'Click', 'source_ids': [], 'workflow': None, 'target': None,
+               'desktop_action': {'type': 'click_point', 'x': .2, 'y': .3, 'label': 'Folder'}}
+        for button, count in [('left', 2), ('right', 1)]:
+            action = dict(raw['desktop_action'], button=button, click_count=count)
+            result = validate_response(dict(raw, desktop_action=action), set(), desktop=object(), has_screen=True)
+            self.assertEqual(result['desktop_action']['click_count'], count)
+        for button, count in [('middle', 1), ('left', 3), ('right', 2), ('left', True)]:
+            with self.assertRaises(ValidationError):
+                validate_response(dict(raw, desktop_action=dict(raw['desktop_action'], button=button, click_count=count)), set(), desktop=object(), has_screen=True)
 
     def test_matching_fresh_capture_allows_one_click_and_observation(self):
         with patch.object(self.vision, 'capture', return_value=self.frame()):

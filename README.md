@@ -40,6 +40,24 @@ Launch the desktop app with local document-management permission:
 .venv/bin/python a11y_desktop.py --admin
 ```
 
+### Windows
+
+Run the companion with Windows Python, not from WSL: WSLg cannot draw the
+frameless transparent mascot window, so it appears as an unresponsive black box.
+Install Python once (`winget install Python.Python.3.12`), then double-click
+`run_windows.bat` (or run `run_windows.bat --panel`). On first launch it creates a
+virtual environment in `%USERPROFILE%\.venvs\a11y` and installs `requirements.txt`.
+Data is stored in `%LOCALAPPDATA%\A11y`, because SQLite locking is unreliable on
+network shares such as `\\wsl.localhost`. Ollama can run either on Windows or inside
+WSL; WSL forwards `localhost:11434` to Windows by default.
+
+On Windows, `companion/windows_desktop.py` replaces the Swift bridge: it reads window
+titles, owners and bounds through Win32 (no extra dependencies, no permission prompt)
+and supports the same confirmed actions for opening an app from the Start-menu catalog
+or a built-in app (Settings, Calculator, Notepad…), switching to a running app, closing
+an observed window and asking an app to quit. Pressing app controls, the Terminal
+new-window action and screen vision remain macOS-only for now.
+
 Or launch the browser companion, which needs **no third-party Python dependencies**:
 
 ```sh
@@ -191,11 +209,10 @@ accessibility metadata, so image-only questions can still need an optional scree
 
 The model can propose **switch to an observed running app** or **highlight an observed
 control**. Only your button click applies it. Highlight coordinates come from the
-native observation, and changed observations invalidate the proposal. There is no
-LLM-controlled shell, arbitrary click, typing, or automatic task confirmation.
+native observation, and changed observations invalidate the proposal. This metadata path does not execute shell commands or automatically confirm saved
+workflow steps. The computer-task loop below adds bounded mouse/keyboard actions.
 
-The UI now uses an explicit light palette for consistent macOS dark/light-mode
-contrast, a multiline composer (Enter sends; Shift+Enter inserts a newline), compact
+The UI uses a shared dark palette, a multiline composer (Enter sends; Shift+Enter inserts a newline), compact
 controls and content-based bubble sizing. The Swift helper compiles and offscreen Qt
 renders were inspected. Live Accessibility permission and desktop alignment still
 require testing in your normal desktop session.
@@ -253,8 +270,8 @@ window hints and capture time supply grounding and guidance coordinates.
 
 The model can propose movement to a bounded desktop edge/corner. Your click applies
 it, with a short animation unless reduced motion is enabled. Visual and AX target
-highlights can place the character beside the relevant control. These are suggestions;
-there is still no autonomous clicking, typing or shell execution.
+highlights can place the character beside the relevant control. The computer-task mode below extends this guidance with bounded action execution.
+Shell execution remains unavailable.
 
 The ScreenCaptureKit helper compiles and the image-to-model worker pipeline has tests,
 including permission/capture failure, local-only routing, pause, memory-only handling
@@ -302,7 +319,8 @@ requested because native speech input is not implemented.
 Existing users see this new access tour once; it can be reopened using Settings →
 Personalize and set up access. “Finish later” closes the tour; personal answers saved
 before the access page remain saved, and unfinished setup is offered next launch.
-Access stays session-only, even when macOS has already granted OS permission.
+Access defaults to off. Opt in to restoration in Settings to keep enabled access
+across launches; macOS permission alone never turns capture on.
 
 Settings starts with only essentials. Preferences and Saved tasks remain visible;
 Advanced reveals conversation history, company documents, AI connection details and
@@ -341,7 +359,8 @@ cannot chain another action during verification, and task steps still require yo
 confirmation. App activation, mascot movement and visual guidance remain available.
 Confirmed coordinate clicks are also available with local screen vision enabled.
 The companion previews the target and checks a fresh frame before sending one click.
-Arbitrary shell execution, typing and unattended sequences are not implemented.
+Text entry and bounded navigation loops are available in computer-task mode below.
+Arbitrary shell execution and unbounded action sequences are not implemented.
 
 Candidate local model to benchmark on a 24 GB Mac:
 
@@ -401,9 +420,12 @@ measures model interpretation separately from OS execution, which needs a live c
 
 Ask “search for YouTube in Safari” or “open https://www.wikipedia.org in Safari”.
 The intent model extracts the browser and destination; the app resolves an installed
-Safari, Chrome, Firefox or Edge and proposes an HTTP(S) URL. Search uses DuckDuckGo.
-Confirm to open it. Browser preferences decide tab/window placement, so a request
-for a new tab does not currently guarantee a new tab. This opens/searches websites;
+Safari, Chrome, Firefox or Edge and proposes an HTTP(S) URL. Search uses DuckDuckGo. A standalone domain such as youtube.com navigates directly,
+even when requested as “search for youtube.com”.
+Opening follows your request without another confirmation. Safari uses a new window
+by default and honors an explicit new tab. macOS may request Automation permission
+to control Safari; refusal produces an error without silently opening a fallback tab.
+Other browsers retain preference-based placement and reject explicit window/tab modes. This opens/searches websites;
 it does not yet read page DOMs or autonomously complete browsing tasks.
 
 For “click the …”, enable local screen vision and macOS Accessibility access. The
@@ -420,7 +442,117 @@ actual app named Notepad is installed. Launch verification checks the requested
 app's process state and reports running separately from window visibility. It does
 not ask the model to describe document contents just to verify an app launch.
 
-Validation: 146 automated Python tests passed, and both Swift helpers compiled.
+Validation: 201 automated Python tests passed, and both Swift helpers compiled.
 The click tests use synthetic frames and a fake native bridge; no real clicks or
 browser launches were executed by those tests. Live Ollama evaluation and native
 end-to-end behavior still require an on-device run.
+
+
+The mascot sets both always-on-top and macOS always-show-tool-window attributes,
+so activating Safari or Settings should not hide it. Open/focus/new-window requests
+execute directly; visual presses and closing/quitting still need target confirmation.
+The action completion path raises the mascot without activating it or stealing focus.
+Safari window/tab automation is compiled but still needs an on-device permission and
+behavior check. The software does not create a second independent macOS input cursor.
+
+
+## Remember access and identify the running build
+
+Settings and the setup access page offer **Restore enabled access when I reopen
+A11y**. Access is initially off. The first explicit Enable grant now remembers that
+feature across launches, with this behavior explained in setup and the access sheet.
+The checkbox can opt out of restoration. Choices are scoped per employee. Turning either off also turns off its restoration.
+Unchecking restoration clears both saved grants without stopping the current session.
+On relaunch, app awareness resumes without requesting OS permission, and screen vision
+first checks existing Screen Recording permission without prompting. A revoked OS
+grant leaves vision off with an explanation. Automatic vision remains local-Ollama-only;
+no background screenshots or unrestricted action permission are added.
+
+A separate blue **A11y pointer** now marks visual movement/click destinations. It is
+click-through and cannot steal focus, follows reduced-motion preferences, and expires
+after 90 seconds or when guidance is cleared. Moving it does not move the real mouse.
+Actual click execution still uses macOS input; this is not a second hardware cursor.
+
+The launcher holds a process-lifetime lock in the data directory and refuses another
+instance using that directory. Settings, the conversation session divider and the
+startup log show a source build ID. Instances started before this guard was added
+must be quit once manually; the guard cannot identify or shut down those old copies.
+Old transcript messages remain history above the current-session divider.
+
+Safari returns its current URL and window/tab counts after navigation. Verification
+reports that observation separately from page contents, which are not verified. It
+cannot infer navigation failure solely because accessibility metadata lacks a window.
+The automated browser regression exercises the actual Qt request/action/verification
+workers with a fake native result and asserts exactly one execution and no extra
+confirmation. The model evaluator attempted here could not reach local Ollama;
+its report is a connection failure, not a model-quality score.
+
+
+## Computer tasks: observe, act, capture again
+
+1. Enable **App awareness** and **Screen vision** in Settings (optionally remember them).
+2. Right-click the mascot → **Computer task…** and describe the whole goal.
+3. The task starts automatically from your request, capped at eight actions. No start/mode-selection buttons are shown.
+4. The companion captures a fresh frame, requests one structured action from Ollama,
+   executes it, then captures again to choose the next step toward the same goal.
+5. Use **Stop task** or ⌘. to stop. A native action already submitted may finish; no
+   further steps will run. Submissions and changes pause for explicit review.
+
+The task action set includes left single/double clicks, right clicks, one-line Unicode
+text entry, navigation keys/Command shortcuts, vertical scrolling, opening/focusing
+apps, opening browser URLs, and short waits for loading. Typing targets an observed
+non-password field; it does not implicitly press Enter. Input rechecks the app,
+window, field role/bounds and permission at execution, and refuses protected apps
+and Terminal/shell input. Screenshot click guards also apply inside the task loop.
+
+Automatic mode relies partly on the model's risk classification. Enter, closing keys
+and sensitive action labels additionally force review. Navigation proceeds directly; actions classified as changes still pause for review. Invalid output, paused permissions, changed
+targets, uncertain native results, repeated identical actions on an unchanged screen,
+and the step cap stop the loop. A done result is a model assessment of fresh screen
+evidence; it never marks saved workflow steps complete. Task-loop sessions are in
+memory and currently do not resume after app exit.
+
+Natural-language multi-step requests can also propose this task mode. Explicit mode
+avoids losing the goal during intent routing. Remaining work on a partial direct
+request is reported as pending rather than silently treated as complete.
+
+For Music specifically, a direct native tool reads player state/title/artist and can
+find/play a unique exact song in your Music library. Ambiguous or absent matches do
+not trigger playback. This does not search the Apple Music subscription catalog or
+claim to know playback in browser tabs/other players.
+
+Test the real model on a five-state synthetic Company Help search task without
+reading your desktop or executing actions:
+
+```sh
+.venv/bin/python scripts/evaluate_computer_tasks.py --model qwen3-vl:8b-instruct --report /private/tmp/a11y-task-evaluation.json
+```
+
+The annotated path is focus search → type “VPN setup” → submit → open result → report
+completion. The evaluator simulates only accepted actions, prints each proposal and
+stops on the first mismatch. Its run here failed to connect to Ollama; no model score
+is claimed. The 201 automated tests include actual Qt workers through a four-action,
+five-capture task with a review pause, using a fake model and native executor. Both
+Swift helpers compile; the Music script also compiles against the installed dictionary.
+Real mouse/keyboard execution and model targeting still need on-device validation.
+
+
+Access consent is stored separately from enabled/restoration state. Pausing still
+turns off that feature and its restoration; enabling it again reuses existing app
+consent rather than reopening A11y's permission sheet. OS grants are checked normally.
+Explicitly disabling restoration remains respected on subsequent re-enables.
+Browser shortcuts with remaining work are promoted to the continuing computer-task
+mode using the full original request. “Open Teams in Safari and check my tasks” can
+therefore propose the loop instead of ending after a tab or search. Login and missing
+access still require the user; the app does not claim to have read Teams tasks merely
+because Safari opened.
+
+
+Ollama compatibility: the transport omits large string maxLength constraints from
+wire grammars while the local executor retains text-length limits. An explicit HTTP
+400 schema/grammar rejection gets one inference-only retry using Ollama JSON mode
+with the schema in the prompt. That compatibility mode is cached per model/schema;
+all existing action validation remains mandatory. Other errors do not trigger this
+retry, and raw server errors (which may echo private inputs) are not displayed.
+HTTP 400 is no longer reported as proof that the model is missing. Live confirmation
+of the reported error's cause remains pending because local Ollama is unreachable here.

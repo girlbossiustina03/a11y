@@ -1,4 +1,5 @@
 """Opt-in macOS metadata and confirmed exact-control actions, independent of Qt/LLM."""
+from .input_actions import INPUT_TYPES, authorize_input
 from copy import deepcopy
 import hashlib
 import json
@@ -36,16 +37,21 @@ class MacDesktopBridge:
         self.prepare()
         try:
             result = subprocess.run([str(self.binary), '--exclude-pid', str(os.getpid()), *args],
-                                    capture_output=True, timeout=4)
+                                    capture_output=True, timeout=45 if any(flag in args for flag in ('--browse', '--music-state', '--music-play')) or ('--new-window' in args and 'com.apple.Safari' in args) else 4)
             value = json.loads(result.stdout)
             if result.returncode or not isinstance(value, dict) or value.get('error'):
-                raise RuntimeError('Desktop operation failed; the app may have changed.')
+                raise RuntimeError(str((value.get('error') if isinstance(value, dict) else '') or 'Desktop operation failed; the app may have changed.'))
             return value
-        except (OSError, subprocess.TimeoutExpired, ValueError):
+        except subprocess.TimeoutExpired:
+            raise RuntimeError('The operation timed out and may have been submitted. Check the app before retrying.') from None
+        except (OSError, ValueError):
             raise RuntimeError('Desktop context is unavailable. Check macOS Accessibility permissions.') from None
 
     def sample(self):
         return self.call()
+
+    def sample_target(self, bundle_id):
+        return self.call('--observe-app', bundle_id)
 
     def request_access(self):
         return self.call('--request-access')
@@ -56,7 +62,7 @@ class MacDesktopBridge:
     def click(self, action, guard):
         screen = guard['screen']
         return self.call('--click', str(screen['x']+action['x']*screen['width']),
-                         str(screen['y']+action['y']*screen['height']), str(guard['display_id']), json.dumps(screen))
+                         str(screen['y']+action['y']*screen['height']), str(guard['display_id']), json.dumps(screen), action.get('button', 'left'), str(action.get('click_count', 1)))
 
     def catalog(self):
         return self.call('--catalog').get('installed_apps', [])
@@ -64,10 +70,17 @@ class MacDesktopBridge:
     def app_state(self, bundle_id):
         return self.call('--app-state', bundle_id)
 
+    def media_state(self):
+        return self.call('--music-state')
+
     def application_action(self, action):
         kind = action['type']
+        if kind in INPUT_TYPES:
+            return self.call('--input', json.dumps(action))
+        if kind == 'play_media':
+            return self.call('--music-play', action['query'], action['artist'])
         if kind == 'browse_url':
-            return self.call('--browse', action['bundle_id'], action['url'])
+            return self.call('--browse', action['bundle_id'], action['url'], action.get('browser_mode', 'default'))
         if kind == 'close_window':
             return self.call('--close-window', action['bundle_id'], action['window_id'].rsplit(':', 1)[1],
                              action['window_title'], json.dumps(action['bounds']))
@@ -77,6 +90,14 @@ class MacDesktopBridge:
     def press(self, action):
         return self.call('--press', action['bundle_id'], action['control_id'], action['label'],
                          json.dumps(action['bounds']), action['window_title'])
+
+
+def desktop_bridge(directory):
+    """Native bridge for this platform. Other platforms keep the macOS bridge, which reports unsupported."""
+    if sys.platform == 'win32':
+        from .windows_desktop import WindowsDesktopBridge
+        return WindowsDesktopBridge(directory)
+    return MacDesktopBridge(directory)
 
 
 class DesktopContext:
@@ -92,7 +113,7 @@ class DesktopContext:
         self.thread = None
         self.stop_event = threading.Event()
 
-    def enable(self):
+    def enable(self, *, request_permission=True):
         with self.lock:
             if self.enabled:
                 return
@@ -101,7 +122,7 @@ class DesktopContext:
             generation = self.generation
             stop = self.stop_event = threading.Event()
             self.error = 'Preparing desktop access…'
-        self.thread = threading.Thread(target=self._run, args=(generation, stop), daemon=True)
+        self.thread = threading.Thread(target=self._run, args=(generation, stop, request_permission), daemon=True)
         self.thread.start()
 
     def disable(self):
@@ -113,9 +134,10 @@ class DesktopContext:
             self.error = ''
             self.observed = self.checked = 0
 
-    def _run(self, generation, stop):
+    def _run(self, generation, stop, request_permission=True):
         try:
-            self.bridge.request_access()
+            if request_permission:
+                self.bridge.request_access()
         except RuntimeError as e:
             with self.lock:
                 if generation == self.generation:
@@ -125,12 +147,12 @@ class DesktopContext:
             self.collect_once(generation=generation)
             stop.wait(2)
 
-    def collect_once(self, *, generation=None):
+    def collect_once(self, *, generation=None, target_bundle=None):
         with self.lock:
             if not self.enabled:
                 return
         try:
-            value = self.bridge.sample()
+            value = self.bridge.sample_target(target_bundle) if target_bundle and hasattr(self.bridge, 'sample_target') else self.bridge.sample()
             with self.lock:
                 if not self.enabled or (generation is not None and generation != self.generation):
                     return
@@ -178,13 +200,28 @@ class DesktopContext:
     def app_state(self, bundle_id):
         return self.bridge.app_state(bundle_id) if hasattr(self.bridge, 'app_state') else {}
 
+    def media_state(self):
+        return self.bridge.media_state()
+
     def authorize_action(self, action, *, snapshot=None):
         context = snapshot if snapshot is not None else self.context()
+        if isinstance(action, dict) and action.get('type') in INPUT_TYPES:
+            return authorize_input(action, context)
+        if isinstance(action, dict) and action.get('type') == 'play_media':
+            if set(action) != {'type', 'query', 'artist'} or not isinstance(action['query'], str) or not action['query'].strip() or len(action['query']) > 500 or not isinstance(action['artist'], str) or len(action['artist']) > 200 or any(ord(c) < 32 for c in action['query']+action['artist']):
+                raise ValueError('Name a song title and optional artist.')
+            if not any(app['bundle_id'] == 'com.apple.Music' for app in self.installed_apps()):
+                raise ValueError('Music is not installed.')
+            return dict(action, bundle_id='com.apple.Music', label='Find and play “'+action['query']+'” in Music')
         if isinstance(action, dict) and set(action) == {'type', 'bundle_id'} and action['type'] == 'launch_app':
             app = next((item for item in self.installed_apps() if item['bundle_id'] == action['bundle_id']), None)
             if app:
                 return {'type': 'launch_app', 'bundle_id': app['bundle_id'], 'label': 'Open '+app['name']}
             raise ValueError('That application is not in the installed-app catalog.')
+        if action == {'type': 'new_window', 'bundle_id': 'com.apple.Safari'}:
+            if any(app['bundle_id'] == 'com.apple.Safari' for app in self.installed_apps()):
+                return dict(action, label='Open a new Safari window')
+            raise ValueError('Safari is not installed.')
         if not context.get('enabled') or context.get('status') not in ('available', 'companion_focused'):
             raise ValueError('Fresh desktop context is required for this action.')
         if not isinstance(action, dict):
@@ -229,6 +266,22 @@ class DesktopContext:
         return dict(action)
 
     def application_action(self, proposal):
+        kind = proposal['type']
+        if kind in INPUT_TYPES:
+            self.collect_once(target_bundle=proposal.get('bundle_id') if self.context().get('companion_focused') else None)
+            field = {'type_text': 'text', 'press_key': 'key', 'scroll': 'direction'}[kind]
+            current = self.authorize_action({'type': kind, field: proposal[field]})
+            for key in ('bundle_id', 'window_title', 'bounds', 'focused_role', 'focused_bounds'):
+                if current.get(key) != proposal.get(key):
+                    raise ValueError('The input destination changed. Nothing was sent; focus the target and ask again.')
+            result = self.bridge.application_action(current)
+            if not result.get('submitted'):
+                raise RuntimeError('Input submission is uncertain. Check the app before retrying.')
+            self.collect_once()
+            return result
+        if kind == 'play_media':
+            current = self.authorize_action({key: proposal[key] for key in ('type', 'query', 'artist')})
+            return self.bridge.application_action(current)
         if proposal['type'] == 'browse_url':
             result = self.bridge.application_action(self.authorize_browser(proposal))
             if not result.get('submitted'):

@@ -36,6 +36,166 @@ let deniedBundles: Set<String> = ["com.apple.Passwords", "com.apple.keychainacce
 let running = workspace.runningApplications.filter {
     $0.activationPolicy == .regular && $0.processIdentifier != ownPID && $0.bundleIdentifier != nil && !deniedBundles.contains($0.bundleIdentifier!)
 }
+func scriptLiteral(_ value: String) -> String {
+    return "\"" + value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+}
+func musicScript(_ body: String) -> NSAppleEventDescriptor {
+    var failure: NSDictionary?
+    let script = NSAppleScript(source: "with timeout of 30 seconds\ntell application id \"com.apple.Music\"\n" + body + "\nend tell\nend timeout")
+    guard let script else { emit(["error": "Could not prepare Music automation."]); exit(1) }
+    let result = script.executeAndReturnError(&failure)
+    guard failure == nil else {
+        emit(["error": "Music automation failed. Check Privacy & Security > Automation for Music; no action will be retried automatically."]); exit(1)
+    }
+    return result
+}
+let musicSnapshot = """
+set playbackState to player state as text
+set trackInfo to {"", "", ""}
+try
+    set trackInfo to {name of current track, artist of current track, persistent ID of current track}
+end try
+"""
+func mediaFields(_ result: NSAppleEventDescriptor, offset: Int = 0) -> [String: Any] {
+    return ["player_state": result.atIndex(offset+1)?.stringValue ?? "unknown",
+            "track": ["name": result.atIndex(offset+2)?.stringValue ?? "", "artist": result.atIndex(offset+3)?.stringValue ?? "", "id": result.atIndex(offset+4)?.stringValue ?? ""]]
+}
+if args.contains("--music-state") {
+    guard workspace.runningApplications.contains(where: { $0.bundleIdentifier == "com.apple.Music" && !$0.isTerminated }) else {
+        emit(["player_state": "not_running"]); exit(0)
+    }
+    let result = musicScript(musicSnapshot + "\nreturn {playbackState, item 1 of trackInfo, item 2 of trackInfo, item 3 of trackInfo}")
+    emit(mediaFields(result)); exit(0)
+}
+if let index = args.firstIndex(of: "--music-play"), index+2 < args.count {
+    let query = args[index+1], artist = args[index+2]
+    guard !query.trimmingCharacters(in: .whitespaces).isEmpty, query.count <= 500, artist.count <= 200,
+          (query+artist).unicodeScalars.allSatisfy({ $0.value >= 32 }) else {
+        emit(["error": "Name a song title and optional artist."]); exit(1)
+    }
+    let script = """
+    set songName to \(scriptLiteral(query))
+    set artistName to \(scriptLiteral(artist))
+    set foundTracks to search library playlist 1 for songName only names
+    set candidates to {}
+    set exactTracks to {}
+    set outcome to "not_found"
+    set didPlay to false
+    set requestedID to ""
+    if (count of foundTracks) > 100 then
+        set outcome to "too_many"
+    else
+        repeat with candidate in foundTracks
+            if (count of candidates) < 20 then set end of candidates to {name of candidate, artist of candidate}
+            ignoring case
+                if (name of candidate is songName) and (artistName is "" or artist of candidate contains artistName) then set end of exactTracks to contents of candidate
+            end ignoring
+        end repeat
+        if (count of exactTracks) is 1 then
+            set chosen to item 1 of exactTracks
+            set requestedID to persistent ID of chosen
+            play chosen
+            set didPlay to true
+            set outcome to "play_submitted"
+        else if (count of exactTracks) > 1 then
+            set outcome to "ambiguous"
+        end if
+    end if
+    \(musicSnapshot)
+    return {outcome, didPlay, requestedID, playbackState, item 1 of trackInfo, item 2 of trackInfo, item 3 of trackInfo, candidates}
+    """
+    let result = musicScript(script)
+    var output = mediaFields(result, offset: 3)
+    var candidates: [[String: String]] = []
+    if let list = result.atIndex(8), list.numberOfItems > 0 {
+        for i in 1...min(20, list.numberOfItems) {
+            candidates.append(["name": list.atIndex(i)?.atIndex(1)?.stringValue ?? "", "artist": list.atIndex(i)?.atIndex(2)?.stringValue ?? ""])
+        }
+    }
+    output["submitted"] = true
+    output["outcome"] = result.atIndex(1)?.stringValue ?? "unknown"
+    output["play_submitted"] = result.atIndex(2)?.booleanValue ?? false
+    output["requested_id"] = result.atIndex(3)?.stringValue ?? ""
+    output["candidates"] = candidates
+    emit(output); exit(0)
+}
+if let index = args.firstIndex(of: "--input"), index+1 < args.count {
+    guard AXIsProcessTrusted(), let data = args[index+1].data(using: .utf8),
+          let action = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+          let bundle = action["bundle_id"] as? String,
+          !deniedBundles.contains(bundle), !["com.apple.Terminal", "com.googlecode.iterm2", "dev.warp.Warp-Stable"].contains(bundle),
+          let owner = running.first(where: { $0.bundleIdentifier == bundle }),
+          let expected = action["bounds"] as? [String: Double] else {
+        emit(["error": "Input needs an observed non-protected app and Accessibility permission."]); exit(1)
+    }
+    let front = workspace.frontmostApplication
+    guard front?.bundleIdentifier == bundle || front?.processIdentifier == ownPID else {
+        emit(["error": "Another app became active. Input was cancelled."]); exit(1)
+    }
+    _ = owner.activate(options: [])
+    let deadline = Date().addingTimeInterval(0.5)
+    while workspace.frontmostApplication?.bundleIdentifier != bundle && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+    let app = AXUIElementCreateApplication(owner.processIdentifier)
+    AXUIElementSetMessagingTimeout(app, 0.25)
+    guard workspace.frontmostApplication?.bundleIdentifier == bundle,
+          let window = element(attr(app, "AXFocusedWindow")), bounds(window) == expected,
+          string(window, "AXTitle") == action["window_title"] as? String,
+          let focused = element(attr(app, "AXFocusedUIElement")), string(focused, "AXSubrole") != "AXSecureTextField" else {
+        emit(["error": "The input window or focus changed. Nothing was sent."]); exit(1)
+    }
+    let kind = action["type"] as? String ?? ""
+    if kind == "type_text" {
+        guard let text = action["text"] as? String, !text.isEmpty, text.count <= 2000,
+              text.unicodeScalars.allSatisfy({ $0.value >= 32 }),
+              ["AXTextField", "AXTextArea", "AXComboBox"].contains(string(focused, "AXRole")),
+              string(focused, "AXRole") == action["focused_role"] as? String,
+              bounds(focused) == action["focused_bounds"] as? [String: Double] else {
+            emit(["error": "Focus the same non-password text field before typing."]); exit(1)
+        }
+        var chunks: [[UInt16]] = []
+        var chunk: [UInt16] = []
+        for character in text {
+            let units = Array(String(character).utf16)
+            guard units.count <= 20 else { emit(["error": "That text contains an unsupported long grapheme."]); exit(1) }
+            if chunk.count+units.count > 20 { chunks.append(chunk); chunk = [] }
+            chunk.append(contentsOf: units)
+        }
+        if !chunk.isEmpty { chunks.append(chunk) }
+        for characters in chunks {
+            guard workspace.frontmostApplication?.bundleIdentifier == bundle,
+                  let current = element(attr(app, "AXFocusedUIElement")), CFEqual(current, focused),
+                  let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else {
+                emit(["error": "Typing stopped because focus changed. Some text may already have been entered; check before retrying."]); exit(1)
+            }
+            characters.withUnsafeBufferPointer { buffer in
+                down.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress!)
+                up.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress!)
+            }
+            down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+        }
+    } else if kind == "press_key" {
+        let keys: [String: CGKeyCode] = ["enter": 36, "tab": 48, "escape": 53, "space": 49, "backspace": 51,
+            "left": 123, "right": 124, "up": 126, "down": 125, "cmd_l": 37, "cmd_f": 3, "cmd_t": 17,
+            "cmd_n": 45, "cmd_w": 13, "cmd_a": 0, "cmd_r": 15]
+        guard let name = action["key"] as? String, let key = keys[name],
+              let down = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: true),
+              let up = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: false) else {
+            emit(["error": "Unsupported keyboard command."]); exit(1)
+        }
+        if name.hasPrefix("cmd_") { down.flags = .maskCommand; up.flags = .maskCommand }
+        down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+    } else if kind == "scroll" {
+        guard let direction = action["direction"] as? String, ["up", "down"].contains(direction),
+              let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: direction == "up" ? 6 : -6, wheel2: 0, wheel3: 0),
+              let rectangle = bounds(window), let x = rectangle["x"], let y = rectangle["y"], let width = rectangle["width"], let height = rectangle["height"] else {
+            emit(["error": "Unsupported scroll destination."]); exit(1)
+        }
+        event.location = CGPoint(x: x+width/2, y: y+height/2)
+        event.post(tap: .cghidEventTap)
+    } else { emit(["error": "Unsupported input operation."]); exit(1) }
+    emit(["submitted": true, "verification_required": true]); exit(0)
+}
 if let index = args.firstIndex(of: "--click"), index+4 < args.count {
     guard AXIsProcessTrusted(), let x = Double(args[index+1]), let y = Double(args[index+2]),
           x.isFinite, y.isFinite, let displayID = UInt32(args[index+3]), CGDisplayIsActive(displayID) != 0,
@@ -43,15 +203,28 @@ if let index = args.firstIndex(of: "--click"), index+4 < args.count {
           let expected = (try? JSONSerialization.jsonObject(with: data)) as? [String: Double] else {
         emit(["error": "A current display and macOS Accessibility permission are required for clicking."]); exit(1)
     }
+    let buttonName = index+5 < args.count ? args[index+5] : "left"
+    let count = index+6 < args.count ? Int(args[index+6]) ?? 0 : 1
+    guard ["left", "right"].contains(buttonName), [1, 2].contains(count), buttonName != "right" || count == 1 else {
+        emit(["error": "Unsupported mouse click."]); exit(1)
+    }
+    let button: CGMouseButton = buttonName == "left" ? .left : .right
+    let downType: CGEventType = buttonName == "left" ? .leftMouseDown : .rightMouseDown
+    let upType: CGEventType = buttonName == "left" ? .leftMouseUp : .rightMouseUp
     let actual = CGDisplayBounds(displayID)
     guard actual.contains(CGPoint(x: x, y: y)), expected["x"] == actual.origin.x,
           expected["y"] == actual.origin.y, expected["width"] == actual.width, expected["height"] == actual.height,
-          let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: .left),
-          let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: .left) else {
+          let down = CGEvent(mouseEventSource: nil, mouseType: downType, mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: button),
+          let up = CGEvent(mouseEventSource: nil, mouseType: upType, mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: button) else {
         emit(["error": "The display changed. No click was sent."]); exit(1)
     }
-    down.post(tap: .cghidEventTap)
-    up.post(tap: .cghidEventTap)
+    for click in 1...count {
+        down.setIntegerValueField(.mouseEventClickState, value: Int64(click))
+        up.setIntegerValueField(.mouseEventClickState, value: Int64(click))
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
+        if click < count { RunLoop.current.run(until: Date().addingTimeInterval(0.06)) }
+    }
     emit(["submitted": true, "verification_required": true]); exit(0)
 }
 if let index = args.firstIndex(of: "--activate"), index+1 < args.count {
@@ -100,6 +273,37 @@ if let index = args.firstIndex(of: "--browse"), index+2 < args.count {
           let url = URL(string: args[index+2]), ["https", "http"].contains(url.scheme?.lowercased() ?? ""),
           url.host != nil, url.user == nil, url.password == nil else {
         emit(["error": "Only an installed supported browser and a public HTTP(S) address are allowed."]); exit(1)
+    }
+    let mode = index+3 < args.count ? args[index+3] : "default"
+    guard ["default", "window", "tab"].contains(mode) else {
+        emit(["error": "Invalid browser placement."]); exit(1)
+    }
+    if bundleID == "com.apple.Safari" {
+        // Fixed application commands only. The destination is a quoted data literal,
+        // never an LLM-supplied script. No System Events or simulated keystrokes.
+        let literal = "\"" + url.absoluteString.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"") + "\""
+        let commands = mode == "tab"
+            ? "if (count of windows) is 0 then make new document\nset current tab of front window to (make new tab at end of tabs of front window with properties {URL:" + literal + "})"
+            : "make new document with properties {URL:" + literal + "}"
+        let source = "with timeout of 30 seconds\ntell application id \"com.apple.Safari\"\n" + commands + "\nactivate\nreturn {URL of current tab of front window, count of windows, count of tabs of front window}\nend tell\nend timeout"
+        var failure: NSDictionary?
+        guard let script = NSAppleScript(source: source) else {
+            emit(["error": "Could not prepare Safari navigation."]); exit(1)
+        }
+        let observation = script.executeAndReturnError(&failure)
+        guard failure == nil else {
+            let number = failure?[NSAppleScript.errorNumber] as? Int ?? 0
+            emit(["error": number == -1743
+                ? "Allow Safari control in System Settings > Privacy & Security > Automation, then ask again. No fallback tab was opened."
+                : "Safari did not confirm the requested window/tab. Check Safari before retrying; no fallback was attempted."]); exit(1)
+        }
+        emit(["submitted": true, "verification_required": true, "tab_placement": mode == "tab" ? "tab" : "window",
+              "browser_observation": ["url": observation.atIndex(1)?.stringValue ?? "",
+                  "window_count": observation.atIndex(2)?.int32Value ?? 0, "tab_count": observation.atIndex(3)?.int32Value ?? 0]]); exit(0)
+    }
+    guard mode == "default" else {
+        emit(["error": "Explicit window/tab placement currently supports Safari. No fallback navigation was sent."]); exit(1)
     }
     var finished = false
     var submitted = false
@@ -204,6 +408,15 @@ if let index = args.firstIndex(of: "--close-window"), index+4 < args.count {
     emit(["submitted": status == .success, "verification_required": true]); exit(0)
 }
 if let index = args.firstIndex(of: "--new-window"), index+1 < args.count {
+    if args[index+1] == "com.apple.Safari" {
+        var failure: NSDictionary?
+        let script = NSAppleScript(source: "with timeout of 30 seconds\ntell application id \"com.apple.Safari\"\nmake new document\nactivate\nend tell\nend timeout")
+        _ = script?.executeAndReturnError(&failure)
+        guard script != nil, failure == nil else {
+            emit(["error": "Could not open a Safari window. Check macOS Automation permission for Safari before retrying."]); exit(1)
+        }
+        emit(["submitted": true, "verification_required": true]); exit(0)
+    }
     guard AXIsProcessTrusted(), args[index+1] == "com.apple.Terminal",
           let owner = running.first(where: { $0.bundleIdentifier == args[index+1] }) else {
         emit(["error": "New-window automation currently requires running Terminal and Accessibility permission."]); exit(1)
@@ -235,6 +448,9 @@ if let index = args.firstIndex(of: "--new-window"), index+1 < args.count {
 }
 let pressIndex = args.firstIndex(of: "--press")
 var observedApp = workspace.frontmostApplication
+if let index = args.firstIndex(of: "--observe-app"), index+1 < args.count {
+    observedApp = running.first(where: { $0.bundleIdentifier == args[index+1] })
+}
 if let index = pressIndex {
     guard index+5 < args.count,
           let app = running.first(where: { $0.bundleIdentifier == args[index+1] }) else {
@@ -276,6 +492,7 @@ if let focused = element(attr(app, "AXFocusedUIElement")) {
     // Text-field role is useful; its content and label are intentionally omitted.
     let role = string(focused, "AXRole")
     output["focused_role"] = string(focused, "AXSubrole") == "AXSecureTextField" ? "secure_input" : role
+    if string(focused, "AXSubrole") != "AXSecureTextField" { output["focused_bounds"] = bounds(focused) ?? [:] }
 }
 var queue: [(AXUIElement, Int)] = window.map { [($0, 0)] } ?? []
 var controls: [[String: Any]] = []

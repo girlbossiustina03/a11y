@@ -11,15 +11,19 @@ from PyQt6.QtWidgets import (
     QFileDialog, QMessageBox, QDialog, QDialogButtonBox, QFormLayout, QFrame, QListWidget)
 from .adaptation import CHOICES
 from .mascot import Mascot
-from .overlay import GuidanceOverlay
+from .overlay import GuidanceOverlay, CompanionPointer
 from .onboarding import Introduction, QUESTIONS
 from .setup_ui import SetupDialog, AccessSheet
 from .provider import AIConfig, ChatProvider, ProviderError
 from .ollama import OllamaProvider, local_url
 from .theme import PANEL_STYLE, apply_theme
 from .vision import ScreenVision
-from .desktop_context import DesktopContext, MacDesktopBridge
+from .desktop_context import DesktopContext, desktop_bridge
 from .computer_use import ComputerUse
+from .access import AccessPreferences
+from .instance import build_id
+from .computer_task import ComputerTask
+from .models import text
 
 
 class RequestWorker(QThread):
@@ -38,7 +42,7 @@ class RequestWorker(QThread):
                     else self.service.prepare_request(self.request) if self.options.get('mode') != 'verify' else None)
             if plan is not None:
                 self.options['request_plan'] = plan
-            launch_verification = self.options.get('mode') == 'verify' and (self.service.last_action_result or {}).get('type') == 'launch_app'
+            launch_verification = self.options.get('mode') == 'verify' and (self.service.last_action_result or {}).get('type') in ('launch_app', 'browse_url', 'play_media')
             needs_pixels = not launch_verification and (plan is None or plan['operation'] in ('move_object', 'highlight', 'inspect_screen', 'click_point'))
             vision_generation = self.vision.generation if self.vision else None
             geometry = self.options.get('screen_geometry') or {'x': 0, 'y': 0}
@@ -75,6 +79,23 @@ class RequestWorker(QThread):
             self.options.clear()  # release transient image data
 
 
+class TaskStepWorker(QThread):
+    result = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, task, desktop, vision, provider, geometry, parent=None):
+        super().__init__(parent)
+        self.task, self.desktop, self.vision, self.provider, self.geometry = task, desktop, vision, provider, geometry
+
+    def run(self):
+        try:
+            self.result.emit(self.task.propose(self.desktop, self.vision, self.provider, self.geometry))
+        except (ValueError, RuntimeError) as error:
+            self.failed.emit(str(error))
+        except Exception:
+            self.failed.emit('The computer task could not plan a valid next step. No next action was sent.')
+
+
 class ComputerActionWorker(QThread):
     result = pyqtSignal(object)
     failed = pyqtSignal(str)
@@ -97,13 +118,14 @@ class VisionPermission(QThread):
     result = pyqtSignal(object)
     failed = pyqtSignal(str)
 
-    def __init__(self, vision, parent=None):
+    def __init__(self, vision, parent=None, *, request_permission=True):
         super().__init__(parent)
         self.vision = vision
+        self.request_permission = request_permission
 
     def run(self):
         try:
-            self.result.emit(self.vision.request_access())
+            self.result.emit(self.vision.request_access() if self.request_permission else self.vision.check_access())
         except RuntimeError as e:
             self.failed.emit(str(e))
 
@@ -138,9 +160,12 @@ class CompanionWindow(QMainWindow):
         super().__init__()
         apply_theme(QApplication.instance())
         self.service = service
-        self.desktop_monitor = DesktopContext(MacDesktopBridge(service.store.directory))
+        self.access_preferences = AccessPreferences(service.store, service.identity)
+        self.runtime_build = build_id()
+        self.desktop_monitor = DesktopContext(desktop_bridge(service.store.directory))
         self.service.desktop_context = self.desktop_monitor
         self.pending_desktop_action = None
+        self.computer_task = None
         self.vision = ScreenVision(service.store.directory)
         self.vision_permission = None
         self.last_user_request = None
@@ -161,6 +186,7 @@ class CompanionWindow(QMainWindow):
         self.mascot.submitted.connect(self.mascot_submit)
         self.mascot.action_requested.connect(self.mascot_action)
         self.overlay = GuidanceOverlay()
+        self.pointer = CompanionPointer()
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
         self.build_chat()
@@ -191,12 +217,15 @@ class CompanionWindow(QMainWindow):
         self.refresh()
         for message in service.history():
             self.transcript.appendPlainText(f'{message["role"].capitalize()}: {message["content"]}\n')
+        self.transcript.appendPlainText('— Current session · build '+self.runtime_build+' —\n')
         QShortcut(QKeySequence('Ctrl+Return'), self).activated.connect(self.ask)
         QShortcut(QKeySequence('Meta+Return'), self).activated.connect(self.ask)
         QShortcut(QKeySequence('Escape'), self).activated.connect(self.clear_guidance)
+        QShortcut(QKeySequence('Meta+.'), self.mascot).activated.connect(self.stop_computer_task)
         self.mascot.show()
 
     def start_companion(self):
+        QTimer.singleShot(0, self.restore_access)
         if isinstance(self.service.provider, OllamaProvider):
             QTimer.singleShot(0, self.scan_ollama)
         name = self.introduction.get()['answers'].get('display_name', '')
@@ -205,6 +234,27 @@ class CompanionWindow(QMainWindow):
         self.mascot.fit_on_screen()
         if not self.introduction.get().get('access_setup_reviewed'):
             self.open_setup()
+
+    def set_remember_access(self, enabled):
+        self.access_preferences.save(remember=bool(enabled), app_awareness=self.desktop_monitor.enabled,
+                                     screen_vision=self.vision.enabled)
+        for control in (self.remember_access, getattr(getattr(self, 'setup_dialog', None), 'remember_access', None)):
+            if control:
+                control.blockSignals(True)
+                control.setChecked(bool(enabled))
+                control.blockSignals(False)
+
+    def restore_access(self):
+        choice = self.access_preferences.get()
+        if not choice['remember']:
+            return
+        if choice['app_awareness']:
+            self.desktop_monitor.enable(request_permission=False)
+        if choice['screen_vision'] and isinstance(self.service.provider, OllamaProvider):
+            self.vision_permission = VisionPermission(self.vision, self, request_permission=False)
+            self.vision_permission.result.connect(self.screen_permission_result)
+            self.vision_permission.failed.connect(self.screen_permission_failed)
+            self.vision_permission.start()
 
     def open_setup(self):
         if getattr(self, 'setup_dialog', None) and self.setup_dialog.isVisible():
@@ -271,11 +321,17 @@ class CompanionWindow(QMainWindow):
         row(access, 'App awareness', label('Understand app names, windows and accessible controls.'), self.essentials_context)
         self.essentials_vision = button('Enable…', self.toggle_screen_vision)
         row(access, 'Screen vision', label('Take a fresh look when you send a message. Local Ollama only.'), self.essentials_vision)
-        self.essentials_access = label('Both options are optional and last for this session.')
+        self.remember_access = QCheckBox('Restore enabled access when I reopen A11y')
+        self.remember_access.setChecked(self.access_preferences.get()['remember'])
+        self.remember_access.toggled.connect(self.set_remember_access)
+        layout.addWidget(self.remember_access)
+        layout.addWidget(label('Opt in to remember these choices. Pause switches also turn off restoration. macOS permissions still apply.'))
+        self.essentials_access = label('Both options are optional. Screens are captured only when needed for your requests.')
         self.essentials_access.setObjectName('settingsSubtitle')
         layout.addWidget(self.essentials_access)
         layout.addSpacing(8)
         layout.addWidget(self.show_mascot)
+        layout.addWidget(label('Build '+self.runtime_build))
         layout.addStretch()
         self.essentials_tab = self.tabs.addTab(page, 'Settings')
         self.tabs.setCurrentIndex(self.essentials_tab)
@@ -490,6 +546,8 @@ class CompanionWindow(QMainWindow):
         if self.worker and self.worker.isRunning():
             return
         request = self.input.toPlainText().strip()
+        if mode != 'verify' and self.computer_task:
+            self.stop_computer_task(announce=False)
         if not request:
             self.input.setFocus()
             self.statusBar().showMessage('Enter a request first.')
@@ -559,6 +617,18 @@ class CompanionWindow(QMainWindow):
             preview = {'label': 'Proposed click: '+action['label'],
                 'x': max(0, action['x']-.009), 'y': max(0, action['y']-.012), 'width': .018, 'height': .024}
             self.overlay.guide(capture['geometry'], preview)
+            self.pointer.point_at(capture['geometry'], action['x'], action['y'], action['label'],
+                reduced_motion=self.service.adaptation.effective(self.service.identity)['reduced_motion'])
+        if not response.get('task_step') and self.pending_desktop_action and self.pending_desktop_action['type'] in ('launch_app', 'browse_url', 'focus_app', 'new_window', 'play_media'):
+            # The user's request already authorizes opening/focusing; destructive
+            # actions and model-selected presses still require target review.
+            proposal = self.pending_desktop_action
+            self.pending_desktop_action = None
+            if self.worker and self.worker.isRunning():
+                self.worker.finished.connect(lambda: QTimer.singleShot(0, lambda: self.execute_desktop_action(proposal)))
+            else:
+                QTimer.singleShot(0, lambda: self.execute_desktop_action(proposal))
+            return
         self.mascot_home(response['message'], sources=response['sources'])
         if self.pending_desktop_action and self.pending_desktop_action['type'] == 'move_companion':
             destination = self.pending_desktop_action['destination']
@@ -575,10 +645,16 @@ class CompanionWindow(QMainWindow):
                 screen = capture['screen']
             else:
                 screen = self.mascot.screen()
+            self.pointer.point_at(screen.geometry(), action['x'], action['y'], action['label'],
+                reduced_motion=self.service.adaptation.effective(self.service.identity)['reduced_motion'])
             self.move_companion_to(action['x'], action['y'], screen)
             self.transcript.appendPlainText('Companion moving to '+action['label']+'.\n')
 
     def failed(self, message):
+        if self.computer_task:
+            self.computer_task.stop('blocked')
+        self.pending_desktop_action = None
+        self.pointer.dismiss()
         self.transcript.appendPlainText('Request failed: '+message+'\n')
         self.capture_context = None
         self.mascot.set_state('idle')
@@ -739,6 +815,7 @@ class CompanionWindow(QMainWindow):
 
     def clear_guidance(self, checked=False, *, keep_capture=False):
         self.overlay.hide()
+        self.pointer.dismiss()
         self.pending_target = None
         if hasattr(self, 'highlight_btn'):
             self.highlight_btn.setEnabled(False)
@@ -887,6 +964,7 @@ class CompanionWindow(QMainWindow):
         if self.vision.enabled:
             self.retry_after_vision = False
             self.vision.set_enabled(False)
+            self.access_preferences.save(screen_vision=False)
             self.service.desktop_session.clear()
             self.mascot.vision_button.setText('Screen off')
             self.mascot.vision_button.setAccessibleName('Screen vision is off. Activate to enable.')
@@ -897,13 +975,18 @@ class CompanionWindow(QMainWindow):
         if not isinstance(self.service.provider, OllamaProvider):
             self.mascot_home('Automatic screen vision needs local Ollama. Connect it under Settings → AI connection.')
             return
-        if not consented and not self.confirm_access('See what you’re working on',
+        approved = self.access_preferences.approved('screen_vision')
+        if not approved and not consented and not self.confirm_access('See what you’re working on',
                 'Each message includes a fresh screen image for your local Ollama model.',
                 ['Images stay off disk. Nothing is recorded between messages.',
                  'Close confidential windows first. Pause vision whenever you like.',
-                 'macOS will ask for Screen Recording access.'], 'Enable screen vision'):
+                 'Stays enabled across launches until you pause it. Change restoration in Settings.',
+                 'macOS will ask for Screen Recording access.'], 'Enable and remember'):
             self.retry_after_vision = False
             return
+        if not approved:
+            self.access_preferences.approve('screen_vision')
+            self.set_remember_access(True)
         self.mascot.vision_button.setText('Allowing screen…')
         self.vision_permission = VisionPermission(self.vision, self)
         self.vision_permission.result.connect(self.screen_permission_result)
@@ -917,6 +1000,7 @@ class CompanionWindow(QMainWindow):
                                           'then enable screen vision again. Some permission changes require restarting the app.')
             return
         self.vision.set_enabled(True)
+        self.access_preferences.save(screen_vision=True)
         self.mascot.vision_button.setText('Screen on')
         self.mascot.vision_button.setAccessibleName('Screen vision is on. Each prompt includes a fresh local screen image. Activate to pause.')
         if self.retry_after_vision and self.last_user_request:
@@ -937,7 +1021,7 @@ class CompanionWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.addWidget(label('Desktop awareness'))
-        layout.addWidget(label('Enable for this session to follow your active application, window title and '
+        layout.addWidget(label('Enable to follow your active application, window title and '
                                'accessible button/control names. No screenshots, text-field values, selected text, '
                                'clipboard, or keystrokes are collected. Context stays in memory. Relevant metadata '
                                'is included when you ask the selected AI provider a question.'))
@@ -1016,14 +1100,99 @@ class CompanionWindow(QMainWindow):
         self.switch_app_btn.setEnabled(bool(self.running_apps.count()))
         self.control_highlight_btn.setEnabled(bool(self.observed_controls.count()))
 
+    def offer_computer_task(self, goal):
+        goal = text(goal, 'computer task', 2000)
+        self.stop_computer_task(announce=False)
+        self.pending_desktop_action = {'type': 'start_task', 'goal': goal, 'label': 'Start computer task'}
+        proposal = self.pending_desktop_action
+        self.say('Starting: '+goal, [('Stop task', 'computer:stop')], compact=True)
+        def begin():
+            if self.pending_desktop_action is proposal:
+                self.start_computer_task(automatic=True)
+        if self.worker and self.worker.isRunning():
+            self.worker.finished.connect(lambda: QTimer.singleShot(0, begin))
+        else:
+            QTimer.singleShot(0, begin)
+
+    def start_computer_task(self, *, automatic=False):
+        if self.worker and self.worker.isRunning():
+            return
+        proposal = self.pending_desktop_action or {}
+        if proposal.get('type') != 'start_task':
+            return
+        if not self.vision.enabled or not self.desktop_monitor.enabled:
+            self.say('Enable app awareness and local screen vision in Settings, then try this task again.',
+                     [('Settings', 'settings'), ('Try again', 'computer:start:auto' if automatic else 'computer:start:review'), ('Cancel', 'computer:stop')], compact=True)
+            return
+        self.computer_task = ComputerTask(proposal['goal'], automatic=automatic)
+        self.pending_desktop_action = None
+        self.next_computer_step()
+
+    def stop_computer_task(self, *, announce=True):
+        if self.computer_task:
+            self.computer_task.stop()
+        self.pending_desktop_action = None
+        self.clear_guidance()
+        if announce:
+            self.say('Computer task stopped. An already-submitted action may still finish; no further steps will run.', compact=True)
+
+    def next_computer_step(self):
+        task = self.computer_task
+        if not task or task.cancelled.is_set() or task.pending is not None:
+            return
+        if self.worker and self.worker.isRunning():
+            return
+        self.pending_desktop_action = None
+        self.clear_guidance()
+        self.hide()
+        self.say(f'Computer task · step {len(task.receipts)+1} of {task.max_steps}\nObserving the screen…', [('Stop task', 'computer:stop')], compact=True)
+        self.set_busy(True)
+        area = self.mascot.screen().geometry()
+        worker = TaskStepWorker(task, self.desktop_monitor, self.vision, self.service.provider,
+                                {'x': area.x(), 'y': area.y()}, self)
+        self.worker = worker
+        worker.result.connect(lambda result: self.receive_computer_step(task, result))
+        worker.failed.connect(lambda message: self.failed(message) if self.computer_task is task and not task.cancelled.is_set() else None)
+        worker.finished.connect(lambda: self.set_busy(False))
+        worker.start()
+
+    def receive_computer_step(self, task, step):
+        if self.computer_task is not task or task.cancelled.is_set():
+            return
+        self.transcript.appendPlainText('Computer task: '+step['message']+'\n')
+        if step['status'] != 'action':
+            task.stop(step['status'])
+            prefix = 'The model reports completion from the current screen: ' if step['status'] == 'done' else 'Task paused: '
+            self.say(prefix+step['message'], compact=True)
+            return
+        response = {'message': step['message'], 'sources': [], 'workflow': None, 'target': None,
+                    'desktop_action': step['action'], 'visual_capture': step['visual_capture'], 'task_step': True}
+        self.received(response)
+        if self.pending_desktop_action is None:
+            task.stop('blocked')
+            return
+        if not step['review']:
+            proposal = self.pending_desktop_action
+            def apply():
+                if self.computer_task is task and not task.cancelled.is_set() and self.pending_desktop_action is proposal:
+                    self.execute_desktop_action(proposal)
+            if self.worker and self.worker.isRunning():
+                self.worker.finished.connect(lambda: QTimer.singleShot(0, apply))
+            else:
+                QTimer.singleShot(0, apply)
+
     def execute_desktop_action(self, proposal):
         if self.worker and self.worker.isRunning():
             return
+        task = self.computer_task if self.computer_task and not self.computer_task.cancelled.is_set() else None
         request = self.last_user_request[0] if self.last_user_request else 'Check the action result.'
         self.pending_desktop_action = None
         self.clear_guidance()
         self.hide()
-        self.mascot.collapse_chat()
+        if task is not None:
+            self.say('Executing: '+proposal.get('label', proposal['type']), [('Stop task', 'computer:stop')], compact=True)
+        else:
+            self.mascot.collapse_chat()
         self.set_busy(True)
         worker = ComputerActionWorker(self.desktop_monitor, proposal, self, vision=self.vision, provider=self.service.provider)
         self.worker = worker
@@ -1034,6 +1203,14 @@ class CompanionWindow(QMainWindow):
             self.transcript.appendPlainText('Action submitted: '+proposal.get('label', proposal['type'])+'. Checking the result.\n')
         def finished():
             self.set_busy(False)
+            self.mascot.show()
+            self.mascot.raise_()
+            if task is not None:
+                if result:
+                    task.record(result)
+                if not task.cancelled.is_set() and result:
+                    QTimer.singleShot(450, self.next_computer_step)
+                return
             if result:
                 self.mascot.expand_chat()
                 self.input.setPlainText(request)
@@ -1048,17 +1225,23 @@ class CompanionWindow(QMainWindow):
             if action == 'context:toggle':
                 if self.desktop_monitor.enabled:
                     self.desktop_monitor.disable()
+                    self.access_preferences.save(app_awareness=False)
                     self.service.desktop_session.clear()
                     self.service.last_action_result = None
                     self.pending_desktop_action = None
                 else:
-                    if not consented and not self.confirm_access('Help me find my way around',
+                    approved = self.access_preferences.approved('app_awareness')
+                    if not approved and not consented and not self.confirm_access('Help me find my way around',
                             'Let A11y follow your apps, windows and accessible controls.',
                             ['No screenshots, typing or field contents.',
                              'App and control names are shared with your selected AI when you ask for help.',
-                             'Access lasts this session. You can pause it at any time.'], 'Enable app awareness'):
+                             'Stays enabled across launches until you pause it. Change restoration in Settings.'], 'Enable and remember'):
                         return
+                    if not approved:
+                        self.access_preferences.approve('app_awareness')
+                        self.set_remember_access(True)
                     self.desktop_monitor.enable()
+                    self.access_preferences.save(app_awareness=True)
                     self.mascot.footer.setText('Focus the app you want help with for a moment; I’ll follow it.')
                 self.refresh_desktop_context()
             elif action == 'context:details':
@@ -1074,6 +1257,9 @@ class CompanionWindow(QMainWindow):
                 proposed = self.pending_desktop_action if action == 'desktop:apply' else {
                     'type': 'highlight_control', 'control_id': self.observed_controls.currentData()}
                 if not proposed:
+                    return
+                if proposed['type'] == 'start_task':
+                    self.offer_computer_task(proposed['goal'])
                     return
                 if proposed['type'] == 'capture_once':
                     self.pending_desktop_action = None
@@ -1097,7 +1283,7 @@ class CompanionWindow(QMainWindow):
                 if proposed['type'] == 'move_companion':
                     self.move_companion(proposed['destination'])
                     return
-                if proposed['type'] in ('focus_app', 'press_control', 'launch_app', 'quit_app', 'new_window', 'close_window', 'browse_url', 'click_point'):
+                if proposed['type'] in ('focus_app', 'press_control', 'launch_app', 'quit_app', 'new_window', 'close_window', 'browse_url', 'click_point', 'play_media', 'type_text', 'press_key', 'scroll', 'wait'):
                     self.execute_desktop_action(proposed)
                     return
                 current = self.desktop_monitor.authorize_action({'type': 'highlight_control', 'control_id': proposed['control_id']})
@@ -1207,6 +1393,7 @@ class CompanionWindow(QMainWindow):
             self.connection_fields['key'].clear()
 
     def connect_provider(self):
+        self.stop_computer_task(announce=False)
         if self.worker and self.worker.isRunning():
             self.connection_status.setText('Wait for the current request to finish before changing provider.')
             return
@@ -1267,8 +1454,13 @@ class CompanionWindow(QMainWindow):
         choices = []
         if self.pending_target:
             choices.append(('Show me where', 'guide'))
+        elif self.pending_desktop_action and self.pending_desktop_action['type'] == 'start_task':
+            self.offer_computer_task(self.pending_desktop_action['goal'])
+            return
         elif self.pending_desktop_action:
             choices.append((self.pending_desktop_action.get('confirmation_label', self.pending_desktop_action['label']), 'desktop:apply'))
+        if self.computer_task and not self.computer_task.cancelled.is_set():
+            choices.append(('Stop task', 'computer:stop'))
         self.say(message or 'What would you like help with?', choices, placeholder='Ask anything…', compact=True)
 
     def mascot_submit(self, request, action):
@@ -1279,12 +1471,30 @@ class CompanionWindow(QMainWindow):
                 self.introduction.answer(request)
                 self.show_setup_question()
                 return
+            if action == 'computer':
+                self.offer_computer_task(request)
+                return
             self.input.setPlainText(request)
             self.ask(mode='plan' if action == 'plan' else 'assist', from_mascot=True)
         except (ValueError, PermissionError) as e:
             self.mascot.footer.setText(str(e))
 
     def mascot_action(self, action):
+        if action == 'computer:interrupt':
+            if self.computer_task and not self.computer_task.cancelled.is_set():
+                self.stop_computer_task(announce=False)
+                self.mascot.footer.setText('Task stopped while you type. Send your next request when ready.')
+            return
+        if action == 'computer:stop':
+            self.stop_computer_task()
+            return
+        if action.startswith('computer:start:'):
+            self.start_computer_task(automatic=action.endswith(':auto'))
+            return
+        if action == 'computer:prompt':
+            self.stop_computer_task(announce=False)
+            self.say('What should I do on your computer?', placeholder='Describe the whole task…', submit_action='computer', compact=True)
+            return
         if action == 'reply':
             self.mascot.show_reply()
             return
@@ -1386,12 +1596,14 @@ class CompanionWindow(QMainWindow):
         if (self.worker and self.worker.isRunning()) or (self.discovery and self.discovery.isRunning()) or (self.vision_permission and self.vision_permission.isRunning()):
             self.mascot.footer.setText('I’m still waiting for the current request. Please quit after it finishes.')
             return
+        self.stop_computer_task(announce=False)
         self.quitting = True
         self.desktop_monitor.disable()
         self.vision.set_enabled(False)
         self.context_timer.stop()
         self.stop_speech()
         self.overlay.close()
+        self.pointer.close()
         self.mascot.close()
         QApplication.instance().quit()
 

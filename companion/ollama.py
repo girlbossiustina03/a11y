@@ -17,12 +17,59 @@ def local_url(value):
     return value.rstrip('/')
 
 
+class OllamaRequestError(ProviderError):
+    def __init__(self, code, category):
+        self.code, self.category = code, category
+        guidance = {
+            'schema': 'Ollama rejected the structured-output schema.',
+            'vision': 'Ollama rejected the image request. Check the selected vision model.',
+            'thinking': 'Ollama rejected the thinking option. Use A11Y_OLLAMA_THINKING=default.',
+            'context': 'Ollama rejected the context size. Check A11Y_OLLAMA_CONTEXT.',
+            'memory': 'Ollama could not load the model into available memory.',
+            'missing': 'Ollama could not find the requested model or endpoint. Check the AI connection and ollama list.',
+            'request': 'Ollama rejected the request; this does not establish that the model is missing.'}
+        super().__init__(guidance[category]+f' (HTTP {code})')
+
+
+def error_category(code, payload):
+    """Classify bounded local errors without showing echoed prompts, images or secrets."""
+    try:
+        error = json.loads(payload).get('error', '')
+        if isinstance(error, dict):
+            error = error.get('message', '')
+        detail = error.casefold() if isinstance(error, str) else ''
+    except (ValueError, AttributeError, TypeError):
+        detail = ''
+    if 'grammar' in detail or 'json schema' in detail or 'json_schema' in detail or 'schema' in detail and 'format' in detail:
+        return 'schema'
+    if 'image' in detail or 'vision' in detail:
+        return 'vision'
+    if 'thinking' in detail or 'think' in detail:
+        return 'thinking'
+    if 'context' in detail or 'num_ctx' in detail:
+        return 'context'
+    if any(word in detail for word in ('memory', 'allocation', 'out of vram')):
+        return 'memory'
+    return 'missing' if code == 404 else 'request'
+
+
+def grammar_schema(schema):
+    """Large string-length grammar expansions can fail; executors enforce bounds."""
+    if isinstance(schema, list):
+        return [grammar_schema(item) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    return {key: grammar_schema(value) for key, value in schema.items()
+            if not (key == 'maxLength' and isinstance(value, int) and value > 256)}
+
+
 class OllamaProvider:
     def __init__(self, config=None):
         self.config = config or AIConfig(
             base_url=os.getenv('A11Y_OLLAMA_URL', 'http://127.0.0.1:11434'),
             model=os.getenv('A11Y_AI_MODEL', ''), vision_model=os.getenv('A11Y_VISION_MODEL', ''), timeout=120)
         self.metadata = {}
+        self.json_fallbacks = set()
 
     def request(self, path, body=None, *, timeout=None):
         endpoint = local_url(self.config.base_url)
@@ -39,9 +86,15 @@ class OllamaProvider:
                 raise ProviderError('Ollama could not complete the request. Check the selected local model.')
             return result
         except urllib.error.HTTPError as e:
-            code = e.code
-            e.close()
-            raise ProviderError(f'Ollama returned HTTP {code}. Ensure the selected model is installed with ollama list.') from None
+            try:
+                try:
+                    payload = e.read(8192)
+                except (OSError, ValueError):
+                    payload = b''
+                category = error_category(e.code, payload)
+            finally:
+                e.close()
+            raise OllamaRequestError(e.code, category) from None
         except (urllib.error.URLError, OSError, TimeoutError):
             raise ProviderError('Local Ollama is not reachable. Run ollama serve in a separate terminal, '
                                 'then select Find local Ollama models in AI connection.') from None
@@ -102,8 +155,11 @@ class OllamaProvider:
                 raise ValueError()
         except ValueError:
             raise ProviderError('A11Y_OLLAMA_CONTEXT must be an integer from 4096 to 65536.') from None
+        schema = response_schema if response_schema is not None else RESPONSE_SCHEMA
+        wire_schema = grammar_schema(schema)
+        schema_key = (model, json.dumps(wire_schema, sort_keys=True))
         body = {'model': model, 'messages': [{'role': 'system', 'content': system}] + messages,
-            'stream': False, 'format': response_schema if response_schema is not None else RESPONSE_SCHEMA, 'keep_alive': '5m',
+            'stream': False, 'format': wire_schema, 'keep_alive': '5m',
             'options': {'temperature': 0.2, 'num_ctx': context_length, 'num_predict': max_tokens}}
         requested_thinking = thinking
         thinking = os.getenv('A11Y_OLLAMA_THINKING', 'default').lower()
@@ -113,7 +169,20 @@ class OllamaProvider:
             body['think'] = thinking == 'true'
         if requested_thinking is not None and ('thinking' in info.get('capabilities', []) or requested_thinking in info.get('thinking', {}).get('values', [])):
             body['think'] = requested_thinking
-        result = self.request('/api/chat', body)
+        def json_mode():
+            body['format'] = 'json'
+            body['messages'][0] = {'role': 'system', 'content': system+'\nReturn ONLY a JSON object matching this schema. All action bounds are validated locally:\n'+json.dumps(schema)}
+        if schema_key in self.json_fallbacks:
+            json_mode()
+        try:
+            result = self.request('/api/chat', body)
+        except OllamaRequestError as error:
+            if error.code != 400 or error.category != 'schema' or body['format'] == 'json':
+                raise
+            # Only an inference request was rejected; no desktop action was sent.
+            json_mode()
+            result = self.request('/api/chat', body)
+            self.json_fallbacks.add(schema_key)
         try:
             if result.get('done') is not True or result.get('done_reason') not in (None, 'stop'):
                 raise ProviderError('Ollama response was incomplete. Try a shorter request.')

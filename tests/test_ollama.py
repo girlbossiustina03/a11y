@@ -87,6 +87,59 @@ class OllamaTests(unittest.TestCase):
             self.assertEqual(req.full_url, 'http://127.0.0.1:11434/api/tags')
             self.assertIsNone(req.get_header('Authorization'))
 
+    def test_http_400_is_classified_without_echoing_private_error_body(self):
+        from urllib.error import HTTPError
+        from companion.ollama import OllamaRequestError
+        provider = self.provider()
+        for detail, category in [('failed to parse grammar secret-in-body', 'schema'),
+                                 ('invalid image secret-in-body', 'vision'),
+                                 ('bad request secret-in-body', 'request')]:
+            error = HTTPError('http://127.0.0.1:11434/api/chat', 400, 'Bad request', {}, BytesIO(json.dumps({'error': detail}).encode()))
+            with patch('urllib.request.build_opener') as build:
+                build.return_value.open.side_effect = error
+                with self.assertRaises(OllamaRequestError) as result:
+                    provider.request('/api/chat', {})
+            self.assertEqual(result.exception.category, category)
+            self.assertNotIn('secret-in-body', str(result.exception))
+            self.assertNotIn('ollama list', str(result.exception))
+            self.assertTrue(error.fp.closed)
+
+    def test_schema_grammar_rejection_retries_json_once_and_caches_per_schema(self):
+        from copy import deepcopy
+        from companion.ollama import OllamaRequestError
+        provider = self.provider()
+        provider.metadata['local-model'] = {'capabilities': ['completion', 'vision']}
+        formats = []
+        def request(path, body):
+            formats.append(deepcopy(body))
+            if len(formats) == 1:
+                raise OllamaRequestError(400, 'schema')
+            return {'done': True, 'message': {'content': '{"message":"ok"}'}}
+        schema = {'type': 'object', 'properties': {'message': {'type': 'string', 'maxLength': 2000}}, 'required': ['message']}
+        with patch.object(provider, 'request', side_effect=request):
+            provider.complete_structured('system', [{'role': 'user', 'content': 'Screen'}], schema=schema, image_data='data:image/png;base64,abc')
+            provider.complete_structured('system', [{'role': 'user', 'content': 'Next screen'}], schema=schema, image_data='data:image/png;base64,def')
+        self.assertIsInstance(formats[0]['format'], dict)
+        self.assertNotIn('maxLength', formats[0]['format']['properties']['message'])
+        self.assertEqual([item['format'] for item in formats[1:]], ['json', 'json'])
+        self.assertEqual(formats[1]['messages'][-1]['images'], ['abc'])
+        self.assertIn('2000', formats[1]['messages'][0]['content'])
+        self.assertEqual(schema['properties']['message']['maxLength'], 2000)
+
+    def test_non_schema_errors_and_second_rejection_are_not_retried(self):
+        from companion.ollama import OllamaRequestError
+        provider = self.provider()
+        provider.metadata['local-model'] = {'capabilities': ['completion']}
+        for code, category in [(400, 'vision'), (400, 'thinking'), (404, 'missing'), (500, 'memory')]:
+            with patch.object(provider, 'request', side_effect=OllamaRequestError(code, category)) as request:
+                with self.assertRaises(OllamaRequestError):
+                    provider.complete('system', [{'role': 'user', 'content': 'Question'}])
+                request.assert_called_once()
+        with patch.object(provider, 'request', side_effect=OllamaRequestError(400, 'schema')) as request:
+            with self.assertRaises(OllamaRequestError):
+                provider.complete('system', [{'role': 'user', 'content': 'Question'}])
+            self.assertEqual(request.call_count, 2)
+
     def test_default_provider_is_ollama_and_explicit_cloud_still_supported(self):
         with patch.dict('os.environ', {}, clear=True):
             self.assertIsInstance(provider_from_env(), OllamaProvider)

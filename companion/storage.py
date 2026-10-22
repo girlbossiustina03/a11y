@@ -33,6 +33,8 @@ class Store:
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS profiles (
                     owner TEXT PRIMARY KEY, data TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS desktop_access (
+                    owner TEXT PRIMARY KEY, data TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS introductions (
                     owner TEXT PRIMARY KEY, data TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS workflows (

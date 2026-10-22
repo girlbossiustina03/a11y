@@ -1,19 +1,26 @@
 """Shared application boundary. Only validated plans can become workflows."""
 import json
+import re
 from collections import deque
 import os
 from pathlib import Path
 from .adaptation import Adaptation
 from .knowledge import Knowledge
-from .models import Identity, text, validate_response, ValidationError
+from .models import Identity, RESPONSE_SCHEMA, cite_only, text, validate_response, ValidationError
 from .ollama import provider_from_env, OllamaProvider
 from .storage import Store
 from .onboarding import Introduction
 from .app_names import resolve_app
+from .media import describe_music, describe_play_result
+from .input_actions import INPUT_TYPES
 from urllib.parse import urlencode, urlsplit
-from .request_plan import response_schema, enforce_operation, VERIFY_SYSTEM, VERIFY_SCHEMA, GROUNDING_SYSTEM, validate_plan
+from .request_plan import response_schema, enforce_operation, VERIFY_SYSTEM, VERIFY_SCHEMA, GROUNDING_SYSTEM, validate_plan, preserve_browser_goal
 
 DESKTOP_INSTRUCTIONS = """
+A running app or window title NEVER proves media is playing, a song is selected,
+or audio is audible. Only explicit native playback observations establish state.
+App launch alone is not completion of a compound request; preserve pending work.
+
 You have a native desktop_context object in the CURRENT user context. Use it as
 current evidence, even if earlier conversation said you could not see the desktop.
 The app/window/controls describe ONLY the focused (or last focused) window, NOT all
@@ -243,7 +250,7 @@ class Companion:
             return None
         users = [item['content'][:500] for item in self.history(limit=4) if item['role'] == 'user']
         users.extend(item['content'][:500] for item in self.desktop_session if item['role'] == 'user')
-        self.last_request_plan = validate_plan(interpreter(request, users[-2:]))
+        self.last_request_plan = preserve_browser_goal(interpreter(request, users[-2:]), request)
         return self.last_request_plan
 
     def ask(self, request, *, mode='answer', workflow_id=None, image_data=None, visual_context=None, screen_geometry=None, request_plan=None):
@@ -258,8 +265,19 @@ class Companion:
         elif mode != 'verify' and request_plan is None:
             request_plan = self.prepare_request(request)
         if request_plan is not None:
-            request_plan = validate_plan(request_plan)
+            request_plan = preserve_browser_goal(request_plan, request)
             self.last_request_plan = request_plan
+        if mode == 'verify' and (self.last_action_result or {}).get('type') == 'play_media':
+            receipt = self.last_action_result
+            result = dict(receipt.get('native_result', {}))
+            if result.get('play_submitted'):
+                try:
+                    current = self.desktop_context.media_state()
+                    result.update({key: current[key] for key in ('player_state', 'track') if key in current})
+                except RuntimeError:
+                    result['player_state'] = 'unknown'
+            return {'desktop_action': None, 'target': None, 'workflow': None, 'sources': [],
+                    'message': describe_play_result(result), 'effective': self.adaptation.effective(self.identity)}
         if mode == 'verify' and (self.last_action_result or {}).get('type') == 'launch_app':
             receipt = self.last_action_result
             state = receipt.get('application_state', {})
@@ -268,8 +286,24 @@ class Companion:
             if isinstance(state.get('running'), bool):
                 name = receipt.get('label', 'Open the app').removeprefix('Open ')
                 message = (name+' is running'+(' and active.' if state.get('active') else '.')) if state['running'] else ('macOS accepted the launch request, but I could not confirm that '+name+' stayed running.')
+                if receipt.get('remaining_request'):
+                    message += ' Still pending: '+receipt['remaining_request']+'; it has not been executed.'
                 return {'desktop_action': None, 'target': None, 'workflow': None, 'sources': [], 'message': message,
                         'effective': self.adaptation.effective(self.identity)}
+        if mode == 'verify' and (self.last_action_result or {}).get('type') == 'browse_url':
+            receipt = self.last_action_result
+            native = receipt.get('native_result', {})
+            observed = native.get('browser_observation', {})
+            destination = observed.get('url', '')
+            requested = receipt.get('requested_url')
+            if destination and destination.rstrip('/') == (requested or '').rstrip('/'):
+                message = 'The browser reports '+destination+' in the requested '+native.get('tab_placement', 'browser')+'. Page contents have not been verified.'
+            elif destination:
+                message = 'The browser accepted navigation and currently reports '+destination+'. The requested page may still be loading; completion is not confirmed.'
+            else:
+                message = 'The browser accepted the address. Page loading and contents have not been verified.'
+            return {'desktop_action': None, 'target': None, 'workflow': None, 'sources': [], 'message': message,
+                    'effective': self.adaptation.effective(self.identity)}
         if mode == 'verify' and hasattr(self.provider, 'complete_structured'):
             observation = {'last_action_result': self.last_action_result,
                 'desktop_context': self.desktop_context.context() if self.desktop_context else {},
@@ -317,15 +351,38 @@ class Companion:
         system = SYSTEM+DESKTOP_INSTRUCTIONS
         if request_plan:
             operation = request_plan['operation']
-            if operation == 'capture_once':
+            if operation == 'computer_task':
+                prebuilt = {'request_kind': 'answer', 'message': 'Starting this goal using fresh screen observations.', 'source_ids': [], 'workflow': None, 'target': None,
+                    'desktop_action': {'type': 'start_task', 'goal': request_plan['target'] or request}}
+            elif operation == 'inspect_media':
+                message = describe_music(self.desktop_context.media_state())
+                prebuilt = {'request_kind': 'answer', 'message': message, 'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
+            elif operation == 'play_media':
+                if request_plan['app_name'].strip().casefold() not in ('', 'music', 'apple music'):
+                    prebuilt = {'request_kind': 'answer', 'message': 'Direct playback currently supports the Music library. I have not opened another player or played anything.', 'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
+                elif not request_plan['target'].strip():
+                    prebuilt = {'request_kind': 'answer', 'message': 'Which song title and artist should I look for in your Music library?', 'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
+                else:
+                    prebuilt = {'request_kind': 'play_media', 'message': 'Finding the requested library track…', 'source_ids': [], 'workflow': None, 'target': None,
+                        'desktop_action': {'type': 'play_media', 'query': request_plan['target'], 'artist': request_plan.get('media_artist', '')}}
+            elif operation in INPUT_TYPES:
+                if not desktop.get('enabled'):
+                    action = {'type': 'request_app_access'}
+                    message = 'Enable app awareness, focus the destination, then ask again.'
+                else:
+                    field = {'type_text': 'text', 'press_key': 'key', 'scroll': 'direction'}[operation]
+                    action = {'type': operation, field: request_plan['target']}
+                    message = 'Review the input destination and confirm.'
+                prebuilt = {'request_kind': operation, 'message': message, 'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': action}
+            elif operation == 'capture_once':
                 prebuilt = {'request_kind': 'answer', 'message': 'Ready to capture once. You will review the screenshot before anything is sent.',
                     'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': {'type': 'capture_once'}}
-            elif operation == 'launch_app':
+            elif operation == 'launch_app' or (operation == 'new_window' and request_plan['app_name'].strip().casefold() in ('safari', 'apple safari')):
                 catalog = self.desktop_context.installed_apps()
                 matches = resolve_app(request_plan['app_name'], catalog)
                 if len(matches) == 1:
                     app = matches[0]
-                    prebuilt = {'request_kind': operation, 'message': 'Ready to open '+app['name']+'. Confirm below.',
+                    prebuilt = {'request_kind': operation, 'message': 'Open '+app['name']+'…',
                         'source_ids': [], 'workflow': None, 'target': None,
                         'desktop_action': {'type': operation, 'bundle_id': app['bundle_id']}}
                 else:
@@ -336,16 +393,19 @@ class Companion:
                 browsers = {'com.apple.Safari', 'com.google.Chrome', 'org.mozilla.firefox', 'com.microsoft.edgemac'}
                 matches = [app for app in matches if app['bundle_id'] in browsers]
                 target = request_plan['target'].strip()
-                url = 'https://duckduckgo.com/?'+urlencode({'q': target}) if operation == 'browser_search' else target
-                if operation == 'browser_open' and '://' not in url:
+                # A complete domain is navigation even if intent called it search.
+                is_address = bool(re.fullmatch(r'(?:https?://)?(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}(?::[0-9]+)?(?:[/?#][^\s]*)?', target))
+                searching = operation == 'browser_search' and not is_address
+                url = 'https://duckduckgo.com/?'+urlencode({'q': target}) if searching else target
+                if not searching and '://' not in url:
                     url = 'https://'+url
                 parsed = urlsplit(url)
                 if len(matches) == 1 and target and parsed.scheme in ('http', 'https') and parsed.hostname and not parsed.username and not parsed.password:
                     app = matches[0]
-                    label = ('Search '+app['name']+' for “'+target+'”') if operation == 'browser_search' else ('Open '+target+' in '+app['name'])
-                    prebuilt = {'request_kind': 'answer', 'message': 'Ready to '+label[0].lower()+label[1:]+'. Safari controls tab/window placement.',
+                    label = ('Search '+app['name']+' for “'+target+'”') if searching else ('Open '+target+' in '+app['name'])
+                    prebuilt = {'request_kind': 'answer', 'message': 'Ready to '+label[0].lower()+label[1:]+'.',
                         'source_ids': [], 'workflow': None, 'target': None,
-                        'desktop_action': {'type': 'browse_url', 'bundle_id': app['bundle_id'], 'url': url, 'label': label}}
+                        'desktop_action': {'type': 'browse_url', 'bundle_id': app['bundle_id'], 'url': url, 'label': label, 'browser_mode': request_plan.get('browser_mode', 'default')}}
                 else:
                     prebuilt = {'request_kind': 'answer', 'message': 'Please name an installed browser and a search query or HTTP(S) website address.',
                         'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
@@ -367,8 +427,10 @@ class Companion:
         for attempt in range(2):
             if prebuilt is not None:
                 raw = prebuilt
-            elif schema is not None and hasattr(self.provider, 'complete_structured'):
-                raw = self.provider.complete_structured(system, messages, schema=schema, image_data=image_data)
+            elif hasattr(self.provider, 'complete_structured'):
+                # Small local models otherwise invent citations, which rejects the whole reply.
+                raw = self.provider.complete_structured(system, messages, image_data=image_data,
+                    schema=cite_only(schema or RESPONSE_SCHEMA, {s['id'] for s in sources}))
             else:
                 raw = self.provider.complete(system, messages, image_data=image_data)
             try:
@@ -394,9 +456,13 @@ class Companion:
                 messages = [{'role': 'user', 'content': json.dumps(dict(context, correction=correction), ensure_ascii=False)},
                             {'role': 'user', 'content': request}]
         action = response.get('desktop_action') or {}
-        if action.get('type') in ('launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'press_control', 'browse_url', 'click_point'):
+        if action.get('type') in ('launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'press_control', 'browse_url', 'click_point', 'play_media', 'type_text', 'press_key', 'scroll'):
             label = action.get('confirmation_label', action['label'])
-            response['message'] = 'Ready to '+label[0].lower()+label[1:]+'. Confirm below.'+(' Tab/window placement follows your browser settings.' if action['type'] == 'browse_url' else '')
+            response['message'] = label+'…' if action['type'] in ('launch_app', 'browse_url', 'focus_app', 'new_window', 'play_media') else 'Ready to '+label[0].lower()+label[1:]+'. Confirm below.'
+        if request_plan and request_plan.get('remaining_request'):
+            response['message'] += ' Still pending: '+request_plan['remaining_request']+'; this part has not been executed.'
+            if response.get('desktop_action'):
+                response['desktop_action']['remaining_request'] = request_plan['remaining_request']
         used = set(response['source_ids'])
         if response['workflow']:
             used.update(s for step in response['workflow']['steps'] for s in step['source_ids'])

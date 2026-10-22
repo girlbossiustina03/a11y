@@ -3,12 +3,33 @@ from copy import deepcopy
 from .models import RESPONSE_SCHEMA, ValidationError
 
 OPERATIONS = ('answer', 'plan', 'inspect_screen', 'move_object', 'move_geometry',
-              'capture_once', 'click_point', 'browser_search', 'browser_open', 'launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'press_control', 'highlight')
+              'computer_task', 'inspect_media', 'play_media', 'type_text', 'press_key', 'scroll', 'capture_once', 'click_point', 'browser_search', 'browser_open', 'launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'press_control', 'highlight')
 INTENT_SCHEMA = {'type': 'object', 'additionalProperties': False,
-    'required': ['operation', 'app_name', 'target'], 'properties': {
-        'operation': {'enum': list(OPERATIONS)}, 'app_name': {'type': 'string'}, 'target': {'type': 'string'}}}
+    'required': ['operation', 'app_name', 'target', 'browser_mode', 'remaining_request'], 'properties': {
+        'operation': {'enum': list(OPERATIONS)}, 'app_name': {'type': 'string'}, 'target': {'type': 'string'},
+        'browser_mode': {'enum': ['window', 'tab', 'default']},
+        'remaining_request': {'type': 'string'}, 'media_artist': {'type': 'string'}}}
 INTENT_SYSTEM = '''Interpret ONLY the latest user request. Do not execute or answer it.
-Return operation, app_name (the actual requested app, empty if none), and target.
+Return operation, app_name (the actual requested app, empty if none), target, and
+browser_mode (default for non-browser requests), remaining_request (empty if the
+operation covers the entire request). Preserve additional requested work in
+remaining_request; opening an app is not completing work inside it.
+For a multi-step desktop goal requiring several clicks/typing/scrolling, use
+computer_task with target the FULL user goal, not just opening the first app. Single
+simple requests retain their direct operations. "Open Music and play a song" uses
+play_media. "Open Safari, find a video and play it" is computer_task.
+"What is playing?" is inspect_media, never infer playback from a visible app/window.
+"Open Music and play Last Christmas" is play_media, app_name Music, target Last
+Christmas. play_media opens Music as needed and searches its LIBRARY. For a named
+artist, include media_artist separately; do not put the artist in the song title.
+Other players/streaming catalogs are not supported by play_media; do not change apps.
+For typing text use type_text, target the exact requested text (no added Enter).
+For a keyboard command use press_key, target one of enter, tab, escape, space,
+backspace, left, right, up, down, cmd_l, cmd_f, cmd_t, cmd_n, cmd_w, cmd_a, cmd_r.
+For scrolling use scroll, target up or down. These primitives apply to the current
+observed window, never a shell, password manager, or inferred destination.
+For "type hello and send", preserve "send" in remaining_request, never silently
+execute Enter. A request with unresolved additional work is only partially handled.
 For taking a screenshot once or pressing A11y’s own Capture screen once button,
 use capture_once. The app invokes its own capture UI; it need not locate that button
 in an image because companion windows are deliberately excluded from screen vision.
@@ -16,7 +37,10 @@ For a browser request involving search (including "new Safari tab and search for
 YouTube"), use browser_search with app_name Safari and target the search query only.
 For opening a website/address in a browser, use browser_open with target its HTTP(S)
 address. Never use new_window for a browser search or replace it with screen guidance.
-Browser tab/window placement follows the browser's settings; do not promise a new tab.
+A bare website/domain such as youtube.com is browser_open even in "search for
+youtube.com"; a phrase such as "youtube cats" is browser_search. Preserve the query.
+For browser requests include browser_mode: window for a new window, tab for an
+explicit new tab, default otherwise. Do not discard a requested window/tab.
 Operations: launch_app opens a named app; new_window creates a NEW app window;
 click_point clicks a visually located screen target; use it for click/press requests
 when no exact accessible control has already been identified. press_control is for
@@ -42,10 +66,15 @@ not a new window. Submission never proves task completion. Keep the report short
 
 
 def validate_plan(value):
-    if not isinstance(value, dict) or set(value) != {'operation', 'app_name', 'target'}:
+    if not isinstance(value, dict) or not {'operation', 'app_name', 'target'} <= set(value) or set(value) - {'operation', 'app_name', 'target', 'browser_mode', 'remaining_request', 'media_artist'}:
         raise ValidationError('The request could not be interpreted reliably. Please name the action and target.')
-    if value['operation'] not in OPERATIONS or any(not isinstance(value[key], str) or len(value[key]) > 500 for key in ('app_name', 'target')):
+    if value['operation'] not in OPERATIONS or any(not isinstance(value[key], str) or len(value[key]) > (2000 if key == 'target' else 500) for key in ('app_name', 'target')):
         raise ValidationError('The request planner returned an invalid operation.')
+    if value.get('browser_mode', 'default') not in ('window', 'tab', 'default'):
+        raise ValidationError('Invalid browser window mode.')
+    for field in ('remaining_request', 'media_artist'):
+        if not isinstance(value.get(field, ''), str) or len(value.get(field, '')) > 500:
+            raise ValidationError('Invalid remaining request or media artist.')
     return value
 
 
@@ -97,6 +126,8 @@ def enforce_operation(plan, response):
     allowed = {operation, 'request_app_access', 'request_screen'}
     if operation in ('browser_search', 'browser_open'):
         allowed.add('browse_url')
+    if operation == 'computer_task':
+        allowed.add('start_task')
     if operation in ('move_object', 'move_geometry'):
         allowed.update(('move_to_point', 'move_companion'))
     if operation not in ('answer', 'plan', 'inspect_screen') and action['type'] not in allowed:
@@ -123,3 +154,15 @@ For highlight return a bounded normalized target rectangle and a clear label.
 Do not claim any action has executed: this is only a proposal for the native executor.
 Current pixels override older metadata. If evidence is insufficient, ask a short
 clarification with request_kind=answer and no action/target. No shell commands.'''
+
+
+def preserve_browser_goal(plan, request):
+    """A browser opening with remaining work is a task, not a completed shortcut."""
+    plan = validate_plan(plan)
+    is_browser = plan['operation'] in ('browser_open', 'browser_search') or (
+        plan['operation'] in ('new_window', 'launch_app', 'focus_app') and
+        plan['app_name'].strip().casefold() in ('safari', 'chrome', 'google chrome', 'firefox', 'edge', 'microsoft edge'))
+    if is_browser and plan.get('remaining_request', '').strip():
+        from .models import text
+        return dict(plan, operation='computer_task', target=text(request, 'computer task', 2000), remaining_request='')
+    return plan
