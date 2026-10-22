@@ -38,12 +38,13 @@ class RequestWorker(QThread):
                     else self.service.prepare_request(self.request) if self.options.get('mode') != 'verify' else None)
             if plan is not None:
                 self.options['request_plan'] = plan
-            needs_pixels = plan is None or plan['operation'] in ('move_object', 'highlight', 'inspect_screen')
+            launch_verification = self.options.get('mode') == 'verify' and (self.service.last_action_result or {}).get('type') == 'launch_app'
+            needs_pixels = not launch_verification and (plan is None or plan['operation'] in ('move_object', 'highlight', 'inspect_screen', 'click_point'))
             vision_generation = self.vision.generation if self.vision else None
             geometry = self.options.get('screen_geometry') or {'x': 0, 'y': 0}
             if self.options.get('mode') == 'verify' and self.service.desktop_context and self.service.desktop_context.enabled:
                 self.service.desktop_context.collect_once()
-            if self.vision and self.vision.enabled and not self.options.get('image_data') and (needs_pixels or self.options.get('mode') == 'verify'):
+            if self.vision and self.vision.enabled and not self.options.get('image_data') and (needs_pixels or self.options.get('mode') == 'verify' and not launch_verification):
                 desktop = self.service.desktop_context.context() if self.service.desktop_context else None
                 try:
                     visual = self.vision.capture(self.service.provider, x=geometry['x'], y=geometry['y'], desktop=desktop)
@@ -58,6 +59,9 @@ class RequestWorker(QThread):
             response = self.service.ask(self.request, **self.options)
             if visual and self.vision.enabled and self.vision.generation == vision_generation:
                 response['visual_capture'] = visual
+                action = response.get('desktop_action') or {}
+                if action.get('type') == 'click_point':
+                    action['capture_guard'] = self.vision.click_guard(self.options['image_data'], visual, action)
             elif visual:
                 self.service.desktop_session.clear()
                 response['target'] = None
@@ -75,13 +79,14 @@ class ComputerActionWorker(QThread):
     result = pyqtSignal(object)
     failed = pyqtSignal(str)
 
-    def __init__(self, desktop, proposal, parent=None):
+    def __init__(self, desktop, proposal, parent=None, *, vision=None, provider=None):
         super().__init__(parent)
         self.desktop, self.proposal = desktop, dict(proposal)
+        self.vision, self.provider = vision, provider
 
     def run(self):
         try:
-            self.result.emit(ComputerUse(self.desktop).execute_confirmed(self.proposal))
+            self.result.emit(ComputerUse(self.desktop, vision=self.vision, provider=self.provider).execute_confirmed(self.proposal))
         except (ValueError, RuntimeError) as error:
             self.failed.emit(str(error))
         except Exception:
@@ -544,6 +549,16 @@ class CompanionWindow(QMainWindow):
         if response['workflow']:
             self.tabs.setCurrentIndex(1)
         self.pending_desktop_action = response.get('desktop_action')
+        if self.pending_desktop_action and self.pending_desktop_action['type'] == 'click_point':
+            action = self.pending_desktop_action
+            if not capture or not action.get('capture_guard'):
+                self.pending_desktop_action = None
+                self.mascot_home('A screen click needs a fresh local capture. Enable screen vision and ask again.')
+                return
+            self.hide()
+            preview = {'label': 'Proposed click: '+action['label'],
+                'x': max(0, action['x']-.009), 'y': max(0, action['y']-.012), 'width': .018, 'height': .024}
+            self.overlay.guide(capture['geometry'], preview)
         self.mascot_home(response['message'], sources=response['sources'])
         if self.pending_desktop_action and self.pending_desktop_action['type'] == 'move_companion':
             destination = self.pending_desktop_action['destination']
@@ -634,14 +649,14 @@ class CompanionWindow(QMainWindow):
         except (ValueError, OSError, PermissionError) as e:
             QMessageBox.warning(self, 'Import failed', str(e))
 
-    def capture_screen(self, checked=False, *, from_mascot=False):
+    def capture_screen(self, checked=False, *, from_mascot=False, consented=False):
         self.request_from_mascot = from_mascot
         self.capture_from_mascot = from_mascot
         if not self.input.toPlainText().strip():
             self.statusBar().showMessage('Enter what you want to understand before capturing a screen.')
             self.input.setFocus()
             return
-        if not self.confirm_access('Take a look at this screen?',
+        if not consented and not self.confirm_access('Take a look at this screen?',
                 'Capture the selected display once, then review it before sending.',
                 ['Close confidential windows and password fields first.',
                  'Nothing is sent until you approve the preview. The image is not saved.'], 'Show preview'):
@@ -1010,7 +1025,7 @@ class CompanionWindow(QMainWindow):
         self.hide()
         self.mascot.collapse_chat()
         self.set_busy(True)
-        worker = ComputerActionWorker(self.desktop_monitor, proposal, self)
+        worker = ComputerActionWorker(self.desktop_monitor, proposal, self, vision=self.vision, provider=self.service.provider)
         self.worker = worker
         result = {}
         def submitted(observation):
@@ -1060,6 +1075,11 @@ class CompanionWindow(QMainWindow):
                     'type': 'highlight_control', 'control_id': self.observed_controls.currentData()}
                 if not proposed:
                     return
+                if proposed['type'] == 'capture_once':
+                    self.pending_desktop_action = None
+                    self.input.setPlainText('Describe this captured screen.')
+                    self.capture_screen(from_mascot=True, consented=True)
+                    return
                 if proposed['type'] == 'request_app_access':
                     if not self.desktop_monitor.enabled:
                         self.desktop_action('context:toggle')
@@ -1077,7 +1097,7 @@ class CompanionWindow(QMainWindow):
                 if proposed['type'] == 'move_companion':
                     self.move_companion(proposed['destination'])
                     return
-                if proposed['type'] in ('focus_app', 'press_control', 'launch_app', 'quit_app', 'new_window', 'close_window'):
+                if proposed['type'] in ('focus_app', 'press_control', 'launch_app', 'quit_app', 'new_window', 'close_window', 'browse_url', 'click_point'):
                     self.execute_desktop_action(proposed)
                     return
                 current = self.desktop_monitor.authorize_action({'type': 'highlight_control', 'control_id': proposed['control_id']})

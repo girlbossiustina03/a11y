@@ -73,3 +73,53 @@ class ScreenVision:
             raise RuntimeError('No screen image was captured. I cannot infer what is visible.')
         data['captured_monotonic'] = time.monotonic()
         return data
+
+    @staticmethod
+    def click_guard(image_data, visual, action):
+        """Keep hashes/geometry only, not screenshot pixels, while awaiting approval."""
+        import base64
+        import hashlib
+        from PyQt6.QtGui import QImage
+        screen = visual.get('screen', {})
+        if not isinstance(visual.get('display_id'), int) or visual['display_id'] <= 0:
+            raise ValueError('A screen click needs a capture bound to a native display.')
+        image = QImage.fromData(base64.b64decode(image_data.split(',', 1)[1]))
+        if image.isNull():
+            raise ValueError('The screen capture could not be checked for clicking.')
+        px, py = int(action['x']*image.width()), int(action['y']*image.height())
+        radius = max(6, round(image.width()*.009))
+        colors = bytearray()
+        for row in range(8):
+            for column in range(8):
+                x = max(0, min(image.width()-1, px-radius+round(column*2*radius/7)))
+                y = max(0, min(image.height()-1, py-radius+round(row*2*radius/7)))
+                color = image.pixelColor(x, y)
+                colors.extend((color.red()//16, color.green()//16, color.blue()//16))
+        desktop_x = screen['x']+action['x']*screen['width']
+        desktop_y = screen['y']+action['y']*screen['height']
+        windows = []
+        for window in visual.get('windows', []):
+            bounds = window.get('bounds', {})
+            if all(key in bounds for key in ('x', 'y', 'width', 'height')) and bounds['x'] <= desktop_x < bounds['x']+bounds['width'] and bounds['y'] <= desktop_y < bounds['y']+bounds['height']:
+                windows.append((window.get('window_id'), tuple(bounds[key] for key in ('x', 'y', 'width', 'height'))))
+        return {'screen': dict(screen), 'display_id': visual['display_id'],
+                'captured_monotonic': visual['captured_monotonic'],
+                'region_hash': hashlib.sha256(colors).hexdigest(), 'windows': sorted(windows)}
+
+    def execute_click(self, provider, desktop, proposal):
+        guard = proposal.get('capture_guard')
+        if not self.enabled or not guard or time.monotonic()-guard['captured_monotonic'] > 90:
+            raise ValueError('That click observation expired or screen vision is off. Ask for a fresh target.')
+        screen = guard['screen']
+        generation = self.generation
+        current = self.capture(provider, x=screen['x'], y=screen['y'], desktop=desktop.context())
+        check = self.click_guard(current['image_data'], current, proposal)
+        if any(check[key] != guard[key] for key in ('screen', 'display_id', 'region_hash', 'windows')):
+            raise ValueError('The target or its window changed. No click was sent; ask for a fresh target.')
+        if not self.enabled or self.generation != generation:
+            raise ValueError('Screen vision was paused. No click was sent.')
+        result = desktop.bridge.click(proposal, guard)
+        if not result.get('submitted'):
+            raise RuntimeError('The click result is uncertain. Check the app before trying again.')
+        desktop.collect_once()
+        return result

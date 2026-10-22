@@ -339,9 +339,9 @@ and bounds before using AXPress. An uncertain press is never retried automatical
 After submission, the assistant observes again and reports what it can verify. It
 cannot chain another action during verification, and task steps still require your
 confirmation. App activation, mascot movement and visual guidance remain available.
-Arbitrary shell execution, coordinate clicking, typing and unattended sequences are
-not implemented. This is the first bounded computer-use loop, not a general agent
-with unrestricted computer control.
+Confirmed coordinate clicks are also available with local screen vision enabled.
+The companion previews the target and checks a fresh frame before sending one click.
+Arbitrary shell execution, typing and unattended sequences are not implemented.
 
 Candidate local model to benchmark on a 24 GB Mac:
 
@@ -392,6 +392,35 @@ Compare real model operation selection without launching or closing your actual 
 .venv/bin/python scripts/evaluate_app_actions.py --model qwen3-vl:8b-instruct --report /private/tmp/a11y-app-evaluation.json
 ```
 
-The nine cases use synthetic installed-app/window metadata, including Stremio,
-Terminal, a lower-right `zsh` window, ambiguous windows and access being off. This
+The sixteen cases use synthetic installed-app/window metadata, including app aliases,
+website/search requests, the companion capture command, specific windows and access being off. This
 measures model interpretation separately from OS execution, which needs a live check.
+
+
+## Websites and confirmed screen clicks
+
+Ask “search for YouTube in Safari” or “open https://www.wikipedia.org in Safari”.
+The intent model extracts the browser and destination; the app resolves an installed
+Safari, Chrome, Firefox or Edge and proposes an HTTP(S) URL. Search uses DuckDuckGo.
+Confirm to open it. Browser preferences decide tab/window placement, so a request
+for a new tab does not currently guarantee a new tab. This opens/searches websites;
+it does not yet read page DOMs or autonomously complete browsing tasks.
+
+For “click the …”, enable local screen vision and macOS Accessibility access. The
+model selects a point from a fresh screenshot; the companion highlights it and asks
+for confirmation. Before clicking once, it captures again and compares the display,
+geometry, overlapping windows and a hash of sampled pixels near the target. Changed
+or expired targets are refused. This reduces stale clicks but cannot establish that
+the model selected the correct object; review the preview. The companion itself is
+excluded from these frames. “Capture screen once” instead invokes its own reviewed
+capture flow without trying to locate its button in pixels.
+
+Settings aliases resolve against installed apps; Notepad maps to TextEdit when no
+actual app named Notepad is installed. Launch verification checks the requested
+app's process state and reports running separately from window visibility. It does
+not ask the model to describe document contents just to verify an app launch.
+
+Validation: 146 automated Python tests passed, and both Swift helpers compiled.
+The click tests use synthetic frames and a fake native bridge; no real clicks or
+browser launches were executed by those tests. Live Ollama evaluation and native
+end-to-end behavior still require an on-device run.

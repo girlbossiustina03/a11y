@@ -3,26 +3,31 @@ from copy import deepcopy
 
 
 class ComputerUse:
-    def __init__(self, desktop):
+    def __init__(self, desktop, *, vision=None, provider=None):
         self.desktop = desktop
+        self.vision, self.provider = vision, provider
 
     def execute_confirmed(self, proposal):
         generation = self.desktop.generation
         before = self.desktop.context()
         kind = proposal.get('type')
-        if kind == 'press_control':
+        if kind == 'click_point':
+            if self.vision is None:
+                raise ValueError('Screen vision must be enabled for a confirmed screen click.')
+            self.vision.execute_click(self.provider, self.desktop, proposal)
+        elif kind == 'press_control':
             self.desktop.press(proposal)
-        elif kind in ('launch_app', 'quit_app', 'new_window', 'close_window'):
+        elif kind in ('launch_app', 'quit_app', 'new_window', 'close_window', 'browse_url'):
             self.desktop.application_action(proposal)
         elif kind == 'focus_app':
             self.desktop.activate(proposal['bundle_id'])
             self.desktop.collect_once()
         else:
             raise ValueError('That desktop action is not supported by the confirmed executor.')
-        if (kind != 'launch_app' and not self.desktop.enabled) or self.desktop.generation != generation:
+        if (kind not in ('launch_app', 'browse_url', 'click_point') and not self.desktop.enabled) or self.desktop.generation != generation:
             raise RuntimeError('The action may have been submitted, but app awareness was paused. Check the app before trying again.')
         after = self.desktop.context()
-        return {'type': kind, 'label': proposal.get('label', ''), 'status': 'submitted',
+        return {'type': kind, 'bundle_id': proposal.get('bundle_id'), 'label': proposal.get('label', ''), 'status': 'submitted',
                 'before': self.summary(before, proposal.get('bundle_id')), 'after': self.summary(after, proposal.get('bundle_id')),
                 'verification': 'Observe the result; API acceptance does not prove task completion.',
                 'application_state': self.desktop.app_state(proposal['bundle_id']) if proposal.get('bundle_id') else {},

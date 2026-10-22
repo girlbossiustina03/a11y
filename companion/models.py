@@ -84,7 +84,7 @@ def validate_response(value, allowed_sources, *, planning=False, has_screen=Fals
         # A provider can ask a clarification rather than invent a plan.
         pass
     request_kind = value.get('request_kind')
-    if request_kind is not None and request_kind not in ('move', 'move_object', 'move_geometry', 'highlight', 'answer', 'plan', 'act', 'press_control', 'launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app'):
+    if request_kind is not None and request_kind not in ('move', 'move_object', 'move_geometry', 'highlight', 'answer', 'plan', 'act', 'press_control', 'launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'click_point', 'browser_search', 'browser_open'):
         raise ValidationError('Invalid request kind.')
     if request_kind in ('move', 'move_object', 'move_geometry') and value['target'] is not None and value.get('desktop_action') is None:
         if not has_screen or desktop is None:
@@ -102,7 +102,26 @@ def validate_response(value, allowed_sources, *, planning=False, has_screen=Fals
         if desktop is None:
             raise ValidationError('Desktop actions require enabled native desktop context.')
         action = value['desktop_action']
-        if action in ({'type': 'request_screen'}, {'type': 'request_app_access'}):
+        if action == {'type': 'capture_once'}:
+            result['desktop_action'] = {'type': 'capture_once', 'label': 'Preview one screenshot'}
+        elif isinstance(action, dict) and action.get('type') == 'click_point':
+            keys(action, ('type', 'x', 'y', 'label'), ('type', 'x', 'y', 'label'))
+            if not has_screen:
+                raise ValidationError('Clicking a visual target requires a fresh screen image.')
+            for coordinate in ('x', 'y'):
+                number = action[coordinate]
+                if isinstance(number, bool) or not isinstance(number, (int, float)) or not math.isfinite(number) or not 0 <= number < 1:
+                    raise ValidationError('Click coordinates must be finite image fractions from 0 up to 1.')
+            result['desktop_action'] = dict(action, label=text(action['label'], 'click label', 240),
+                                            confirmation_label='Click “'+action['label']+'”')
+        elif isinstance(action, dict) and action.get('type') == 'browse_url':
+            from urllib.parse import urlsplit
+            keys(action, ('type', 'bundle_id', 'url', 'label'), ('type', 'bundle_id', 'url', 'label'))
+            url = urlsplit(action['url']) if isinstance(action['url'], str) else None
+            if not url or url.scheme not in ('http', 'https') or not url.hostname or url.username or url.password or len(action['url']) > 4000:
+                raise ValidationError('Browser navigation needs a bounded HTTP(S) URL without credentials.')
+            result['desktop_action'] = desktop.authorize_browser(action)
+        elif action in ({'type': 'request_screen'}, {'type': 'request_app_access'}):
             result['desktop_action'] = dict(action, label='Enable local screen vision' if action['type'] == 'request_screen' else 'Enable app awareness')
         elif isinstance(action, dict) and set(action) == {'type', 'destination'} and action.get('type') == 'move_companion':
             destinations = {'left_edge': 'left edge', 'right_edge': 'right edge', 'bottom_left': 'bottom left', 'bottom_right': 'bottom right', 'top_left': 'upper left', 'top_right': 'upper right', 'center': 'center'}
@@ -153,7 +172,7 @@ RESPONSE_SCHEMA = {
     'type': 'object', 'additionalProperties': False,
     'required': ['request_kind', 'desktop_action', 'message', 'source_ids', 'workflow', 'target'],
     'properties': {
-        'request_kind': {'enum': ['move_object', 'move_geometry', 'highlight', 'answer', 'plan', 'press_control', 'launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app']},
+        'request_kind': {'enum': ['move_object', 'move_geometry', 'highlight', 'answer', 'plan', 'press_control', 'launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'click_point', 'browser_search', 'browser_open']},
         'message': _TEXT, 'source_ids': _IDS,
         'workflow': {'anyOf': [{'type': 'null'}, {'type': 'object', 'additionalProperties': False,
             'required': ['title', 'steps'], 'properties': {'title': _TEXT,
@@ -162,6 +181,10 @@ RESPONSE_SCHEMA = {
             'required': ['label', 'x', 'y', 'width', 'height'], 'properties': {'label': _TEXT,
             **{k: {'type': 'number', 'minimum': 0, 'maximum': 1} for k in ('x', 'y', 'width', 'height')}}}]},
         'desktop_action': {'anyOf': [{'type': 'null'},
+            {'type': 'object', 'additionalProperties': False, 'required': ['type'],
+             'properties': {'type': {'const': 'capture_once'}}},
+            {'type': 'object', 'additionalProperties': False, 'required': ['type', 'bundle_id', 'url', 'label'],
+             'properties': {'type': {'const': 'browse_url'}, 'bundle_id': _TEXT, 'url': _TEXT, 'label': _TEXT}},
             {'type': 'object', 'additionalProperties': False, 'required': ['type'],
              'properties': {'type': {'enum': ['request_screen', 'request_app_access']}}},
             {'type': 'object', 'additionalProperties': False, 'required': ['type', 'destination'],
@@ -173,6 +196,10 @@ RESPONSE_SCHEMA = {
                 'y': {'type': 'number', 'minimum': 0, 'maximum': 1}}},
             {'type': 'object', 'additionalProperties': False, 'required': ['type', 'bundle_id'],
              'properties': {'type': {'enum': ['focus_app', 'launch_app', 'quit_app', 'new_window']}, 'bundle_id': _TEXT}},
+            {'type': 'object', 'additionalProperties': False, 'required': ['type', 'x', 'y', 'label'],
+             'properties': {'type': {'const': 'click_point'}, 'label': _TEXT,
+                'x': {'type': 'number', 'minimum': 0, 'exclusiveMaximum': 1},
+                'y': {'type': 'number', 'minimum': 0, 'exclusiveMaximum': 1}}},
             {'type': 'object', 'additionalProperties': False, 'required': ['type', 'window_id'],
              'properties': {'type': {'const': 'close_window'}, 'window_id': _TEXT}},
             {'type': 'object', 'additionalProperties': False, 'required': ['type', 'control_id'],

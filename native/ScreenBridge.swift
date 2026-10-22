@@ -72,10 +72,11 @@ import Foundation
                 emit(["error": "Could not encode screen image."]); return
             }
             let windows = visibleWindows.filter { CGDisplayBounds(display.displayID).intersects($0.frame) && !protectedBundles.contains($0.owningApplication?.bundleIdentifier ?? "") }.prefix(14).map {
-                ["app": $0.owningApplication?.applicationName ?? "Application", "title": String(($0.title ?? "").prefix(160))]
+                ["app": $0.owningApplication?.applicationName ?? "Application", "title": String(($0.title ?? "").prefix(160)),
+                 "window_id": $0.windowID, "bounds": ["x": $0.frame.origin.x, "y": $0.frame.origin.y, "width": $0.frame.width, "height": $0.frame.height]]
             }
             emit(["image_data": "data:image/png;base64,"+png.base64EncodedString(),
-                  "screen": ["x": bounds.origin.x, "y": bounds.origin.y, "width": bounds.width, "height": bounds.height],
+                  "display_id": display.displayID, "screen": ["x": bounds.origin.x, "y": bounds.origin.y, "width": bounds.width, "height": bounds.height],
                   "captured_at": ISO8601DateFormatter().string(from: Date()), "windows": windows,
                   "companion_excluded": true])
         } catch {

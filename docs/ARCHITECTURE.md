@@ -171,7 +171,8 @@ The controller follows submission with a request in `mode=verify`, sharing bound
 pre/post metadata and a fresh screenshot when screen vision is enabled. Verification
 outputs cannot contain another action, target or workflow. Neither the API result nor
 model verification marks workflow steps complete; those remain user-confirmed.
-There is no arbitrary shell, text-entry, coordinate-click or unattended action loop.
+There is no arbitrary shell, text-entry or unattended action loop. Confirmed pixel
+clicks use the capture-bound path described below.
 
 Ollama's schema now decodes `request_kind` before actions/prose. Movement proposals
 containing a located box are converted to moving to its center; highlight requests
@@ -210,3 +211,31 @@ companion is not listed as a shareable app, before/after CG window checks must s
 no visible owned windows or the image is discarded. Verification capture failure can
 fall back to fresh metadata with an explicit unavailable-image observation; this never
 re-executes the action. Normal screen-dependent requests still fail closed.
+
+
+## Intent routing, browser URLs and pixel clicks
+
+`request_plan.py` performs a short intent-only model call before grounding. Old
+assistant replies cannot select the new operation. The grounding schema is narrowed
+to that operation; runtime validation rejects substitutions. Verification accepts
+only a message and cannot issue another action. `app_names.py` resolves approved
+aliases against the installed catalog, retaining exact-name priority.
+
+Browser intents are compiled into `browse_url` proposals with a supported installed
+browser bundle and bounded HTTP(S) URL. Confirmation invokes NSWorkspace's URL-open
+API. No script, terminal command, arbitrary URL scheme or guaranteed tab placement
+is involved. This is navigation/search, not an autonomous browser agent.
+
+For `click_point`, RequestWorker binds image coordinates to native display ID,
+screen bounds, capture time, overlapping window IDs/bounds and a SHA256 hash of
+quantized target-area pixel samples. Only these checks, not image pixels, stay in
+the pending proposal. The controller shows a highlight and confirmation. ComputerUse
+recaptures and rechecks before DesktopBridge submits one CGEvent down/up pair;
+the native helper also checks Accessibility permission and current display bounds.
+A changed target, paused session or observation older than 90 seconds prevents the
+click. Pixel similarity is not semantic proof; the user must review the target,
+and there remains a race between observation and event submission.
+
+Launch verification uses a bounded native process lookup including accessory apps,
+separates running from visible, and avoids describing unrelated document content.
+The companion's own capture command invokes its reviewed capture UI directly.

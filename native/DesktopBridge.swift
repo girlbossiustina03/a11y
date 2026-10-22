@@ -36,6 +36,24 @@ let deniedBundles: Set<String> = ["com.apple.Passwords", "com.apple.keychainacce
 let running = workspace.runningApplications.filter {
     $0.activationPolicy == .regular && $0.processIdentifier != ownPID && $0.bundleIdentifier != nil && !deniedBundles.contains($0.bundleIdentifier!)
 }
+if let index = args.firstIndex(of: "--click"), index+4 < args.count {
+    guard AXIsProcessTrusted(), let x = Double(args[index+1]), let y = Double(args[index+2]),
+          x.isFinite, y.isFinite, let displayID = UInt32(args[index+3]), CGDisplayIsActive(displayID) != 0,
+          let data = args[index+4].data(using: .utf8),
+          let expected = (try? JSONSerialization.jsonObject(with: data)) as? [String: Double] else {
+        emit(["error": "A current display and macOS Accessibility permission are required for clicking."]); exit(1)
+    }
+    let actual = CGDisplayBounds(displayID)
+    guard actual.contains(CGPoint(x: x, y: y)), expected["x"] == actual.origin.x,
+          expected["y"] == actual.origin.y, expected["width"] == actual.width, expected["height"] == actual.height,
+          let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: .left),
+          let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: .left) else {
+        emit(["error": "The display changed. No click was sent."]); exit(1)
+    }
+    down.post(tap: .cghidEventTap)
+    up.post(tap: .cghidEventTap)
+    emit(["submitted": true, "verification_required": true]); exit(0)
+}
 if let index = args.firstIndex(of: "--activate"), index+1 < args.count {
     let bundle = args[index+1]
     guard let app = running.first(where: { $0.bundleIdentifier == bundle }) else {
@@ -61,7 +79,37 @@ func installedApps() -> [[String: String]] {
 }
 if args.contains("--catalog") { emit(["installed_apps": installedApps()]); exit(0) }
 if let index = args.firstIndex(of: "--app-state"), index+1 < args.count {
-    emit(["bundle_id": args[index+1], "running": running.contains(where: { $0.bundleIdentifier == args[index+1] })]); exit(0)
+    let bundleID = args[index+1]
+    let deadline = Date().addingTimeInterval(1.5)
+    var matches: [NSRunningApplication] = []
+    repeat {
+        // A newly launched app can initially be accessory/background, so do not
+        // reuse the regular-app-only guidance inventory as process evidence.
+        matches = workspace.runningApplications.filter { $0.bundleIdentifier == bundleID && !$0.isTerminated }
+        if !matches.isEmpty { break }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    } while Date() < deadline
+    emit(["bundle_id": bundleID, "running": !matches.isEmpty, "active": matches.contains(where: { $0.isActive }),
+          "observation": matches.isEmpty ? "not_observed" : "process_observed"]); exit(0)
+}
+if let index = args.firstIndex(of: "--browse"), index+2 < args.count {
+    let bundleID = args[index+1]
+    let browsers = ["com.apple.Safari", "com.google.Chrome", "org.mozilla.firefox", "com.microsoft.edgemac"]
+    guard browsers.contains(bundleID), installedApps().contains(where: { $0["bundle_id"] == bundleID }),
+          let appURL = workspace.urlForApplication(withBundleIdentifier: bundleID),
+          let url = URL(string: args[index+2]), ["https", "http"].contains(url.scheme?.lowercased() ?? ""),
+          url.host != nil, url.user == nil, url.password == nil else {
+        emit(["error": "Only an installed supported browser and a public HTTP(S) address are allowed."]); exit(1)
+    }
+    var finished = false
+    var submitted = false
+    workspace.open([url], withApplicationAt: appURL, configuration: NSWorkspace.OpenConfiguration()) { apps, error in
+        submitted = error == nil && apps != nil
+        finished = true
+    }
+    let deadline = Date().addingTimeInterval(3)
+    while !finished && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.02)) }
+    emit(["submitted": submitted, "verification_required": true, "tab_placement": "browser_preference"]); exit(submitted ? 0 : 1)
 }
 if let index = args.firstIndex(of: "--launch"), index+1 < args.count {
     let bundleID = args[index+1]
