@@ -122,3 +122,159 @@ Draft setup answers stay out of context and existing completed records need no
 migration. Clarified profile questions in model instructions and provider disclosure
 in setup. Passed 88 Python checks; new tests cover restart, identity isolation, draft
 withholding and compatibility. Live Ollama response quality still needs on-device QA.
+
+## Unfocused desktop windows
+
+Added bounded, ephemeral Core Graphics onscreen window geometry for nonprotected
+apps, including unfocused windows. Updates while the companion is focused; does not
+read document contents or capture pixels. Expanded permission copy and model evidence
+rules: focused-window metadata cannot establish that another app is hidden, window
+candidates can overlap, and precise spatial guidance requires image evidence or an
+exact accessible control. Screen-vision consent remains required. Swift typecheck and
+90 Python checks pass; live Ollama grounding and target precision remain unverified.
+
+## Guided setup and simpler native navigation
+
+Added `companion/setup_ui.py`: five guided pages for introduction, optional name/role,
+working preferences, actual session-permission controls and a final review. Saves
+personal details only on review, preserves partial name/role drafts, and records
+that the access tour was completed. Existing users see the new access tour once.
+Permission buttons reuse the existing consent/OS-permission paths; no permission is
+required to finish. Read-aloud availability and missing native microphone input are
+explained accurately. No microphone permission is requested for an unavailable feature.
+
+Settings now opens to essentials with identity, model selection, access controls and
+mascot visibility. Default navigation contains Settings, Preferences and Saved tasks.
+Advanced reveals history, documents, connection settings and desktop diagnostics;
+raw profile inspection/reset are also under Advanced. Navigation still resolves to
+existing pages, and context-menu actions are reduced. Unified neutral/blue theme
+across setup and management UI; mascot interaction remains the primary chat entry.
+
+Rendered welcome, preferences, permissions and Settings screens. Passed 93 Python
+checks, including actual Qt setup completion, explicit permission routing, and
+advanced-navigation visibility. Actual macOS permission dialogs still require live
+on-device testing. The next priority is an end-to-end onboarding workflow with live
+Ollama vision and accurate control targeting.
+
+## Consistent access confirmations
+
+Removed duplicate generic Qt permission confirmations during guided setup. Its
+explicit Enable buttons now proceed directly to the existing OS-permission path
+after the inline explanation. Settings/context-menu entry points retain consent
+through a small AccessSheet with consistent typography, spacing, action labels and
+Not now cancellation. One-time capture uses the same component and still requires
+preview approval before transmission. macOS permission dialogs remain OS-owned.
+Rendered the new access dialog and passed 95 Python checks, including duplicate-
+confirmation prevention and declined-access behavior.
+
+## Current-request priority and companion movement
+
+Corrected conflicting model instructions that described desktop actions but omitted
+that field from the response example. Ollama's schema now requires an explicit
+nullable desktop_action. Current natural-language request is placed after context
+and history, with explicit guidance that a new movement request replaces previous
+button guidance. Removed obsolete UI paths from current instructions and warned
+against repeating them from saved assistant replies.
+
+Validated move_companion actions now move the mascot immediately without another
+confirmation; movement remains bounded and respects reduced motion. Other actions
+retain review/consent. A movement response cannot include a screen target or workflow.
+Passed 97 Python checks, including left-then-right movement through the real Qt worker
+with a test model provider and rejection of mixed movement/highlight outputs. Local
+Ollama was unreachable from this tool environment, so live semantic routing quality
+remains unverified. Existing running instances must be quit before relaunching.
+
+## Model-selected movement coordinates and visual objects
+
+Added move_to_point with normalized x/y, explicit screen/image coordinate basis and
+an accessible destination label. Model context now includes display and usable bounds.
+Image-based point movement requires a supplied image; native UI binds mapping to
+that capture's display, checks age/geometry, centers the character on the selected
+point and clamps it within usable screen bounds. Added top_left, top_right and center
+to the existing destination tool so upper corners no longer collapse into edge moves.
+
+Updated instructions to allow visual destinations such as logos, drawings and text,
+including terminal ASCII art: these need not be clickable Accessibility controls.
+Without pixels the model should request local screen vision, rather than invent a
+logo or direct users to unrelated screen-sharing tools. The model chooses the point;
+native code validates and maps it, with no automatic clicking.
+
+Passed 100 Python checks, including both-axis corner placement, coordinate mapping,
+image-required validation, invalid coordinates and expired observation rejection.
+Actual visual recognition and destination selection by live Ollama remain unverified
+from this restricted environment.
+
+## Shared dark UI refinement
+
+Centralized the mascot styles alongside the panel/menu palette in theme.py. Applied
+dark neutral surfaces, bright foreground text, blue primary actions, system font,
+hover/pressed/disabled states, visible focus, and grouped context-menu sections.
+Added small high-resolution painted Send/Settings icons in icons.py. The compact
+input keeps vertically centered text and gains a focus border without changing size.
+
+Reorganized Settings into grouped rows with descriptions and compact trailing
+buttons instead of full-width actions. Setup and access dialogs use the same theme.
+Rendered and inspected Settings, setup/access, prompt/reply and menu appearances;
+100 Python checks pass, including retained input geometry and keyboard interaction.
+Actual OS-owned window chrome and permission dialogs remain native.
+
+## Grounded action contracts and first computer-use loop
+
+Added model-declared request_kind before action/prose generation. Move requests that
+return an observed target box are converted to movement to its visible center, while
+highlight requests retain the review flow. Clip valid boxes at the image boundary;
+reject pixel/1000-based or wholly offscreen values. Add a bounded correction attempt
+using the same frame for invalid contracts/geometry. Keep failed responses out of
+storage and execution. Bound recent history and make local context/thinking tunable.
+
+Added computer_use.py and the action worker for confirmed native control presses and
+activation followed by fresh observation. Native AXPress checks exact control and
+window metadata at execution. Verification mode cannot emit another action and never
+marks tasks complete. Added standalone real-model evaluation over eleven annotated
+synthetic-screen requests; explicit-double tests separately cover runtime behavior.
+
+Live baseline testing via desktop UI: upper-right movement succeeded; menu-bar-clock
+movement reproduced the invalid-bounds failure. Closed that old app before trying to
+restart; the desktop tool refused Terminal access, so the updated build could not be
+reopened through that tool. Local Ollama was also unreachable from the code sandbox.
+The live evaluator attempted a connection and recorded the block, not a passing model
+score. Updated GUI execution and model grounding still need on-device verification.
+Swift helper compiles. 115 Python checks pass, including execution/re-observation,
+no action chaining in verification, stale/paused-control refusal, uncertain-action
+nonretry, edge targets, contract repair and actual Qt worker integration.
+
+Next priority: run both models through evaluate_movement.py, then verify one benign
+real Accessibility press (for example opening a folder) and fresh post-action screen
+evidence before widening the action set. No unverified typing/clicking autonomy is
+presented as working.
+
+## App lifecycle and specific-window actions
+
+Separated focus_app, launch_app, new_window, close_window and quit_app. Native metadata
+now includes a catalog of normal installed apps and bounded AX window records for
+unfocused apps, including title, bounds and close capability. Launch uses a catalog
+bundle ID through NSWorkspace, quit requests graceful termination without force,
+close_window presses the exact revalidated AXCloseButton, and new_window invokes the
+unique unmodified Command-N AX menu action for running Terminal. Other apps' new-window
+commands are intentionally unsupported. All app-changing actions retain explicit
+confirmation and one-action verification; Terminal's process/unsaved confirmations
+are left to the user.
+
+Native model request_kind now identifies the exact app operation, or move_object vs
+move_geometry. Semantic validation rejects focus as a substitute for a new window,
+opening or quitting, and prevents a no-image object request from inventing a corner
+search. Retry errors are action-specific rather than always describing a movement
+failure. request_app_access offers a consent path when required metadata is off.
+
+Fixed ScreenCaptureKit enumeration to include hidden companion windows. If its app
+is absent, capture only proceeds when window-server checks before and after capture
+establish no visible companion windows; otherwise discard. Verification takes a fresh
+metadata sample and may explicitly fall back to metadata when pixels fail; ordinary
+screen requests still abort instead of answering blindly. No approved action is
+repeated because verification capture failed.
+
+124 Python tests pass. Both Swift helpers compile. Added a nine-case real-model app
+operation evaluator with synthetic metadata (including the reported user phrases);
+its local Ollama connection is blocked in this coding sandbox, so no semantic score
+is claimed. Real app-launch, Terminal new-window menu behavior, specific-window close,
+and capture exclusion must still be exercised in the relaunched desktop build.

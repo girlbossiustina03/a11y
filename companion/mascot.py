@@ -1,9 +1,11 @@
 """Interactive mascot conversation. Artwork is independently replaceable."""
 import os
+from .theme import MASCOT_STYLE
+from .icons import control_icon
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QFrame, QVBoxLayout, QHBoxLayout, QPushButton,
     QPlainTextEdit, QLineEdit, QLabel, QAbstractButton, QMenu, QScrollArea, QGraphicsDropShadowEffect)
-from PyQt6.QtCore import Qt, QTimer, QPoint, pyqtSignal, QRect
+from PyQt6.QtCore import Qt, QTimer, QPoint, pyqtSignal, QRect, QSize, QEvent
 from PyQt6.QtGui import QPainter, QColor, QPen, QShortcut, QKeySequence, QPixmap, QFontMetrics
 
 
@@ -123,14 +125,20 @@ class Mascot(QWidget):
         self.input.setTabChangesFocus(True)
         self.input.textChanged.connect(self.limit_input)
         self.input.setAccessibleName('Reply to your companion')
+        self.input.installEventFilter(self)
         self.input.returnPressed.connect(self.submit)
-        self.send = QPushButton('↑')
+        self.send = QPushButton()
+        self.send.setIcon(control_icon('send'))
+        self.send.setIconSize(QSize(20, 20))
+        self.send.setToolTip('Send message · Enter')
         self.send.setAccessibleName('Send your message')
         self.send.setObjectName('sendButton')
         self.send.setFixedSize(42, 42)
         self.send.clicked.connect(self.submit)
         entry.addWidget(self.send, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.prompt_settings = QPushButton('⚙')
+        self.prompt_settings = QPushButton()
+        self.prompt_settings.setIcon(control_icon('settings'))
+        self.prompt_settings.setIconSize(QSize(20, 20))
         self.prompt_settings.setObjectName('promptSettings')
         self.prompt_settings.setFixedSize(32, 32)
         self.prompt_settings.setAccessibleName('Open companion settings')
@@ -177,46 +185,10 @@ class Mascot(QWidget):
             shadow = QGraphicsDropShadowEffect(surface)
             shadow.setBlurRadius(12)
             shadow.setOffset(0, 2)
-            shadow.setColor(QColor(0, 0, 0, 26))
+            shadow.setColor(QColor(0, 0, 0, 85))
             surface.setGraphicsEffect(shadow)
         self.setFixedWidth(420)
-        self.setStyleSheet("""
-            QWidget#mascotRoot {background:transparent;color:#25352f;font-size:13px;}
-            QFrame#conversationCard {background:#fffef9;border:1px solid #b7c7ba;border-radius:20px;}
-            QFrame#conversationCard[promptOnly="true"] {background:#fafafa;border:1px solid #d6d6d9;border-radius:17px;}
-            QFrame#replyPanel {background:#fafafa;border:1px solid #d6d6d9;border-radius:20px;}
-            QFrame#replyPanel QPlainTextEdit {background:transparent;color:#242426;}
-            QPlainTextEdit {background:#fffef9;color:#25352f;border:0;padding:0;font-size:14px;
-                selection-background-color:#d0e7db;selection-color:#172f27;}
-            QPlainTextEdit#composer {background:#f2f5ef;border:1px solid #c3d2c5;border-radius:12px;padding:10px;color:#233b30;font-size:14px;}
-            QPlainTextEdit#composer:focus {border:2px solid #398267;padding:9px;}
-            QLabel {color:#25352f;background:transparent;font-size:13px;}
-            QLabel#companionTitle {font-size:18px;font-weight:700;}
-            QLabel#activityLabel {color:#477962;font-size:11px;}
-            QLabel#detailLabel {color:#627267;font-size:11px;}
-            QPushButton {background:#f3f6ef;color:#2e493b;border:1px solid #cfdbce;border-radius:9px;
-                padding:8px 12px;min-height:20px;font-size:12px;text-align:left;}
-            QPushButton:hover {background:#e7efe3;border-color:#87a58c;}
-            QPushButton:focus {border:2px solid #326bb3;}
-            QPushButton:disabled {color:#78857c;background:#f0f2ed;}
-            QPushButton#quietButton {background:transparent;border:0;font-size:11px;padding:4px;}
-            QPushButton#contextButton {background:#edf3e8;border:0;border-radius:7px;color:#466347;font-size:11px;padding:7px 10px;}
-            QPushButton#sendButton {background:#007aff;color:#ffffff;border:0;border-radius:16px;font-size:18px;text-align:center;padding:0;min-height:0;}
-            QPushButton#promptSettings {background:#fafafa;color:#515155;border:1px solid #d6d6d9;border-radius:16px;
-                font-size:16px;text-align:center;padding:0;min-height:0;}
-            QPushButton#promptSettings:hover {background:#ededf0;}
-            QPushButton#promptSettings[screenVision="true"] {background:#d4e9d9;border:2px solid #398267;}
-            QPlainTextEdit#composer[promptOnly="true"] {background:transparent;border:0;border-radius:0;padding:0;font-size:12px;}
-            QPlainTextEdit#composer[promptOnly="true"]:focus {border:0;padding:0;font-size:12px;}
-            QPushButton#sendButton:hover {background:#0066d6;}
-            QPushButton#sendButton:focus, QPushButton#promptSettings:focus {border:2px solid #72b4ff;}
-            QScrollArea,QScrollArea > QWidget > QWidget {background:transparent;border:0;}
-            QScrollBar:vertical {background:transparent;width:6px;margin:2px;}
-            QScrollBar::handle:vertical {background:#b2c4b6;border-radius:3px;min-height:20px;}
-            QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical {height:0;}
-            QMenu {background:#fffef9;color:#25352f;border:1px solid #b7c7ba;padding:6px;}
-            QMenu::item {padding:8px 16px;} QMenu::item:selected {background:#e7efe3;}
-        """)
+        self.setStyleSheet(MASCOT_STYLE)
         self.resize(390, 560)
         self.place_on_screen()
         for key, delta in [('Left',(-20,0)), ('Right',(20,0)), ('Up',(0,-20)), ('Down',(0,20))]:
@@ -225,6 +197,14 @@ class Mascot(QWidget):
         QShortcut(QKeySequence('Escape'), self).activated.connect(self.collapse_chat)
         QShortcut(QKeySequence('Shift+F10'), self).activated.connect(lambda: self.show_menu())
         QShortcut(QKeySequence('Menu'), self).activated.connect(lambda: self.show_menu())
+
+    def eventFilter(self, watched, event):
+        if watched is self.input and event.type() in (QEvent.Type.FocusIn, QEvent.Type.FocusOut):
+            self.card.setProperty('inputFocused', event.type() == QEvent.Type.FocusIn)
+            self.card.style().unpolish(self.card)
+            self.card.style().polish(self.card)
+            self.card.update()
+        return super().eventFilter(watched, event)
 
     def place_on_screen(self):
         area = self.screen().availableGeometry()
@@ -249,6 +229,7 @@ class Mascot(QWidget):
         self.expanded_width = 240 if compact else 420
         self.header_widget.setVisible(not compact)
         self.card.setProperty('promptOnly', compact)
+        self.card.setProperty('inputFocused', False)
         self.input.setProperty('promptOnly', compact)
         # Apply directly so Qt also recalculates the text viewport after mode changes.
         self.input.setStyleSheet(
@@ -407,10 +388,13 @@ class Mascot(QWidget):
     def show_menu(self, position=None):
         menu = QMenu(self)
         menu.setAccessibleName('Companion actions')
-        for title, action in [('Talk to me', 'talk'), ('Show last reply', 'reply'), ('Plan a task from my prompt', 'plan'), ('Mark current task step done', 'confirm'),
-                              ('Pause screen vision' if self.vision_button.text() == 'Screen on' else 'Enable screen vision…', 'vision:toggle'), ('Move beside the suggested control', 'guide'), ('Sources and conversation', 'history'), ('My saved tasks', 'tasks'), ('Desktop context and controls', 'context:details'),
-                              ('Get to know me again', 'setup:restart'), ('Read this aloud', 'read'),
-                              ('Stop speech', 'stop_speech'), ('Settings and company documents', 'settings'), ('Quit companion', 'quit')]:
+        for title, action in [('Talk to me', 'talk'), ('Show last reply', 'reply'),
+                              ('My saved tasks', 'tasks'), ('Mark current step done', 'confirm'),
+                              ('Pause screen vision' if self.vision_button.text() == 'Screen on' else 'Enable screen vision…', 'vision:toggle'),
+                              ('Personalize and set up access…', 'setup:wizard'),
+                              ('Settings…', 'settings'), ('Quit companion', 'quit')]:
+            if action in ('vision:toggle', 'settings', 'quit'):
+                menu.addSeparator()
             item = menu.addAction(title)
             item.triggered.connect(lambda checked=False, a=action: self.action_requested.emit(a))
         menu.exec(position or self.character.mapToGlobal(self.character.rect().topLeft()))

@@ -22,7 +22,7 @@ class RecordingProvider:
 
     def complete(self, system, messages, *, image_data=None):
         self.calls.append((system, deepcopy(messages), image_data))
-        context = json.loads(messages[-1]['content'])
+        context = json.loads(messages[-2]['content'])
         self.contexts.append(context)
         if self.error:
             raise self.error
@@ -103,7 +103,7 @@ class CoreTests(CompanionFixture, unittest.TestCase):
         with self.assertRaises(PermissionError):
             restricted.confirm_step(w['id'], 0)
         restricted.ask('Hello')
-        self.assertEqual(len(self.provider.calls[-1][1]), 1)
+        self.assertEqual(len(self.provider.calls[-1][1]), 2)
         self.assertEqual(self.provider.contexts[-1]['sources'], [])
 
     def test_deleted_source_hides_dependent_tasks_and_history(self):
@@ -268,7 +268,7 @@ class ContractTests(unittest.TestCase):
     def test_invalid_target_bounds_and_types(self):
         valid = {'label': 'Open settings', 'x': .2, 'y': .3, 'width': .1, 'height': .1}
         Target.parse(valid)
-        for patch in [{'x': -1}, {'width': 0}, {'width': .9}, {'height': float('nan')},
+        for patch in [{'x': -1}, {'width': 0}, {'width': 1.1}, {'height': float('nan')},
                       {'x': True}, {'label': ''}, {'execute': 'anything'}]:
             with self.subTest(patch=patch):
                 with self.assertRaises(ValidationError):

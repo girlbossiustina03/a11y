@@ -47,6 +47,17 @@ class DesktopContextTests(unittest.TestCase):
         self.assertEqual(context['age_seconds'], 2)
         self.assertEqual(context['observation_id'], original)
 
+    def test_unfocused_windows_refresh_while_companion_has_focus(self):
+        windows = [{'app': 'Terminal', 'bundle_id': 'com.apple.Terminal',
+                    'bounds': {'x': 10, 'y': 20, 'width': 700, 'height': 500}}]
+        self.bridge.value = {'status': 'companion_focused', 'onscreen_window_candidates': windows}
+        self.monitor.collect_once()
+        self.assertEqual(self.monitor.context()['onscreen_window_candidates'], windows)
+        self.assertEqual(self.monitor.context()['app']['name'], 'Finder')
+        self.bridge.value['onscreen_window_candidates'] = []
+        self.monitor.collect_once()
+        self.assertEqual(self.monitor.context()['onscreen_window_candidates'], [])
+
     def test_stale_observations_cannot_authorize_actions(self):
         self.now += 12
         self.assertEqual(self.monitor.context()['status'], 'stale')
@@ -87,6 +98,29 @@ class DesktopContextTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.monitor.authorize_action({'type': 'highlight_control', 'control_id': 'control-0', 'x': 99})
 
+    def test_coordinate_movement_is_bounded_and_visual_objects_need_pixels(self):
+        action = {'type': 'move_to_point', 'basis': 'image', 'x': .8, 'y': .7,
+                  'label': 'Apple drawing in the lower-right Terminal'}
+        value = {'message': 'Moving toward that drawing.', 'source_ids': [], 'workflow': None,
+                 'target': None, 'desktop_action': action}
+        with self.assertRaisesRegex(ValidationError, 'fresh screen image'):
+            validate_response(value, set(), desktop=self.monitor)
+        result = validate_response(value, set(), desktop=self.monitor, has_screen=True)
+        self.assertEqual(result['desktop_action'], action)
+        for number in [float('nan'), float('inf'), -.01, 1.01, True, '0.8']:
+            value['desktop_action'] = dict(action, x=number)
+            with self.assertRaises(ValidationError):
+                validate_response(value, set(), desktop=self.monitor, has_screen=True)
+        value['desktop_action'] = dict(action, basis='screen', x=0, y=0)
+        self.assertEqual(validate_response(value, set(), desktop=self.monitor)['desktop_action']['y'], 0)
+
+    def test_movement_cannot_carry_a_stale_highlight(self):
+        value = {'message': 'Move right', 'source_ids': [], 'workflow': None,
+            'target': {'label': 'Old Terminal close button', 'x': .1, 'y': .1, 'width': .1, 'height': .1},
+            'desktop_action': {'type': 'move_companion', 'destination': 'right_edge'}}
+        with self.assertRaisesRegex(ValidationError, 'cannot include a screen target'):
+            validate_response(value, set(), desktop=self.monitor, has_screen=True)
+
     def test_ai_action_contract_rejects_unobserved_or_executable_actions(self):
         value = {'message': 'Try New Folder', 'source_ids': [], 'workflow': None, 'target': None,
                  'desktop_action': {'type': 'highlight_control', 'control_id': 'control-0'}}
@@ -116,6 +150,24 @@ class DesktopServiceTests(CompanionFixture, unittest.TestCase):
         self.assertTrue(any(m['content'] == 'What app is open?' for m in messages))
         for file in Path(self.temp.name).glob('*.sqlite3'):
             self.assertNotIn(b'"pid": 42', file.read_bytes())
+
+    def test_spatial_request_can_request_pixels_for_unfocused_terminal(self):
+        bridge = FakeBridge()
+        bridge.value['onscreen_window_candidates'] = [
+            {'app': 'Terminal', 'bounds': {'x': 0, 'y': 20, 'width': 600, 'height': 400}}]
+        self.app.desktop_context = DesktopContext(bridge, clock=lambda: 100)
+        self.app.desktop_context.enabled = True
+        self.app.desktop_context.collect_once()
+        self.provider.invalid = {'message': 'Enable screen vision so I can locate that close button.',
+            'source_ids': [], 'workflow': None, 'target': None,
+            'desktop_action': {'type': 'request_screen'}}
+        result = self.app.ask('Move to the close button of the left terminal please')
+        context = self.provider.contexts[-1]
+        self.assertEqual(context['desktop_context']['app']['name'], 'Finder')
+        self.assertEqual(context['desktop_context']['onscreen_window_candidates'][0]['app'], 'Terminal')
+        self.assertTrue(context['evidence']['focused_window_is_not_all_visible_windows'])
+        self.assertEqual(result['desktop_action']['type'], 'request_screen')
+        self.assertIsNone(result['target'])
 
     def test_model_context_follows_application_switch(self):
         bridge = FakeBridge()

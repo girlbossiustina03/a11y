@@ -13,11 +13,13 @@ from .adaptation import CHOICES
 from .mascot import Mascot
 from .overlay import GuidanceOverlay
 from .onboarding import Introduction, QUESTIONS
+from .setup_ui import SetupDialog, AccessSheet
 from .provider import AIConfig, ChatProvider, ProviderError
 from .ollama import OllamaProvider, local_url
 from .theme import PANEL_STYLE, apply_theme
 from .vision import ScreenVision
 from .desktop_context import DesktopContext, MacDesktopBridge
+from .computer_use import ComputerUse
 
 
 class RequestWorker(QThread):
@@ -32,15 +34,27 @@ class RequestWorker(QThread):
     def run(self):
         try:
             visual = None
+            plan = ({'operation': 'plan', 'app_name': '', 'target': self.request[:500]} if self.options.get('mode') == 'plan'
+                    else self.service.prepare_request(self.request) if self.options.get('mode') != 'verify' else None)
+            if plan is not None:
+                self.options['request_plan'] = plan
+            needs_pixels = plan is None or plan['operation'] in ('move_object', 'highlight', 'inspect_screen')
             vision_generation = self.vision.generation if self.vision else None
-            if self.vision and self.vision.enabled and not self.options.get('image_data'):
-                geometry = self.options.pop('screen_geometry', {'x': 0, 'y': 0})
+            geometry = self.options.get('screen_geometry') or {'x': 0, 'y': 0}
+            if self.options.get('mode') == 'verify' and self.service.desktop_context and self.service.desktop_context.enabled:
+                self.service.desktop_context.collect_once()
+            if self.vision and self.vision.enabled and not self.options.get('image_data') and (needs_pixels or self.options.get('mode') == 'verify'):
                 desktop = self.service.desktop_context.context() if self.service.desktop_context else None
-                visual = self.vision.capture(self.service.provider, x=geometry['x'], y=geometry['y'], desktop=desktop)
-                self.options['image_data'] = visual.pop('image_data')
-                self.options['visual_context'] = visual
-            else:
-                self.options.pop('screen_geometry', None)
+                try:
+                    visual = self.vision.capture(self.service.provider, x=geometry['x'], y=geometry['y'], desktop=desktop)
+                    self.options['image_data'] = visual.pop('image_data')
+                    self.options['visual_context'] = visual
+                except RuntimeError as error:
+                    if self.options.get('mode') != 'verify':
+                        raise
+                    # An approved action may already be submitted. Verify only what
+                    # fresh metadata establishes; never resubmit because vision failed.
+                    self.options['visual_context'] = {'status': 'unavailable', 'reason': str(error)}
             response = self.service.ask(self.request, **self.options)
             if visual and self.vision.enabled and self.vision.generation == vision_generation:
                 response['visual_capture'] = visual
@@ -55,6 +69,23 @@ class RequestWorker(QThread):
             self.failed.emit('The request could not be completed. Your confirmed progress is saved.')
         finally:
             self.options.clear()  # release transient image data
+
+
+class ComputerActionWorker(QThread):
+    result = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, desktop, proposal, parent=None):
+        super().__init__(parent)
+        self.desktop, self.proposal = desktop, dict(proposal)
+
+    def run(self):
+        try:
+            self.result.emit(ComputerUse(self.desktop).execute_confirmed(self.proposal))
+        except (ValueError, RuntimeError) as error:
+            self.failed.emit(str(error))
+        except Exception:
+            self.failed.emit('The action result is uncertain. Check the app before trying again.')
 
 
 class VisionPermission(QThread):
@@ -133,6 +164,7 @@ class CompanionWindow(QMainWindow):
         self.build_knowledge()
         self.build_connection()
         self.build_desktop_context()
+        self.build_essentials()
         self.build_panel_shell()
         self.context_timer = QTimer(self)
         self.context_timer.timeout.connect(self.refresh_desktop_context)
@@ -166,6 +198,82 @@ class CompanionWindow(QMainWindow):
         self.mascot_home((f'Hey {name}!' if name else 'Hey!')+' What can I help you with?')
         self.mascot.hide_reply()
         self.mascot.fit_on_screen()
+        if not self.introduction.get().get('access_setup_reviewed'):
+            self.open_setup()
+
+    def open_setup(self):
+        if getattr(self, 'setup_dialog', None) and self.setup_dialog.isVisible():
+            self.setup_dialog.raise_()
+            return
+        self.setup_dialog = SetupDialog(self)
+        self.setup_dialog.show()
+        self.setup_dialog.raise_()
+        self.setup_dialog.activateWindow()
+
+    def build_essentials(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setSpacing(16)
+        title = label('Settings')
+        title.setObjectName('settingsPageTitle')
+        layout.addWidget(title)
+        subtitle = label('A little help, configured your way.')
+        subtitle.setObjectName('settingsSubtitle')
+        layout.addWidget(subtitle)
+
+        def group():
+            surface = QFrame()
+            surface.setObjectName('settingsGroup')
+            rows = QVBoxLayout(surface)
+            rows.setContentsMargins(16, 6, 16, 6)
+            rows.setSpacing(0)
+            layout.addWidget(surface)
+            return rows
+
+        def row(rows, title, detail, control):
+            if rows.count():
+                line = QFrame()
+                line.setObjectName('settingsDivider')
+                line.setFixedHeight(1)
+                rows.addWidget(line)
+            line = QHBoxLayout()
+            line.setContentsMargins(0, 14, 0, 14)
+            line.setSpacing(18)
+            text = QVBoxLayout()
+            text.setSpacing(5)
+            heading = label(title)
+            heading.setObjectName('settingsRowTitle')
+            text.addWidget(heading)
+            detail.setObjectName('settingsSubtitle')
+            text.addWidget(detail)
+            line.addLayout(text, 1)
+            control.setFixedWidth(116)
+            line.addWidget(control, 0, Qt.AlignmentFlag.AlignVCenter)
+            rows.addLayout(line)
+
+        personal = group()
+        self.essentials_identity = label('')
+        row(personal, 'Personalization', self.essentials_identity,
+            button('Personalize…', self.open_setup))
+        self.essentials_ai = label('')
+        row(personal, 'Intelligence', self.essentials_ai,
+            button('Choose…', lambda: self.tabs.setCurrentIndex(4)))
+        access_title = label('Desktop access')
+        access_title.setObjectName('settingsRowTitle')
+        layout.addWidget(access_title)
+        access = group()
+        self.essentials_context = button('Enable…', lambda: self.desktop_action('context:toggle'))
+        row(access, 'App awareness', label('Understand app names, windows and accessible controls.'), self.essentials_context)
+        self.essentials_vision = button('Enable…', self.toggle_screen_vision)
+        row(access, 'Screen vision', label('Take a fresh look when you send a message. Local Ollama only.'), self.essentials_vision)
+        self.essentials_access = label('Both options are optional and last for this session.')
+        self.essentials_access.setObjectName('settingsSubtitle')
+        layout.addWidget(self.essentials_access)
+        layout.addSpacing(8)
+        layout.addWidget(self.show_mascot)
+        layout.addStretch()
+        self.essentials_tab = self.tabs.addTab(page, 'Settings')
+        self.tabs.setCurrentIndex(self.essentials_tab)
 
     def build_chat(self):
         page = QWidget()
@@ -235,7 +343,7 @@ class CompanionWindow(QMainWindow):
         self.resume_btn = button('Resume in conversation', self.resume)
         layout.addWidget(self.resume_btn)
         layout.addWidget(label('Progress is saved after every confirmation. Only you can mark a step complete. '
-                               'The assistant does not run commands or click controls.'))
+                               'App controls can be pressed only after you approve an observed control. Task completion still requires your confirmation.'))
         self.tabs.addTab(page, 'Saved tasks')
 
     def build_preferences(self):
@@ -267,7 +375,7 @@ class CompanionWindow(QMainWindow):
         self.profile_view = QPlainTextEdit()
         self.profile_view.setReadOnly(True)
         self.profile_view.setAccessibleName('Explicit preferences, observations and approved adaptations')
-        inspect_profile = button('Inspect learned preferences', lambda: self.profile_view.setVisible(not self.profile_view.isVisible()))
+        self.inspect_profile = inspect_profile = button('Inspect learned preferences', lambda: self.profile_view.setVisible(not self.profile_view.isVisible()))
         layout.addWidget(inspect_profile)
         self.profile_view.hide()
         layout.addWidget(self.profile_view)
@@ -280,7 +388,8 @@ class CompanionWindow(QMainWindow):
         row.addWidget(self.approve_btn)
         row.addWidget(self.dismiss_btn)
         layout.addLayout(row)
-        layout.addWidget(button('Reset learned preferences (keep explicit settings)', self.reset_preferences))
+        self.reset_learning_button = button('Reset learned preferences (keep explicit settings)', self.reset_preferences)
+        layout.addWidget(self.reset_learning_button)
         layout.addStretch()
         self.tabs.addTab(page, 'Preferences')
 
@@ -342,6 +451,10 @@ class CompanionWindow(QMainWindow):
         self.approve_btn.setVisible(pending)
         self.dismiss_btn.setVisible(pending)
         self.mascot.set_reduced_motion(state['effective']['reduced_motion'])
+        if hasattr(self, 'essentials_identity'):
+            details = self.introduction.user_details()
+            self.essentials_identity.setText(' · '.join(details.values()) or 'Your name, role and preferred way to work.')
+            self.essentials_ai.setText((state['ai']['model'] or 'Choose a local model to get started')+'\n'+('Needs connection setup' if state['ai']['message'] else 'Connection configured'))
 
     def render_workflow(self):
         self.clear_guidance()
@@ -380,13 +493,15 @@ class CompanionWindow(QMainWindow):
         self.last_user_request = (request, mode, from_mascot)
         self.pending_desktop_action = None
         self.clear_guidance(keep_capture=bool(image_data))
-        self.transcript.appendPlainText('You: '+request+'\n')
+        self.transcript.appendPlainText('Checking the action result against a fresh observation…\n' if mode == 'verify' else 'You: '+request+'\n')
         self.set_busy(True)
         self.mascot.set_state('thinking', 'Thinking with your instructions and company knowledge…')
         screen = self.mascot.screen()
         area = screen.geometry()
         options = {'mode': mode, 'workflow_id': self.workflow_select.currentData(), 'image_data': image_data,
-                   'screen_geometry': {'x': area.x(), 'y': area.y()}}
+                   'screen_geometry': {'x': area.x(), 'y': area.y(), 'width': area.width(), 'height': area.height(),
+                       'usable': {'x': screen.availableGeometry().x(), 'y': screen.availableGeometry().y(),
+                                  'width': screen.availableGeometry().width(), 'height': screen.availableGeometry().height()}}}
         self.worker = RequestWorker(self.service, request, options, self, vision=self.vision)
         self.worker.result.connect(self.received)
         self.worker.failed.connect(self.failed)
@@ -430,6 +545,23 @@ class CompanionWindow(QMainWindow):
             self.tabs.setCurrentIndex(1)
         self.pending_desktop_action = response.get('desktop_action')
         self.mascot_home(response['message'], sources=response['sources'])
+        if self.pending_desktop_action and self.pending_desktop_action['type'] == 'move_companion':
+            destination = self.pending_desktop_action['destination']
+            self.pending_desktop_action = None
+            self.move_companion(destination)
+            self.transcript.appendPlainText('Companion moving to '+destination.replace('_', ' ')+'.\n')
+        elif self.pending_desktop_action and self.pending_desktop_action['type'] == 'move_to_point':
+            action = self.pending_desktop_action
+            self.pending_desktop_action = None
+            if action['basis'] == 'image':
+                if not capture or time.monotonic()-capture['time'] >= 90 or capture['screen'].geometry() != capture['geometry']:
+                    self.mascot_home('That screen observation expired. Ask again for a fresh look before I move.')
+                    return
+                screen = capture['screen']
+            else:
+                screen = self.mascot.screen()
+            self.move_companion_to(action['x'], action['y'], screen)
+            self.transcript.appendPlainText('Companion moving to '+action['label']+'.\n')
 
     def failed(self, message):
         self.transcript.appendPlainText('Request failed: '+message+'\n')
@@ -509,12 +641,10 @@ class CompanionWindow(QMainWindow):
             self.statusBar().showMessage('Enter what you want to understand before capturing a screen.')
             self.input.setFocus()
             return
-        answer = QMessageBox.question(self, 'Capture selected screen once?',
-            'Close password fields and confidential windows first. This captures the entire selected screen '
-            'once. You will see a preview and can cancel before anything is sent. '
-            'The image is not saved to disk.', QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel)
-        if answer != QMessageBox.StandardButton.Yes:
+        if not self.confirm_access('Take a look at this screen?',
+                'Capture the selected display once, then review it before sending.',
+                ['Close confidential windows and password fields first.',
+                 'Nothing is sent until you approve the preview. The image is not saved.'], 'Show preview'):
             return
         self.clear_guidance()
         self.hide()
@@ -628,7 +758,7 @@ class CompanionWindow(QMainWindow):
     def build_panel_shell(self):
         # Preserve the existing page interfaces/indices; replace only the navigation shell.
         self.setWindowTitle('A11y · Companion settings')
-        self.resize(930, 780)
+        self.resize(800, 680)
         self.takeCentralWidget()
         self.tabs.tabBar().hide()
         root = QWidget()
@@ -656,12 +786,24 @@ class CompanionWindow(QMainWindow):
         self.panel_navigation.setObjectName('settingsNavigation')
         self.panel_navigation.setAccessibleName('Companion settings sections')
         self.panel_navigation.setFixedWidth(166)
-        for index in range(self.tabs.count()):
+        self.navigation_pages = [self.essentials_tab, 2, 1, 0, 3, 4, 5]
+        for index in self.navigation_pages:
             self.panel_navigation.addItem(self.tabs.tabText(index))
-        self.panel_navigation.setCurrentRow(self.tabs.currentIndex())
-        self.panel_navigation.currentRowChanged.connect(self.tabs.setCurrentIndex)
-        self.tabs.currentChanged.connect(self.panel_navigation.setCurrentRow)
-        content.addWidget(self.panel_navigation)
+        self.panel_navigation.setCurrentRow(self.navigation_pages.index(self.tabs.currentIndex()))
+        self.panel_navigation.currentRowChanged.connect(
+            lambda row: self.tabs.setCurrentIndex(self.navigation_pages[row]) if row >= 0 else None)
+        self.tabs.currentChanged.connect(
+            lambda index: self.panel_navigation.setCurrentRow(self.navigation_pages.index(index)))
+        navigation = QVBoxLayout()
+        navigation.addWidget(self.panel_navigation, 1)
+        self.advanced_navigation = QCheckBox('Advanced')
+        self.advanced_navigation.setToolTip('Conversation history, company documents, AI connection and desktop diagnostics')
+        navigation.addWidget(self.advanced_navigation)
+        content.addLayout(navigation)
+        self.advanced_pages = {0, 3, 4, 5}
+        self.advanced_navigation.toggled.connect(self.update_navigation)
+        self.tabs.currentChanged.connect(self.ensure_page_visible)
+        self.update_navigation(False)
         surface = QFrame()
         surface.setObjectName('settingsSurface')
         surface_layout = QVBoxLayout(surface)
@@ -671,6 +813,20 @@ class CompanionWindow(QMainWindow):
         outer.addLayout(content, 1)
         self.setCentralWidget(root)
 
+    def update_navigation(self, advanced):
+        self.inspect_profile.setVisible(advanced)
+        self.reset_learning_button.setVisible(advanced)
+        if not advanced:
+            self.profile_view.hide()
+        if not advanced and self.tabs.currentIndex() in self.advanced_pages:
+            self.tabs.setCurrentIndex(self.essentials_tab)
+        for index in self.advanced_pages:
+            self.panel_navigation.item(self.navigation_pages.index(index)).setHidden(not advanced)
+
+    def ensure_page_visible(self, index):
+        if index in self.advanced_pages and not self.advanced_navigation.isChecked():
+            self.advanced_navigation.setChecked(True)
+
     def move_companion(self, destination):
         self.mascot.collapse_chat()
         area = self.mascot.screen().availableGeometry()
@@ -678,22 +834,41 @@ class CompanionWindow(QMainWindow):
         top, bottom = area.top()+16, area.bottom()-self.mascot.height()-16
         positions = {'left_edge': QPoint(left, max(top, min(self.mascot.y(), bottom))),
                      'right_edge': QPoint(right, max(top, min(self.mascot.y(), bottom))),
-                     'bottom_left': QPoint(left, bottom), 'bottom_right': QPoint(right, bottom)}
+                     'bottom_left': QPoint(left, bottom), 'bottom_right': QPoint(right, bottom),
+                     'top_left': QPoint(left, top), 'top_right': QPoint(right, top),
+                     'center': QPoint((left+right)//2, (top+bottom)//2)}
         if destination not in positions:
             raise ValueError('Unknown companion destination.')
+        self.animate_companion_to(positions[destination])
+
+    def move_companion_to(self, x, y, screen):
+        self.mascot.collapse_chat()
+        full = screen.geometry()
+        usable = screen.availableGeometry()
+        # The AI chooses a point. Native code maps image fractions and clamps the character.
+        left = full.x()+round(x*full.width())-self.mascot.width()//2
+        top = full.y()+round(y*full.height())-self.mascot.height()//2
+        position = QPoint(max(usable.left()+16, min(left, usable.right()-self.mascot.width()-16)),
+                          max(usable.top()+16, min(top, usable.bottom()-self.mascot.height()-16)))
+        self.animate_companion_to(position)
+
+    def animate_companion_to(self, position):
         if self.move_animation:
             self.move_animation.stop()
         if self.service.adaptation.effective(self.service.identity)['reduced_motion']:
-            self.mascot.move(positions[destination])
+            self.mascot.move(position)
         else:
             self.move_animation = QPropertyAnimation(self.mascot, b'pos', self)
             self.move_animation.setDuration(450)
             self.move_animation.setStartValue(self.mascot.pos())
-            self.move_animation.setEndValue(positions[destination])
+            self.move_animation.setEndValue(position)
             self.move_animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
             self.move_animation.start()
 
-    def toggle_screen_vision(self):
+    def confirm_access(self, title, explanation, details, action):
+        return AccessSheet(self, title, explanation, details, action).exec() == QDialog.DialogCode.Accepted
+
+    def toggle_screen_vision(self, checked=False, *, consented=False):
         if self.vision.enabled:
             self.retry_after_vision = False
             self.vision.set_enabled(False)
@@ -707,13 +882,11 @@ class CompanionWindow(QMainWindow):
         if not isinstance(self.service.provider, OllamaProvider):
             self.mascot_home('Automatic screen vision needs local Ollama. Connect it under Settings → AI connection.')
             return
-        answer = QMessageBox.question(self, 'Enable local screen vision for this session?',
-            'With this enabled, each message you send includes a fresh image of the display containing the companion. '
-            'It goes only to your local Ollama model. The companion and password-manager windows are excluded. '
-            'Images are not saved or recorded between requests. Close other confidential windows before using it. '
-            'You can pause from the character’s right-click menu at any time. Allow macOS Screen Recording when prompted.',
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Cancel)
-        if answer != QMessageBox.StandardButton.Yes:
+        if not consented and not self.confirm_access('See what you’re working on',
+                'Each message includes a fresh screen image for your local Ollama model.',
+                ['Images stay off disk. Nothing is recorded between messages.',
+                 'Close confidential windows first. Pause vision whenever you like.',
+                 'macOS will ask for Screen Recording access.'], 'Enable screen vision'):
             self.retry_after_vision = False
             return
         self.mascot.vision_button.setText('Allowing screen…')
@@ -808,6 +981,10 @@ class CompanionWindow(QMainWindow):
         self.mascot.context_button.setToolTip(description)
         self.context_toggle.setText('Pause desktop context' if enabled else 'Enable desktop context…')
         self.context_status.setText(description)
+        if hasattr(self, 'essentials_access'):
+            self.essentials_access.setText(description)
+            self.essentials_context.setText('Pause' if enabled else 'Enable…')
+            self.essentials_vision.setText('Pause' if self.vision.enabled else 'Enable…')
         self.context_view.setPlainText(json.dumps(context, indent=2, ensure_ascii=False))
         for combo, records, identity, label_key in (
                 (self.running_apps, context.get('available_apps', []), 'bundle_id', 'name'),
@@ -824,20 +1001,47 @@ class CompanionWindow(QMainWindow):
         self.switch_app_btn.setEnabled(bool(self.running_apps.count()))
         self.control_highlight_btn.setEnabled(bool(self.observed_controls.count()))
 
-    def desktop_action(self, action):
+    def execute_desktop_action(self, proposal):
+        if self.worker and self.worker.isRunning():
+            return
+        request = self.last_user_request[0] if self.last_user_request else 'Check the action result.'
+        self.pending_desktop_action = None
+        self.clear_guidance()
+        self.hide()
+        self.mascot.collapse_chat()
+        self.set_busy(True)
+        worker = ComputerActionWorker(self.desktop_monitor, proposal, self)
+        self.worker = worker
+        result = {}
+        def submitted(observation):
+            result.update(observation)
+            self.service.last_action_result = observation
+            self.transcript.appendPlainText('Action submitted: '+proposal.get('label', proposal['type'])+'. Checking the result.\n')
+        def finished():
+            self.set_busy(False)
+            if result:
+                self.mascot.expand_chat()
+                self.input.setPlainText(request)
+                self.ask(mode='verify', from_mascot=True)
+        worker.result.connect(submitted)
+        worker.failed.connect(self.failed)
+        worker.finished.connect(finished)
+        worker.start()
+
+    def desktop_action(self, action, *, consented=False):
         try:
             if action == 'context:toggle':
                 if self.desktop_monitor.enabled:
                     self.desktop_monitor.disable()
                     self.service.desktop_session.clear()
+                    self.service.last_action_result = None
                     self.pending_desktop_action = None
                 else:
-                    answer = QMessageBox.question(self, 'Enable desktop awareness for this session?',
-                        'Read your active app, window title and accessible control names every two seconds? '
-                        'No screenshots, field values, clipboard or keystrokes are recorded. Context stays in memory '
-                        'and is shared with your selected model only when you ask a question. You can pause it at any time.',
-                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Cancel)
-                    if answer != QMessageBox.StandardButton.Yes:
+                    if not consented and not self.confirm_access('Help me find my way around',
+                            'Let A11y follow your apps, windows and accessible controls.',
+                            ['No screenshots, typing or field contents.',
+                             'App and control names are shared with your selected AI when you ask for help.',
+                             'Access lasts this session. You can pause it at any time.'], 'Enable app awareness'):
                         return
                     self.desktop_monitor.enable()
                     self.mascot.footer.setText('Focus the app you want help with for a moment; I’ll follow it.')
@@ -856,6 +1060,13 @@ class CompanionWindow(QMainWindow):
                     'type': 'highlight_control', 'control_id': self.observed_controls.currentData()}
                 if not proposed:
                     return
+                if proposed['type'] == 'request_app_access':
+                    if not self.desktop_monitor.enabled:
+                        self.desktop_action('context:toggle')
+                    elif self.desktop_monitor.context().get('accessibility') == 'permission_required':
+                        QDesktopServices.openUrl(QUrl('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'))
+                    self.mascot_home('App awareness is setting up. macOS Accessibility access is needed to inspect and close windows. Once allowed, ask me again.' if self.desktop_monitor.enabled else 'App awareness is off. You can enable it from Settings when you want to use app controls.')
+                    return
                 if proposed['type'] == 'request_screen':
                     if self.vision.enabled:
                         self.mascot_home('Screen vision is already on. Each new message includes a fresh image. Ask me what you want to inspect.')
@@ -866,9 +1077,8 @@ class CompanionWindow(QMainWindow):
                 if proposed['type'] == 'move_companion':
                     self.move_companion(proposed['destination'])
                     return
-                if proposed['type'] == 'focus_app':
-                    self.desktop_monitor.activate(proposed['bundle_id'])
-                    self.hide()
+                if proposed['type'] in ('focus_app', 'press_control', 'launch_app', 'quit_app', 'new_window', 'close_window'):
+                    self.execute_desktop_action(proposed)
                     return
                 current = self.desktop_monitor.authorize_action({'type': 'highlight_control', 'control_id': proposed['control_id']})
                 if proposed.get('observation_id') and proposed['observation_id'] != current['observation_id']:
@@ -1038,7 +1248,7 @@ class CompanionWindow(QMainWindow):
         if self.pending_target:
             choices.append(('Show me where', 'guide'))
         elif self.pending_desktop_action:
-            choices.append((self.pending_desktop_action['label'], 'desktop:apply'))
+            choices.append((self.pending_desktop_action.get('confirmation_label', self.pending_desktop_action['label']), 'desktop:apply'))
         self.say(message or 'What would you like help with?', choices, placeholder='Ask anything…', compact=True)
 
     def mascot_submit(self, request, action):
@@ -1076,7 +1286,7 @@ class CompanionWindow(QMainWindow):
             if action == 'quit':
                 self.request_quit()
             elif action in ('settings', 'history'):
-                self.tabs.setCurrentIndex(0 if action == 'history' else 2)
+                self.tabs.setCurrentIndex(0 if action == 'history' else self.essentials_tab)
                 self.reveal()
             elif action == 'read':
                 if self.tts:
@@ -1126,6 +1336,8 @@ class CompanionWindow(QMainWindow):
                 self.service.adaptation.decide(self.service.identity, signal, decision == 'yes')
                 self.refresh()
                 self.mascot_home('Got it. Your preference choice is saved.')
+            elif action == 'setup:wizard':
+                self.open_setup()
             elif action in ('setup:start', 'setup:restart'):
                 self.introduction.start(restart=action == 'setup:restart')
                 self.setup_active = True
@@ -1164,6 +1376,8 @@ class CompanionWindow(QMainWindow):
         QApplication.instance().quit()
 
     def closeEvent(self, event):
+        if getattr(self, 'setup_dialog', None):
+            self.setup_dialog.close()
         if self.quitting:
             event.accept()
         else:

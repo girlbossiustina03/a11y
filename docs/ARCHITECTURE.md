@@ -125,8 +125,9 @@ Observation status, age, permission state, app, window, controls, and running ap
 into `desktop_context` in each model request. Desktop exchanges use a bounded memory
 session instead of the persistent conversation table.
 
-`desktop_action` is an optional v1 response extension. The only types are `focus_app`
-with an observed bundle_id, and `highlight_control` with an observed control_id.
+`desktop_action` supports `focus_app` with an observed bundle_id, `highlight_control`
+and `press_control` with an observed control_id, `request_screen`, bounded companion
+destinations, and normalized `move_to_point` destinations.
 Validation binds each proposal to the snapshot supplied to the model; application
 checks current freshness/observation before acting. Geometry comes from AX, not LLM
 coordinates. The native UI requires a user click and supports the same actions from
@@ -134,7 +135,7 @@ Desktop access without an LLM. No automation capability is exposed by the web AP
 
 Ollama generation is now constrained by `models.RESPONSE_SCHEMA`, followed by local
 semantic validation. `theme.py` pins a Fusion palette and explicit text/background
-colors so native macOS dark-mode defaults cannot leak into the light UI.
+colors across a shared dark companion, panel, setup and menu appearance.
 
 ## Request-time visual perception
 
@@ -147,9 +148,65 @@ the model an ungrounded screen question. `RequestWorker` handles capture before
 `Companion.ask`, sends the PNG as image_data, and retains geometry for validated targets.
 
 The v1 desktop_action extension also allows `request_screen` and `move_companion` with
-one of four bounded destinations. Both are native-only and require the user's action.
+one of seven bounded destinations, plus normalized move_to_point. These are native-only;
+movement executes after validation, while screen vision retains explicit session consent.
 The former can request session consent and retry the original question with pixels;
 the latter only moves the companion's own window. Native prompt mode `assist` permits
 model-generated planning when the user requests a plan, with the same step/citation
 validation and explicit completion boundary. No string classifier chooses conversation
 answers. Missing window metadata is explicitly labeled unknown rather than empty.
+
+## One-action computer-use loop
+
+`computer_use.py` defines the execution boundary: one user-confirmed AXPress or app
+activation, then a fresh observation. `ComputerActionWorker` executes outside the GUI
+thread. Every press proposal is bound to the observed app/window/control snapshot.
+At execution, the Python monitor checks its observation signature and session state;
+the Swift helper independently re-reads the target app's focused window and controls,
+checks the label, bounds, enabled state and window title, then calls AXPress. Only the
+exact confirmed control is pressed. Presses are never automatically retried, including
+API timeouts where the app may already have started an action.
+
+The controller follows submission with a request in `mode=verify`, sharing bounded
+pre/post metadata and a fresh screenshot when screen vision is enabled. Verification
+outputs cannot contain another action, target or workflow. Neither the API result nor
+model verification marks workflow steps complete; those remain user-confirmed.
+There is no arbitrary shell, text-entry, coordinate-click or unattended action loop.
+
+Ollama's schema now decodes `request_kind` before actions/prose. Movement proposals
+containing a located box are converted to moving to its center; highlight requests
+remain highlights. Valid fractional boxes intersecting an image edge are clipped.
+Invalid responses get at most one model correction with the same current evidence;
+invalid proposals are neither executed nor persisted. Local context defaults to
+16384 tokens with six bounded history messages; context/thinking settings can be
+configured through environment variables for model comparisons.
+
+`scripts/evaluate_movement.py` evaluates actual Ollama responses against an annotated
+synthetic desktop: four corners, center, clock with/without pixels, Fastfetch Apple
+logo, terminal output, close button, and a nonexistent object. It executes no desktop
+actions and does not read the user's screen. Tests in test_computer_use.py cover
+execution boundaries and repair with explicit doubles; they do not measure LLM
+recognition quality.
+
+## App lifecycle extensions
+
+Installed apps are enumerated from normal /Applications and /System/Applications
+locations (including Utilities and Finder); background-only apps and protected apps
+are excluded. Regular metadata samples include AX window records across running apps,
+with stable-per-observation bundle/index window IDs. Window bounds and titles are
+rechecked at execution so reordered, renamed or moved windows cannot be closed by a
+stale proposal. There is no fallback from close_window to quit_app.
+
+Lifecycle actions pass through the same confirmed ComputerUse executor and verification
+worker as control presses. launch_app uses NSWorkspace.openApplication; quit_app uses
+NSRunningApplication.terminate; close_window uses AXCloseButton plus AXPress. Terminal
+new_window resolves exactly one enabled unmodified Command-N menu item through AX;
+no guessed keystrokes or LLM scripts are executed. Native request_kind declares the
+requested operation so runtime rejects incompatible action substitution. request_app_access
+handles disabled app metadata, separately from screenshot consent.
+
+Screen capture now enumerates all shareable windows, including hidden ones. When the
+companion is not listed as a shareable app, before/after CG window checks must show
+no visible owned windows or the image is discarded. Verification capture failure can
+fall back to fresh metadata with an explicit unavailable-image observation; this never
+re-executes the action. Normal screen-dependent requests still fail closed.

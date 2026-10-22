@@ -48,13 +48,14 @@ class Target:
         if any(isinstance(n, bool) or not isinstance(n, (float, int)) or not math.isfinite(n) for n in nums):
             raise ValidationError('Target coordinates must be finite numbers.')
         x, y, w, h = nums
-        if not (0 <= x < 1 and 0 <= y < 1 and 0 < w <= 1 and 0 < h <= 1 and x+w <= 1.000001 and y+h <= 1.000001):
+        if not (0 <= x < 1 and 0 <= y < 1 and 0 < w <= 1 and 0 < h <= 1 ):
             raise ValidationError('Target is outside the captured screen.')
-        return cls(text(value['label'], 'target label', 240), x, y, w, h)
+        # A partially visible object may extend beyond the frame; clip its visible box.
+        return cls(text(value['label'], 'target label', 240), x, y, min(w, 1-x), min(h, 1-y))
 
 
 def validate_response(value, allowed_sources, *, planning=False, has_screen=False, desktop=None, desktop_snapshot=None):
-    keys(value, ('message', 'source_ids', 'workflow', 'target', 'desktop_action'), ('message', 'source_ids', 'workflow', 'target'))
+    keys(value, ('request_kind', 'message', 'source_ids', 'workflow', 'target', 'desktop_action'), ('message', 'source_ids', 'workflow', 'target'))
     result = {'message': text(value['message'], 'message', 12000),
               'source_ids': source_ids(value['source_ids'], allowed_sources),
               'workflow': None, 'target': None}
@@ -82,6 +83,17 @@ def validate_response(value, allowed_sources, *, planning=False, has_screen=Fals
     elif planning:
         # A provider can ask a clarification rather than invent a plan.
         pass
+    request_kind = value.get('request_kind')
+    if request_kind is not None and request_kind not in ('move', 'move_object', 'move_geometry', 'highlight', 'answer', 'plan', 'act', 'press_control', 'launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app'):
+        raise ValidationError('Invalid request kind.')
+    if request_kind in ('move', 'move_object', 'move_geometry') and value['target'] is not None and value.get('desktop_action') is None:
+        if not has_screen or desktop is None:
+            raise ValidationError('Moving to an observed object requires fresh screen pixels.')
+        box = Target.parse(value['target'])
+        # The model identifies intent and object. Runtime converts a located box to its center.
+        value = dict(value, target=None, desktop_action={
+            'type': 'move_to_point', 'basis': 'image', 'label': box.label,
+            'x': box.x+box.width/2, 'y': box.y+box.height/2})
     if value['target'] is not None:
         if not has_screen:
             raise ValidationError('Screen guidance requires an explicitly supplied screenshot.')
@@ -90,17 +102,43 @@ def validate_response(value, allowed_sources, *, planning=False, has_screen=Fals
         if desktop is None:
             raise ValidationError('Desktop actions require enabled native desktop context.')
         action = value['desktop_action']
-        if action == {'type': 'request_screen'}:
-            result['desktop_action'] = {'type': 'request_screen', 'label': 'Enable local screen vision'}
+        if action in ({'type': 'request_screen'}, {'type': 'request_app_access'}):
+            result['desktop_action'] = dict(action, label='Enable local screen vision' if action['type'] == 'request_screen' else 'Enable app awareness')
         elif isinstance(action, dict) and set(action) == {'type', 'destination'} and action.get('type') == 'move_companion':
-            destinations = {'left_edge': 'left edge', 'right_edge': 'right edge', 'bottom_left': 'bottom left', 'bottom_right': 'bottom right'}
+            destinations = {'left_edge': 'left edge', 'right_edge': 'right edge', 'bottom_left': 'bottom left', 'bottom_right': 'bottom right', 'top_left': 'upper left', 'top_right': 'upper right', 'center': 'center'}
             destination = action['destination']
             if not isinstance(destination, str) or destination not in destinations:
                 raise ValidationError('Invalid companion destination.')
+            if result['target'] is not None or result['workflow'] is not None:
+                raise ValidationError('Companion movement cannot include a screen target or workflow.')
             result['desktop_action'] = {'type': 'move_companion', 'destination': destination,
                                         'label': 'Move to '+destinations[destination]}
+        elif isinstance(action, dict) and action.get('type') == 'move_to_point':
+            keys(action, ('type', 'x', 'y', 'basis', 'label'), ('type', 'x', 'y', 'basis', 'label'))
+            for coordinate in ('x', 'y'):
+                number = action[coordinate]
+                if isinstance(number, bool) or not isinstance(number, (float, int)) or not math.isfinite(number) or not 0 <= number <= 1:
+                    raise ValidationError('Movement coordinates must be finite fractions between 0 and 1.')
+            if action['basis'] not in ('screen', 'image'):
+                raise ValidationError('Invalid movement coordinate basis.')
+            if action['basis'] == 'image' and not has_screen:
+                raise ValidationError('Moving to a visual object requires a fresh screen image.')
+            if result['target'] is not None or result['workflow'] is not None:
+                raise ValidationError('Companion movement cannot include a screen target or workflow.')
+            result['desktop_action'] = dict(action, label=text(action['label'], 'movement label', 240))
         else:
-            result['desktop_action'] = desktop.authorize_action(action, snapshot=desktop_snapshot)
+            try:
+                result['desktop_action'] = desktop.authorize_action(action, snapshot=desktop_snapshot)
+            except ValueError as error:
+                raise ValidationError(str(error)) from error
+    action = result.get('desktop_action') or {}
+    if request_kind == 'move_object' and action.get('type') != 'request_screen':
+        if not has_screen or action.get('type') != 'move_to_point' or action.get('basis') != 'image':
+            raise ValidationError('Moving to a named object needs current image coordinates; a corner is not a search action. Request screen vision instead.')
+    if request_kind in ('launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'press_control') and action.get('type') not in (request_kind, 'request_app_access'):
+        raise ValidationError('The requested operation is '+request_kind+'; '+str(action.get('type'))+' is not an equivalent operation.')
+    if request_kind in ('move', 'move_object', 'move_geometry') and action.get('type') not in ('move_companion', 'move_to_point', 'request_screen'):
+        raise ValidationError('Movement needs a movement action, a screen request, or a clarification classified as answer.')
     return result
 
 
@@ -113,8 +151,9 @@ _STEP = {'type': 'object', 'additionalProperties': False,
          'required': ['instruction', 'application', 'keyboard_hint', 'source_ids']}
 RESPONSE_SCHEMA = {
     'type': 'object', 'additionalProperties': False,
-    'required': ['message', 'source_ids', 'workflow', 'target'],
+    'required': ['request_kind', 'desktop_action', 'message', 'source_ids', 'workflow', 'target'],
     'properties': {
+        'request_kind': {'enum': ['move_object', 'move_geometry', 'highlight', 'answer', 'plan', 'press_control', 'launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app']},
         'message': _TEXT, 'source_ids': _IDS,
         'workflow': {'anyOf': [{'type': 'null'}, {'type': 'object', 'additionalProperties': False,
             'required': ['title', 'steps'], 'properties': {'title': _TEXT,
@@ -124,13 +163,25 @@ RESPONSE_SCHEMA = {
             **{k: {'type': 'number', 'minimum': 0, 'maximum': 1} for k in ('x', 'y', 'width', 'height')}}}]},
         'desktop_action': {'anyOf': [{'type': 'null'},
             {'type': 'object', 'additionalProperties': False, 'required': ['type'],
-             'properties': {'type': {'const': 'request_screen'}}},
+             'properties': {'type': {'enum': ['request_screen', 'request_app_access']}}},
             {'type': 'object', 'additionalProperties': False, 'required': ['type', 'destination'],
              'properties': {'type': {'const': 'move_companion'},
-                'destination': {'enum': ['left_edge', 'right_edge', 'bottom_left', 'bottom_right']}}},
+                'destination': {'enum': ['left_edge', 'right_edge', 'bottom_left', 'bottom_right', 'top_left', 'top_right', 'center']}}},
+            {'type': 'object', 'additionalProperties': False, 'required': ['type', 'x', 'y', 'basis', 'label'],
+             'properties': {'type': {'const': 'move_to_point'}, 'basis': {'enum': ['screen', 'image']},
+                'label': _TEXT, 'x': {'type': 'number', 'minimum': 0, 'maximum': 1},
+                'y': {'type': 'number', 'minimum': 0, 'maximum': 1}}},
             {'type': 'object', 'additionalProperties': False, 'required': ['type', 'bundle_id'],
-             'properties': {'type': {'const': 'focus_app'}, 'bundle_id': _TEXT}},
+             'properties': {'type': {'enum': ['focus_app', 'launch_app', 'quit_app', 'new_window']}, 'bundle_id': _TEXT}},
+            {'type': 'object', 'additionalProperties': False, 'required': ['type', 'window_id'],
+             'properties': {'type': {'const': 'close_window'}, 'window_id': _TEXT}},
             {'type': 'object', 'additionalProperties': False, 'required': ['type', 'control_id'],
-             'properties': {'type': {'const': 'highlight_control'}, 'control_id': _TEXT}}]}
+             'properties': {'type': {'enum': ['highlight_control', 'press_control']}, 'control_id': _TEXT}}]}
     }
+}
+
+# Decode the intent and action before prose, so an answer cannot anchor an obsolete task.
+RESPONSE_SCHEMA['properties'] = {
+    key: RESPONSE_SCHEMA['properties'][key]
+    for key in ('request_kind', 'desktop_action', 'target', 'message', 'source_ids', 'workflow')
 }

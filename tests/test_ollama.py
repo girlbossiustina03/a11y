@@ -49,6 +49,17 @@ class OllamaTests(unittest.TestCase):
             provider.complete('system', [{'role': 'user', 'content': 'Screen'}], image_data='data:image/png;base64,abc')
             self.assertEqual(request.call_args.args[1]['messages'][-1]['images'], ['abc'])
 
+    def test_context_and_thinking_are_configurable_for_model_comparison(self):
+        provider = self.provider()
+        provider.metadata['local-model'] = {'capabilities': ['completion']}
+        with patch.dict('os.environ', {'A11Y_OLLAMA_CONTEXT': '16384', 'A11Y_OLLAMA_THINKING': 'false'}), patch.object(provider, 'request', return_value={'done': True, 'message': {'content': '{}'}}) as request:
+            provider.complete('system', [{'role': 'user', 'content': 'Move left'}])
+        body = request.call_args.args[1]
+        self.assertEqual(body['options']['num_ctx'], 16384)
+        self.assertIs(body['think'], False)
+        self.assertIn('request_kind', body['format']['required'])
+        self.assertEqual(list(body['format']['properties'])[0], 'request_kind')
+
     def test_incomplete_and_invalid_model_output_is_rejected(self):
         for result in [{'done': False}, {'done': True, 'done_reason': 'length'},
                        {'done': True, 'message': {'content': 'not json'}}]:

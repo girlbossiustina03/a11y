@@ -30,14 +30,22 @@ import Foundation
         let x = Double(argument("--x") ?? "0") ?? 0
         let y = Double(argument("--y") ?? "0") ?? 0
         do {
-            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
             guard let display = content.displays.min(by: {
                 let a = CGDisplayBounds($0.displayID).origin, b = CGDisplayBounds($1.displayID).origin
                 return hypot(a.x-x, a.y-y) < hypot(b.x-x, b.y-y)
             }) else { emit(["error": "No display is available to capture."]); return }
             let excluded = content.applications.filter { $0.processID == ownPID }
-            guard !excluded.isEmpty else {
-                emit(["error": "Could not identify the companion's windows for exclusion. Screen vision was not captured."]); return
+            func companionIsVisible() -> Bool {
+                guard ownPID > 0,
+                      let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return true }
+                return windows.contains { ($0[kCGWindowOwnerPID as String] as? Int32) == ownPID }
+            }
+            // A hidden companion may not appear in SCShareableContent.applications.
+            // No exclusion is needed when window-server evidence confirms it has no
+            // visible windows. Check again after capture and discard if that changes.
+            guard !excluded.isEmpty || !companionIsVisible() else {
+                emit(["error": "The companion is visible but could not be excluded. Hide its panels and retry."]); return
             }
             let visibleWindows = content.windows.filter {
                 $0.isOnScreen && $0.windowLayer == 0 && $0.owningApplication?.processID != ownPID
@@ -56,6 +64,9 @@ import Foundation
             configuration.showsCursor = false
             configuration.capturesAudio = false
             let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+            guard !excluded.isEmpty || !companionIsVisible() else {
+                emit(["error": "A companion window appeared during capture. The image was discarded."]); return
+            }
             let bitmap = NSBitmapImageRep(cgImage: image)
             guard let png = bitmap.representation(using: .png, properties: [:]) else {
                 emit(["error": "Could not encode screen image."]); return

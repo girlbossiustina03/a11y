@@ -75,7 +75,16 @@ class OllamaProvider:
                 models.append({'name': name, 'vision': 'vision' in capabilities})
         return models
 
-    def complete(self, system, messages, *, image_data=None):
+    def interpret_request(self, request, recent_users=()):
+        from .request_plan import INTENT_SCHEMA, INTENT_SYSTEM, validate_plan
+        payload = {'recent_user_requests': list(recent_users)[-2:], 'current_request': request}
+        return validate_plan(self.complete(INTENT_SYSTEM, [{'role': 'user', 'content': json.dumps(payload)}],
+                                          response_schema=INTENT_SCHEMA, max_tokens=400, thinking=False))
+
+    def complete_structured(self, system, messages, *, schema, image_data=None):
+        return self.complete(system, messages, image_data=image_data, response_schema=schema)
+
+    def complete(self, system, messages, *, image_data=None, response_schema=None, max_tokens=3000, thinking=None):
         local_url(self.config.base_url)
         if not self.config.model:
             raise ProviderError('Select a local model in Settings → AI connection → Find local Ollama models.')
@@ -87,10 +96,24 @@ class OllamaProvider:
         messages = [dict(m) for m in messages]
         if image_data:
             messages[-1]['images'] = [image_data.split(',', 1)[1]]
-        result = self.request('/api/chat', {
-            'model': model, 'messages': [{'role': 'system', 'content': system}] + messages,
-            'stream': False, 'format': RESPONSE_SCHEMA, 'keep_alive': '5m',
-            'options': {'temperature': 0.3, 'num_ctx': 8192, 'num_predict': 3000}})
+        try:
+            context_length = int(os.getenv('A11Y_OLLAMA_CONTEXT', '16384'))
+            if not 4096 <= context_length <= 65536:
+                raise ValueError()
+        except ValueError:
+            raise ProviderError('A11Y_OLLAMA_CONTEXT must be an integer from 4096 to 65536.') from None
+        body = {'model': model, 'messages': [{'role': 'system', 'content': system}] + messages,
+            'stream': False, 'format': response_schema if response_schema is not None else RESPONSE_SCHEMA, 'keep_alive': '5m',
+            'options': {'temperature': 0.2, 'num_ctx': context_length, 'num_predict': max_tokens}}
+        requested_thinking = thinking
+        thinking = os.getenv('A11Y_OLLAMA_THINKING', 'default').lower()
+        if thinking not in ('default', 'true', 'false'):
+            raise ProviderError('A11Y_OLLAMA_THINKING must be default, true or false.')
+        if thinking != 'default':
+            body['think'] = thinking == 'true'
+        if requested_thinking is not None and ('thinking' in info.get('capabilities', []) or requested_thinking in info.get('thinking', {}).get('values', [])):
+            body['think'] = requested_thinking
+        result = self.request('/api/chat', body)
         try:
             if result.get('done') is not True or result.get('done_reason') not in (None, 'stop'):
                 raise ProviderError('Ollama response was incomplete. Try a shorter request.')

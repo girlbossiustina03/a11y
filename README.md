@@ -282,3 +282,116 @@ reviewed; restarting setup keeps the previously approved details until the next 
 These details go to the configured provider, so Ollama keeps inference local while a
 configured remote provider receives them. Existing completed introductions work
 without repeating setup.
+
+Desktop metadata now includes a bounded list of onscreen app-window positions, so
+unfocused windows can be represented alongside the focused window's controls. The
+list does not establish which controls are unobscured. For precise visual targets,
+enable local screen vision from the character's right-click menu and approve macOS
+Screen Recording permission. Each subsequent request gets a fresh frame.
+
+## Guided setup and simpler Settings
+
+The first launch opens a five-page setup for optional personal details, explanation
+style, guidance pacing, keyboard preference, animation and learning suggestions.
+The desktop-access page explains app awareness and local screen vision and provides
+real enable/pause buttons. The explanation and explicit Enable action provide
+consent directly in setup, followed by macOS permission handling when required.
+Outside setup, a short styled access dialog explains the choice before enabling it. Every permission can stay off. Microphone permission is not
+requested because native speech input is not implemented.
+
+Existing users see this new access tour once; it can be reopened using Settings →
+Personalize and set up access. “Finish later” closes the tour; personal answers saved
+before the access page remain saved, and unfinished setup is offered next launch.
+Access stays session-only, even when macOS has already granted OS permission.
+
+Settings starts with only essentials. Preferences and Saved tasks remain visible;
+Advanced reveals conversation history, company documents, AI connection details and
+desktop diagnostics. Talking to the companion stays in its small desktop prompt.
+
+Requests such as “move to the left of the screen” are handled as structured
+move_companion actions. Once the model returns a valid movement action, the character
+moves immediately, within display bounds and respecting reduced motion. It cannot
+combine that movement with an unrelated screen highlight. Screen guidance and OS
+access still retain their separate review/consent steps.
+
+The model can also select a precise destination with move_to_point: normalized x/y
+coordinates relative to the display, or to a current screenshot for visual objects.
+For example, a visible logo or drawing can be a destination even if it is not a
+clickable control. The character is centered on the selected point and kept inside
+usable screen bounds. Image destinations require fresh pixel evidence and matching
+display geometry. Upper-left and upper-right are also explicit supported corners.
+
+## Dark desktop appearance
+
+The native companion, setup, access dialogs, context menus and management panel share
+a dark neutral palette with blue actions and visible keyboard focus. Settings uses
+grouped rows with compact trailing buttons. The desktop prompt retains its compact
+pill shape and separate circular Send/Settings buttons, now with painted icons.
+These are Qt controls styled for a consistent macOS-like appearance; native macOS
+permission dialogs remain managed by the operating system.
+
+## Computer use and model evaluation
+
+The native assistant can now propose `press_control` for an exact observed enabled
+Accessibility control. It shows which control and app will be pressed; execution
+requires your confirmation. The native helper revalidates the window, control label
+and bounds before using AXPress. An uncertain press is never retried automatically.
+After submission, the assistant observes again and reports what it can verify. It
+cannot chain another action during verification, and task steps still require your
+confirmation. App activation, mascot movement and visual guidance remain available.
+Arbitrary shell execution, coordinate clicking, typing and unattended sequences are
+not implemented. This is the first bounded computer-use loop, not a general agent
+with unrestricted computer control.
+
+Candidate local model to benchmark on a 24 GB Mac:
+
+```sh
+ollama pull qwen3.5:9b
+```
+
+Keep Ollama running, quit old companion instances, then launch with
+`A11Y_AI_MODEL=qwen3.5:9b`. The model is configurable; stronger behavior is not assumed
+from parameter count alone. To compare real grounding without reading your desktop:
+
+```sh
+.venv/bin/python scripts/evaluate_movement.py --model qwen3-vl:8b-instruct --report /private/tmp/a11y-qwen3-vl-report.json
+.venv/bin/python scripts/evaluate_movement.py --model qwen3.5:9b --report /private/tmp/a11y-qwen35-report.json
+```
+
+The evaluator uses the synthetic fixture in `scripts/fixtures/movement-scene.svg`,
+checks eleven requests, prints actual coordinates/action types and exits nonzero on
+failure. It never executes model actions. Connection failures are reported explicitly.
+`A11Y_OLLAMA_CONTEXT` controls context length (default 16384); optional
+`A11Y_OLLAMA_THINKING=true|false|default` requests the model's supported thinking mode.
+Larger context and thinking can increase latency and memory use.
+
+## Opening apps and closing specific windows
+
+With App awareness enabled, the model can propose distinct confirmed actions:
+
+- Open an installed normal app by its observed bundle ID, using LaunchServices.
+- Focus a running app.
+- Open a new window in running Terminal using its actual Command-N menu action.
+- Close one AX-observed window by its ID, with title/bounds checked again before closing.
+- Request graceful quit of one running app, without force-killing it.
+
+These actions are not interchangeable in the model contract. No shell commands,
+guessed window clicks or arbitrary keyboard macros are used. macOS Accessibility
+permission is required for the Terminal menu and close-button operations. Window
+selection can use AX titles and bounds without a screenshot; unknown or ambiguous
+windows require clarification. Terminal may ask you to confirm closing running
+processes; A11y does not automatically dismiss that confirmation.
+
+After an approved action, verification compares fresh app/window evidence. If screen
+capture fails, it can report what metadata establishes and clearly state that image
+evidence is unavailable. It does not resubmit the action or mark task progress done.
+
+Compare real model operation selection without launching or closing your actual apps:
+
+```sh
+.venv/bin/python scripts/evaluate_app_actions.py --model qwen3-vl:8b-instruct --report /private/tmp/a11y-app-evaluation.json
+```
+
+The nine cases use synthetic installed-app/window metadata, including Stremio,
+Terminal, a lower-right `zsh` window, ambiguous windows and access being off. This
+measures model interpretation separately from OS execution, which needs a live check.

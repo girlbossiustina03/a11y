@@ -152,10 +152,10 @@ class NativeTests(unittest.TestCase):
         self.assertFalse(self.window.tabs.tabBar().isVisible())
         self.assertEqual(self.window.panel_navigation.count(), self.window.tabs.count())
         self.assertFalse(self.window.mascot.card.isVisible())
-        self.window.panel_navigation.setCurrentRow(2)
+        self.window.panel_navigation.setCurrentRow(self.window.navigation_pages.index(2))
         self.assertEqual(self.window.tabs.currentIndex(), 2)
         self.window.tabs.setCurrentIndex(4)
-        self.assertEqual(self.window.panel_navigation.currentRow(), 4)
+        self.assertEqual(self.window.panel_navigation.currentRow(), self.window.navigation_pages.index(4))
         self.window.hide()
         self.window.mascot_action('talk')
         self.qt.processEvents()
@@ -195,7 +195,7 @@ class NativeTests(unittest.TestCase):
         frame = {'image_data': 'data:image/png;base64,ACTUAL_FRAME_TEST',
                  'screen': {'x': 0, 'y': 0, 'width': 800, 'height': 800},
                  'windows': [{'app': 'Xcode', 'title': 'Project'}], 'captured_monotonic': time.monotonic()}
-        with patch.object(self.window.vision, 'capture', return_value=frame), patch.object(provider, 'complete', side_effect=self.provider.complete):
+        with patch.object(self.window.vision, 'capture', return_value=frame), patch.object(provider, 'interpret_request', return_value={'operation': 'inspect_screen', 'app_name': '', 'target': ''}), patch.object(provider, 'complete_structured', side_effect=lambda system, messages, schema, image_data=None: self.provider.complete(system, messages, image_data=image_data)):
             self.window.mascot_submit('What is on my screen?', 'chat')
             deadline = time.monotonic()+3
             while self.window.worker.isRunning() and time.monotonic() < deadline:
@@ -281,3 +281,156 @@ class NativeTests(unittest.TestCase):
         self.assertIn('AI is not configured', self.window.mascot.bubble.toPlainText())
         self.assertFalse(self.window.mascot.busy)
         self.assertFalse(self.window.isVisible())
+
+
+    def test_guided_setup_saves_details_and_finishes_without_enabling_permissions(self):
+        wizard = self.window.setup_dialog
+        self.assertTrue(wizard.isVisible())
+        wizard.advance()
+        wizard.fields['display_name'].setText('Sam')
+        wizard.fields['work_role'].setText('Engineer')
+        wizard.advance()
+        self.assertEqual(self.window.introduction.user_details(), {})
+        wizard.fields['detail'].setCurrentIndex(wizard.fields['detail'].findData('concise'))
+        wizard.advance()
+        self.assertEqual(self.window.introduction.user_details()['display_name'], 'Sam')
+        self.assertEqual(self.service.adaptation.effective(self.service.identity)['detail'], 'concise')
+        wizard.advance()
+        wizard.advance()
+        self.assertFalse(wizard.isVisible())
+        self.assertTrue(self.window.introduction.get()['access_setup_reviewed'])
+        self.assertFalse(self.window.desktop_monitor.enabled)
+        self.assertFalse(self.window.vision.enabled)
+        self.assertEqual(self.provider.calls, [])
+
+    def test_setup_permission_buttons_use_real_consent_paths(self):
+        wizard = self.window.setup_dialog
+        with patch.object(self.window, 'desktop_action') as context:
+            wizard.context_button.click()
+            context.assert_called_once_with('context:toggle', consented=True)
+        with patch.object(self.window, 'toggle_screen_vision') as vision:
+            wizard.vision_button.click()
+            vision.assert_called_once_with(consented=True)
+        self.assertFalse(self.window.vision.enabled)
+
+    def test_settings_default_to_essentials_with_advanced_pages_hidden(self):
+        self.assertEqual(self.window.tabs.currentIndex(), self.window.essentials_tab)
+        self.assertEqual(self.window.panel_navigation.item(0).text(), 'Settings')
+        for index in self.window.advanced_pages:
+            self.assertTrue(self.window.panel_navigation.item(self.window.navigation_pages.index(index)).isHidden())
+        self.window.advanced_navigation.setChecked(True)
+        for index in self.window.advanced_pages:
+            self.assertFalse(self.window.panel_navigation.item(self.window.navigation_pages.index(index)).isHidden())
+
+
+    def test_setup_access_action_has_no_duplicate_confirmation(self):
+        wizard = self.window.setup_dialog
+        with patch.object(self.window, 'confirm_access') as confirm, patch.object(self.window.desktop_monitor, 'enable') as enable:
+            wizard.context_button.click()
+            enable.assert_called_once()
+            confirm.assert_not_called()
+
+    def test_settings_access_can_be_declined_without_enabling(self):
+        with patch.object(self.window, 'confirm_access', return_value=False) as confirm, patch.object(self.window.desktop_monitor, 'enable') as enable:
+            self.window.desktop_action('context:toggle')
+            confirm.assert_called_once()
+            enable.assert_not_called()
+
+
+    def test_left_then_right_requests_move_without_reusing_old_target(self):
+        self.service.adaptation.set_explicit(self.service.identity, {'reduced_motion': True}, False)
+        self.service.desktop_session.append({'role': 'assistant',
+            'content': 'The left Terminal close button is red.', 'source_documents': []})
+        for request, destination in [('move to the left of the screen', 'left_edge'),
+                                     ('move to the right of the screen', 'right_edge')]:
+            self.provider.invalid = {'message': 'I’ll move to that edge.', 'source_ids': [],
+                'workflow': None, 'target': None,
+                'desktop_action': {'type': 'move_companion', 'destination': destination}}
+            self.window.mascot_submit(request, 'chat')
+            deadline = time.monotonic()+3
+            while self.window.worker.isRunning() and time.monotonic() < deadline:
+                self.qt.processEvents()
+                QTest.qWait(5)
+            self.qt.processEvents()
+            area = self.window.mascot.screen().availableGeometry()
+            expected = area.left()+16 if destination == 'left_edge' else area.right()-self.window.mascot.width()-16
+            self.assertEqual(self.window.mascot.x(), expected)
+            self.assertIsNone(self.window.pending_target)
+            self.assertIsNone(self.window.pending_desktop_action)
+            self.assertEqual(self.provider.calls[-1][1][-1]['content'], request)
+            self.assertEqual(self.provider.contexts[-1]['request'], request)
+
+
+    def test_upper_left_changes_both_axes_and_precise_point_centers_character(self):
+        self.service.adaptation.set_explicit(self.service.identity, {'reduced_motion': True}, False)
+        mascot = self.window.mascot
+        self.window.move_companion('bottom_right')
+        self.window.move_companion('top_left')
+        area = mascot.screen().availableGeometry()
+        self.assertEqual(mascot.pos(), QPoint(area.left()+16, area.top()+16))
+        self.window.move_companion_to(.5, .5, mascot.screen())
+        full = mascot.screen().geometry()
+        self.assertAlmostEqual(mascot.x()+mascot.width()/2, full.center().x(), delta=1)
+        self.assertAlmostEqual(mascot.y()+mascot.height()/2, full.center().y(), delta=1)
+
+    def test_visual_point_response_uses_its_capture_and_rejects_expired_capture(self):
+        self.service.adaptation.set_explicit(self.service.identity, {'reduced_motion': True}, False)
+        screen = self.window.mascot.screen()
+        area = screen.geometry()
+        response = {'message': 'Moving toward the drawing.', 'sources': [], 'workflow': None,
+            'target': None, 'desktop_action': {'type': 'move_to_point', 'basis': 'image',
+                'x': .5, 'y': .5, 'label': 'Apple drawing'},
+            'visual_capture': {'screen': {'x': area.x(), 'y': area.y(), 'width': area.width(), 'height': area.height()},
+                               'captured_monotonic': time.monotonic()}}
+        self.window.received(response)
+        mascot = self.window.mascot
+        self.assertAlmostEqual(mascot.x()+mascot.width()/2, area.center().x(), delta=1)
+        old = mascot.pos()
+        response['desktop_action']['x'] = .1
+        response['visual_capture']['captured_monotonic'] -= 100
+        self.window.received(response)
+        self.assertIn('expired', mascot.bubble.toPlainText())
+        self.assertEqual(mascot.pos(), old)
+
+
+    def test_confirmed_app_action_runs_worker_then_verifies_without_another_action(self):
+        self.window.setup_dialog.reject()
+        self.window.last_user_request = ('Press New Folder', 'assist', True)
+        result = {'type': 'press_control', 'label': 'New Folder', 'status': 'submitted', 'task_completed': False}
+        self.provider.invalid = {'request_kind': 'answer', 'message': 'The app changed; please check the folder.',
+            'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
+        with patch('companion.desktop.ComputerUse.execute_confirmed', return_value=result) as execute:
+            self.window.pending_desktop_action = {'type': 'press_control', 'control_id': 'control-0', 'label': 'New Folder'}
+            self.window.desktop_action('desktop:apply')
+            deadline = time.monotonic()+3
+            while time.monotonic() < deadline:
+                self.qt.processEvents()
+                QTest.qWait(5)
+                if self.provider.calls and not self.window.worker.isRunning():
+                    break
+            self.qt.processEvents()
+        execute.assert_called_once()
+        self.assertEqual(self.provider.contexts[-1]['mode'], 'verify')
+        self.assertEqual(self.provider.contexts[-1]['last_action_result']['status'], 'submitted')
+        self.assertIn('app changed', self.window.mascot.bubble.toPlainText())
+        self.assertTrue(self.window.mascot.reply_panel.isVisible())
+        self.assertIsNone(self.window.pending_desktop_action)
+
+
+    def test_post_action_verification_can_use_metadata_when_screen_capture_fails(self):
+        self.window.vision.set_enabled(True)
+        self.service.last_action_result = {'type': 'focus_app', 'status': 'submitted', 'task_completed': False}
+        self.provider.invalid = {'request_kind': 'answer', 'message': 'I can inspect app metadata, but screen capture is unavailable.',
+            'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
+        with patch.object(self.window.vision, 'capture', side_effect=RuntimeError('Companion exclusion unavailable')):
+            self.window.input.setPlainText('Open Terminal')
+            self.window.ask(mode='verify', from_mascot=True)
+            deadline = time.monotonic()+3
+            while self.window.worker.isRunning() and time.monotonic() < deadline:
+                self.qt.processEvents()
+                QTest.qWait(5)
+            self.qt.processEvents()
+        self.assertIsNone(self.provider.calls[-1][2])
+        self.assertEqual(self.provider.contexts[-1]['visual_context']['status'], 'unavailable')
+        self.assertFalse(self.provider.contexts[-1]['evidence']['fresh_image'])
+        self.assertIsNone(self.window.pending_desktop_action)
