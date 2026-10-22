@@ -4,11 +4,8 @@
 
 **An adaptive workplace AI companion with floating desktop presence, computer use, and strict local privacy**
 
-![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-sqircle&logo=python&logoColor=white)
-![PyQt6](https://img.shields.io/badge/PyQt6-6.7%2B-41CD52?style=flat-sqircle&logo=qt&logoColor=white)
 ![macOS](https://img.shields.io/badge/macOS-Sonoma%2014%2B-000000?style=flat-sqircle&logo=apple&logoColor=white)
 ![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D6?style=flat-sqircle&logo=windows&logoColor=white)
-![Linux](https://img.shields.io/badge/Linux-WSL2%20%2F%20Wayland-FCC624?style=flat-sqircle&logo=linux&logoColor=black)
 ![Ollama](https://img.shields.io/badge/Ollama-Local%20AI-white?style=flat-sqircle&logo=ollama&logoColor=black)
 
 </div>
