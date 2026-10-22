@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>A11y - Workplace Companion</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Simulator Spațiu de Lucru -->
+  <main class="workspace">
+    <header class="workspace-header">
+      <h2>Task-ul tău activ (Jira / Simulator Tichet)</h2>
+      <span class="badge">Primul tău job</span>
+    </header>
+
+    <section class="ticket-box">
+      <label for="rawTask"><strong>Mesaj / Tichet primit de la echipă:</strong></label>
+      <textarea id="rawTask" rows="3" placeholder="Lipește aici mesajul stufos primit...">Salut! Te rog să verifici raportul lunar de vânzări pe Q3, să identifici discordanțele din tabelul de cheltuieli, să extragi doar rândurile cu erori și să-mi trimiți o listă curată până la ora 15:00.</textarea>
+      <button class="btn-primary" onclick="decomposeTask()">Descompune cu A11y (AI)</button>
+    </section>
+
+    <section class="task-guide" id="guideSection">
+      <h3>Ghidul tău pas-cu-pas:</h3>
+      <ul id="stepsList" class="steps-list">
+        <!-- Pașii generați vor apărea aici -->
+      </ul>
+    </section>
+  </main>
+
+  <!-- Mascota A11y (dreapta-jos) -->
+  <aside class="a11y-widget">
+    <div class="a11y-bubble" id="a11yBubble">
+      Salut! Eu sunt <strong>A11y</strong>. Apasă pe mine sau descompune un task când te simți copleșit.
+    </div>
+
+    <div class="a11y-avatar state-idle" id="a11yAvatar" onclick="manualTrigger()">
+      <svg viewBox="0 0 48 48" width="96" height="96" class="pixel-chameleon" style="display: block;">
+        <!-- Corp verde cameleon -->
+        <rect class="body-part" x="12" y="18" width="22" height="18" rx="4" fill="#48bb78" />
+        <rect class="body-part" x="8" y="24" width="6" height="12" rx="2" fill="#48bb78" />
+        <rect class="body-part" x="32" y="22" width="6" height="10" rx="2" fill="#48bb78" />
+        
+        <!-- Coadă spiralată -->
+        <path class="tail-part" d="M8 32 C4 32, 2 26, 6 22 C9 19, 11 24, 8 26" fill="none" stroke="#48bb78" stroke-width="3" stroke-linecap="round"/>
+
+        <!-- Picioare -->
+        <rect class="leg-part" x="14" y="36" width="4" height="4" fill="#2f855a" />
+        <rect class="leg-part" x="28" y="36" width="4" height="4" fill="#2f855a" />
+
+        <!-- Căști mari audio (Neurodivergență & Reglaj senzorial) -->
+        <path d="M16 16 C16 10, 32 10, 32 16" fill="none" stroke="#2d3748" stroke-width="3" stroke-linecap="round" />
+        <rect x="13" y="14" width="4" height="8" rx="2" fill="#3182ce" />
+        <rect x="31" y="14" width="4" height="8" rx="2" fill="#3182ce" />
+
+        <!-- Ochi stâng mare cu pupilă mobilă -->
+        <rect x="20" y="16" width="6" height="6" fill="#ffffff" />
+        <rect class="pupil pupil-left" x="22" y="18" width="2" height="2" fill="#1a202c" />
+
+        <!-- Ochi drept cu pupilă mobilă -->
+        <rect x="28" y="16" width="6" height="6" fill="#ffffff" />
+        <rect class="pupil pupil-right" x="30" y="18" width="2" height="2" fill="#1a202c" />
+
+        <!-- Gură calmă -->
+        <rect x="31" y="28" width="4" height="2" fill="#1a202c" />
+      </svg>
+    </div>
+  </aside>
+
+  <script src="app.js"></script>
+</body>
+</html>
