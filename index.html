@@ -1,47 +1,87 @@
 <!DOCTYPE html>
-<html lang="ro">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>A11y - Workplace Companion</title>
+  <meta name="a11y-token" content="__A11Y_SESSION_TOKEN__">
+  <title>A11y · Your workplace, at your pace</title>
   <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
 </head>
 <body>
-
-  <!-- Simulator Spațiu de Lucru -->
-  <main class="workspace">
-    <header class="workspace-header">
-      <h2>Task-ul tău activ (Jira / Simulator Tichet)</h2>
-      <span class="badge">Primul tău job</span>
-    </header>
-
-    <section class="ticket-box">
-      <label for="rawTask"><strong>Mesaj / Tichet primit de la echipă:</strong></label>
-      <textarea id="rawTask" rows="3" placeholder="Lipește aici mesajul stufos primit...">Salut! Te rog să verifici raportul lunar de vânzări pe Q3, să identifici discordanțele din tabelul de cheltuieli, să extragi doar rândurile cu erori și să-mi trimiți o listă curată până la ora 15:00.</textarea>
-      <button class="btn-primary" onclick="decomposeTask()">Descompune cu A11y (AI)</button>
+<a class="skip-link" href="#request">Skip to conversation</a>
+<main class="workspace">
+  <header class="workspace-header">
+    <div><p class="eyebrow">A WORKPLACE THAT ADAPTS TO YOU</p><h1>A little help. A lot more independence.</h1>
+    <p>Your company’s knowledge, a clear next step, and room to work your way.</p></div>
+    <span class="badge">A11y companion</span>
+  </header>
+  <p id="providerStatus" class="notice"></p>
+  <p id="status" role="status" aria-live="polite">Connecting to your local companion…</p>
+  <div class="columns">
+    <section class="card" aria-labelledby="conversationTitle">
+      <h2 id="conversationTitle">Let’s work through it</h2>
+      <div id="conversation" role="log" aria-label="Conversation" aria-live="polite" tabindex="0"></div>
+      <form id="chatForm">
+        <label for="request">What would you like help with?</label>
+        <textarea id="request" rows="3" maxlength="6000" required placeholder="Help me set up my company development environment"></textarea>
+        <div class="actions"><button type="submit" class="btn-primary" id="send">Send</button>
+        <button type="button" id="plan">Create a workflow</button></div>
+      </form>
+      <div class="actions"><button type="button" id="listen">Start voice input</button>
+        <button type="button" id="read">Read latest reply</button>
+        <button type="button" id="stopSpeech">Stop speech</button></div>
+      <p id="voiceStatus" class="muted">Microphone off. Voice is optional.</p>
+      <p class="muted">Desktop screen capture and cross-application highlights are available in the native app.
+        This browser view shares the same saved tasks and preferences.</p>
+      <button type="button" id="clearHistory">Clear saved conversation</button>
     </section>
-
-    <section class="task-guide" id="guideSection">
-      <h3>Ghidul tău pas-cu-pas:</h3>
-      <ul id="stepsList" class="steps-list">
-        <!-- Pașii generați vor apărea aici -->
-      </ul>
+    <section class="card task-guide" aria-labelledby="taskTitle">
+      <p class="eyebrow">PICK UP WHERE YOU LEFT OFF</p><h2 id="taskTitle">Your next step</h2>
+      <label for="workflowSelect">Saved workflow</label><select id="workflowSelect"></select>
+      <p id="progressText"></p><progress id="progress" max="1" value="0" aria-label="Confirmed task progress"></progress>
+      <ol id="stepsList" class="steps-list"></ol>
+      <div class="actions"><button type="button" id="confirm" class="btn-primary">I completed this step</button>
+      <button type="button" id="resume">Resume this task</button></div>
+      <p class="muted">Only your confirmation advances a task. Progress is saved immediately.</p>
+      <details><summary>Company sources for this workflow</summary><div id="workflowSources"></div></details>
     </section>
-  </main>
-
-  <!-- Mascota A11y (dreapta-jos) -->
-  <aside class="a11y-widget">
-    <div class="a11y-bubble" id="a11yBubble">
-      Salut! Eu sunt <strong>A11y</strong>. Apasă pe mine sau descompune un task când te simți copleșit.
-    </div>
-
-    <div class="a11y-avatar state-idle" id="a11yAvatar" onclick="manualTrigger()">
-      <svg viewBox="0 0 48 48" width="96" height="96" class="pixel-chameleon" style="display: block;">
+  </div>
+  <section class="card" aria-labelledby="preferencesTitle">
+    <p class="eyebrow">YOUR WAY OF WORKING</p><h2 id="preferencesTitle">Preferences, with your permission</h2>
+    <p>Choose your settings, or approve a suggestion. Repeated style requests never silently change your profile.</p>
+    <form id="preferencesForm"><div class="preference-grid" id="preferenceControls"></div>
+      <label class="check"><input type="checkbox" id="learning"> Allow behavior suggestions and approved adaptations</label>
+      <button type="submit">Save preferences</button></form>
+    <div id="suggestions" aria-live="polite"></div>
+    <details><summary>Inspect explicit settings, observations and approved changes</summary><pre id="profile"></pre></details>
+    <button type="button" id="resetLearned">Reset learned preferences (keep explicit settings)</button>
+  </section>
+  <section class="card" aria-labelledby="knowledgeTitle">
+    <p class="eyebrow">GROUNDED IN YOUR WORKPLACE</p><h2 id="knowledgeTitle">Company knowledge</h2>
+    <p>Relevant excerpts are sent to the configured provider when you ask for help. Use approved instructions without secrets.</p>
+    <ul id="documents"></ul>
+    <details id="adminPanel"><summary>Manage company documents · local administrator</summary>
+      <form id="documentForm"><label for="documentFile">Import a UTF-8 text or Markdown document</label>
+        <input type="file" id="documentFile" accept=".txt,.md,text/plain,text/markdown">
+        <label for="documentTitle">Document title</label><input id="documentTitle" maxlength="200" required>
+        <label for="documentBody">Document text</label><textarea id="documentBody" rows="7" maxlength="120000" required></textarea>
+        <label for="documentRoles">Allowed roles, separated by commas</label><input id="documentRoles" value="engineering" required>
+        <p class="muted">Use employee to make a document available to all employees. This is a trusted local admin session, not a multi-user service.</p>
+        <button type="submit">Import document</button>
+      </form>
+    </details>
+    <p id="adminNotice" class="muted"></p>
+  </section>
+</main>
+<aside class="a11y-widget" aria-label="Desktop companion preview">
+  <div class="a11y-bubble" id="a11yBubble">Ready when you are.</div>
+  <button type="button" class="a11y-avatar state-idle" id="a11yAvatar" aria-label="Focus the conversation"><svg viewBox="0 0 48 48" width="96" height="96" class="pixel-chameleon" aria-hidden="true">
         <!-- Corp verde cameleon -->
         <rect class="body-part" x="12" y="18" width="22" height="18" rx="4" fill="#48bb78" />
         <rect class="body-part" x="8" y="24" width="6" height="12" rx="2" fill="#48bb78" />
         <rect class="body-part" x="32" y="22" width="6" height="10" rx="2" fill="#48bb78" />
-        
+
         <!-- Coadă spiralată -->
         <path class="tail-part" d="M8 32 C4 32, 2 26, 6 22 C9 19, 11 24, 8 26" fill="none" stroke="#48bb78" stroke-width="3" stroke-linecap="round"/>
 
@@ -64,10 +104,7 @@
 
         <!-- Gură calmă -->
         <rect x="31" y="28" width="4" height="2" fill="#1a202c" />
-      </svg>
-    </div>
-  </aside>
-
-  <script src="app.js"></script>
+      </svg></button>
+</aside>
 </body>
 </html>

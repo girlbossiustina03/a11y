@@ -1,0 +1,81 @@
+import json
+import unittest
+from unittest.mock import patch
+from io import BytesIO
+from companion.ollama import OllamaProvider, local_url, provider_from_env
+from companion.provider import AIConfig, ProviderError
+
+
+class OllamaTests(unittest.TestCase):
+    def provider(self):
+        return OllamaProvider(AIConfig(base_url='http://127.0.0.1:11434', model='local-model'))
+
+    def test_local_chat_calls_native_api_and_retains_real_conversation(self):
+        provider = self.provider()
+        with patch.object(provider, 'request') as request:
+            request.side_effect = [
+                {'capabilities': ['completion']},
+                {'done': True, 'done_reason': 'stop', 'message': {'content': json.dumps({
+                    'message': 'A model-generated answer', 'source_ids': [], 'workflow': None, 'target': None})}}]
+            result = provider.complete('system', [{'role': 'user', 'content': 'Earlier question'},
+                {'role': 'assistant', 'content': 'Earlier reply'}, {'role': 'user', 'content': 'Follow up'}])
+            args = request.call_args.args
+            self.assertEqual(args[0], '/api/chat')
+            self.assertEqual(args[1]['messages'][1]['content'], 'Earlier question')
+            self.assertEqual(args[1]['format']['type'], 'object')
+            self.assertIn('desktop_action', args[1]['format']['properties'])
+            self.assertFalse(args[1]['stream'])
+            self.assertEqual(result['message'], 'A model-generated answer')
+
+    def test_discovery_excludes_embedding_and_cloud_models(self):
+        provider = self.provider()
+        with patch.object(provider, 'request') as request:
+            request.side_effect = [
+                {'models': [{'name': 'embed'}, {'name': 'chat'}, {'name': 'hosted:cloud'}]},
+                {'capabilities': ['embedding']}, {'capabilities': ['completion', 'vision']}]
+            self.assertEqual(provider.list_models(), [{'name': 'chat', 'vision': True}])
+
+    def test_text_model_cannot_silently_accept_screen_capture(self):
+        provider = self.provider()
+        with patch.object(provider, 'request', return_value={'capabilities': ['completion']}):
+            with self.assertRaisesRegex(ProviderError, 'cannot read images'):
+                provider.complete('system', [{'role': 'user', 'content': 'Screen'}], image_data='data:image/png;base64,abc')
+
+    def test_vision_uses_base64_images_field(self):
+        provider = self.provider()
+        with patch.object(provider, 'request') as request:
+            request.side_effect = [{'capabilities': ['completion', 'vision']},
+                                   {'done': True, 'message': {'content': '{}'}}]
+            provider.complete('system', [{'role': 'user', 'content': 'Screen'}], image_data='data:image/png;base64,abc')
+            self.assertEqual(request.call_args.args[1]['messages'][-1]['images'], ['abc'])
+
+    def test_incomplete_and_invalid_model_output_is_rejected(self):
+        for result in [{'done': False}, {'done': True, 'done_reason': 'length'},
+                       {'done': True, 'message': {'content': 'not json'}}]:
+            provider = self.provider()
+            provider.metadata['local-model'] = {'capabilities': ['completion']}
+            with patch.object(provider, 'request', return_value=result):
+                with self.assertRaises(ProviderError):
+                    provider.complete('system', [{'role': 'user', 'content': 'Question'}])
+
+    def test_no_remote_endpoint_or_cloud_forwarding(self):
+        for endpoint in ['http://remote.example:11434', 'https://ollama.com', 'file:///tmp/ollama']:
+            with self.assertRaises(ProviderError):
+                local_url(endpoint)
+        provider = self.provider()
+        with patch.object(provider, 'request', return_value={'remote_host': 'https://ollama.com'}):
+            with self.assertRaises(ProviderError):
+                provider.model_info('hosted')
+
+    def test_transport_calls_loopback_without_authentication_or_proxy(self):
+        provider = self.provider()
+        with patch('urllib.request.build_opener') as build:
+            build.return_value.open.return_value = BytesIO(b'{"models": []}')
+            self.assertEqual(provider.request('/api/tags'), {'models': []})
+            req = build.return_value.open.call_args.args[0]
+            self.assertEqual(req.full_url, 'http://127.0.0.1:11434/api/tags')
+            self.assertIsNone(req.get_header('Authorization'))
+
+    def test_default_provider_is_ollama_and_explicit_cloud_still_supported(self):
+        with patch.dict('os.environ', {}, clear=True):
+            self.assertIsInstance(provider_from_env(), OllamaProvider)
