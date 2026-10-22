@@ -18,7 +18,7 @@ from .provider import AIConfig, ChatProvider, ProviderError
 from .ollama import OllamaProvider, local_url
 from .theme import PANEL_STYLE, apply_theme
 from .vision import ScreenVision
-from .desktop_context import DesktopContext, MacDesktopBridge
+from .desktop_context import DesktopContext, desktop_bridge
 from .computer_use import ComputerUse
 
 
@@ -133,7 +133,7 @@ class CompanionWindow(QMainWindow):
         super().__init__()
         apply_theme(QApplication.instance())
         self.service = service
-        self.desktop_monitor = DesktopContext(MacDesktopBridge(service.store.directory))
+        self.desktop_monitor = DesktopContext(desktop_bridge(service.store.directory))
         self.service.desktop_context = self.desktop_monitor
         self.pending_desktop_action = None
         self.vision = ScreenVision(service.store.directory)

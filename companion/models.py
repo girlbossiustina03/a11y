@@ -185,3 +185,23 @@ RESPONSE_SCHEMA['properties'] = {
     key: RESPONSE_SCHEMA['properties'][key]
     for key in ('request_kind', 'desktop_action', 'target', 'message', 'source_ids', 'workflow')
 }
+
+
+def cite_only(schema, allowed_sources):
+    """Copy of a response schema whose source_ids can only name the retrieved documents.
+
+    Constrained decoding then cannot invent a citation; validation still rejects any."""
+    allowed = sorted(allowed_sources)
+    ids = ({'type': 'array', 'items': {'enum': allowed}, 'maxItems': 12} if allowed
+           else {'type': 'array', 'maxItems': 0})
+
+    def visit(node):
+        if isinstance(node, list):
+            return [visit(item) for item in node]
+        if not isinstance(node, dict):
+            return node
+        result = {key: visit(value) for key, value in node.items()}
+        if isinstance(result.get('properties'), dict) and 'source_ids' in result['properties']:
+            result['properties'] = dict(result['properties'], source_ids=ids)
+        return result
+    return visit(schema)

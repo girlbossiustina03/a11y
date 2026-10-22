@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from .adaptation import Adaptation
 from .knowledge import Knowledge
-from .models import Identity, text, validate_response, ValidationError
+from .models import Identity, RESPONSE_SCHEMA, cite_only, text, validate_response, ValidationError
 from .ollama import provider_from_env, OllamaProvider
 from .storage import Store
 from .onboarding import Introduction
@@ -336,8 +336,10 @@ class Companion:
         for attempt in range(2):
             if prebuilt is not None:
                 raw = prebuilt
-            elif schema is not None and hasattr(self.provider, 'complete_structured'):
-                raw = self.provider.complete_structured(system, messages, schema=schema, image_data=image_data)
+            elif hasattr(self.provider, 'complete_structured'):
+                # Small local models otherwise invent citations, which rejects the whole reply.
+                raw = self.provider.complete_structured(system, messages, image_data=image_data,
+                    schema=cite_only(schema or RESPONSE_SCHEMA, {s['id'] for s in sources}))
             else:
                 raw = self.provider.complete(system, messages, image_data=image_data)
             try:

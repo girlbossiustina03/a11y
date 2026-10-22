@@ -72,6 +72,14 @@ class MacDesktopBridge:
                          json.dumps(action['bounds']), action['window_title'])
 
 
+def desktop_bridge(directory):
+    """Native bridge for this platform. Other platforms keep the macOS bridge, which reports unsupported."""
+    if sys.platform == 'win32':
+        from .windows_desktop import WindowsDesktopBridge
+        return WindowsDesktopBridge(directory)
+    return MacDesktopBridge(directory)
+
+
 class DesktopContext:
     def __init__(self, bridge, *, clock=time.monotonic):
         self.bridge, self.clock = bridge, clock

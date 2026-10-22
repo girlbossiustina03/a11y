@@ -40,6 +40,24 @@ Launch the desktop app with local document-management permission:
 .venv/bin/python a11y_desktop.py --admin
 ```
 
+### Windows
+
+Run the companion with Windows Python, not from WSL: WSLg cannot draw the
+frameless transparent mascot window, so it appears as an unresponsive black box.
+Install Python once (`winget install Python.Python.3.12`), then double-click
+`run_windows.bat` (or run `run_windows.bat --panel`). On first launch it creates a
+virtual environment in `%USERPROFILE%\.venvs\a11y` and installs `requirements.txt`.
+Data is stored in `%LOCALAPPDATA%\A11y`, because SQLite locking is unreliable on
+network shares such as `\\wsl.localhost`. Ollama can run either on Windows or inside
+WSL; WSL forwards `localhost:11434` to Windows by default.
+
+On Windows, `companion/windows_desktop.py` replaces the Swift bridge: it reads window
+titles, owners and bounds through Win32 (no extra dependencies, no permission prompt)
+and supports the same confirmed actions for opening an app from the Start-menu catalog
+or a built-in app (Settings, Calculator, Notepad…), switching to a running app, closing
+an observed window and asking an app to quit. Pressing app controls, the Terminal
+new-window action and screen vision remain macOS-only for now.
+
 Or launch the browser companion, which needs **no third-party Python dependencies**:
 
 ```sh
