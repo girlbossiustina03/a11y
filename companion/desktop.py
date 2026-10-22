@@ -2,6 +2,7 @@
 import base64
 import json
 from pathlib import Path
+import sys
 import time
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QByteArray, QBuffer, QIODevice, QPoint, QUrl, QRect, QPropertyAnimation, QEasingCurve
 from PyQt6.QtGui import QKeySequence, QShortcut, QDesktopServices
@@ -506,7 +507,14 @@ class CompanionWindow(QMainWindow):
         self.worker.result.connect(self.received)
         self.worker.failed.connect(self.failed)
         self.worker.finished.connect(lambda: self.set_busy(False))
+        self.worker.finished.connect(self.run_automatic_action)
         self.worker.start()
+
+    def run_automatic_action(self):
+        # Opening an installed app needs no confirmation; it starts once the request finishes.
+        action = self.pending_desktop_action
+        if action and action['type'] == 'launch_app' and self.sender() is self.worker:
+            self.execute_desktop_action(action)
 
     def set_busy(self, busy):
         self.mascot.set_busy(busy)
@@ -886,7 +894,8 @@ class CompanionWindow(QMainWindow):
                 'Each message includes a fresh screen image for your local Ollama model.',
                 ['Images stay off disk. Nothing is recorded between messages.',
                  'Close confidential windows first. Pause vision whenever you like.',
-                 'macOS will ask for Screen Recording access.'], 'Enable screen vision'):
+                 'macOS will ask for Screen Recording access.' if sys.platform == 'darwin'
+                 else 'A11y hides itself from each capture.'], 'Enable screen vision'):
             self.retry_after_vision = False
             return
         self.mascot.vision_button.setText('Allowing screen…')
@@ -1019,7 +1028,14 @@ class CompanionWindow(QMainWindow):
             self.transcript.appendPlainText('Action submitted: '+proposal.get('label', proposal['type'])+'. Checking the result.\n')
         def finished():
             self.set_busy(False)
-            if result:
+            if result and proposal['type'] == 'launch_app':
+                # The bridge already observed whether the app's window appeared.
+                self.service.last_action_result = None
+                name = proposal.get('label', '').replace('Open ', '', 1) or 'the app'
+                self.mascot.expand_chat()
+                self.mascot_home(('Opened '+name+'.') if result.get('application_state', {}).get('running')
+                                 else 'I asked to open '+name+', but I can’t see its window yet. It may still be starting.')
+            elif result:
                 self.mascot.expand_chat()
                 self.input.setPlainText(request)
                 self.ask(mode='verify', from_mascot=True)
@@ -1247,7 +1263,7 @@ class CompanionWindow(QMainWindow):
         choices = []
         if self.pending_target:
             choices.append(('Show me where', 'guide'))
-        elif self.pending_desktop_action:
+        elif self.pending_desktop_action and self.pending_desktop_action['type'] != 'launch_app':
             choices.append((self.pending_desktop_action.get('confirmation_label', self.pending_desktop_action['label']), 'desktop:apply'))
         self.say(message or 'What would you like help with?', choices, placeholder='Ask anything…', compact=True)
 

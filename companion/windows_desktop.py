@@ -6,8 +6,10 @@ observed window and asking an app to quit. Control pressing is macOS-only for no
 """
 import ctypes
 from ctypes import wintypes
+import json
 import os
 from pathlib import Path, PureWindowsPath
+import subprocess
 import threading
 import time
 
@@ -26,7 +28,7 @@ BUILTIN_APPS = [
 ]
 SKIPPED_SHORTCUT_WORDS = ('uninstall', 'readme', 'read me', 'help', 'documentation', 'license',
                           'release notes', 'website', 'manual')
-CATALOG_TTL = 60
+CATALOG_TTL = 600
 WM_CLOSE = 0x0010
 SW_RESTORE = 9
 GW_OWNER = 4
@@ -153,6 +155,9 @@ class WindowsDesktopBridge:
         self.lock = threading.Lock()
         self.catalog_cache = ([], {}, 0.0)
         self.names = {}
+        if win32 is None:
+            # Reading the Start menu takes a few seconds; do it before the first request needs it.
+            threading.Thread(target=self.catalog_entries, daemon=True).start()
 
     # --- Observation ---
     def app_name(self, path):
@@ -245,6 +250,17 @@ class WindowsDesktopBridge:
                 apps.append({'bundle_id': bundle_id, 'name': name})
                 targets[bundle_id] = target
                 names.add(name.casefold())
+            # Every Start-menu app, including Store/MSIX apps such as the new Teams,
+            # which have no .lnk file. Launched through shell:AppsFolder.
+            for item in self.start_apps():
+                name, app_id = item['name'], item['app_id']
+                if (name.casefold() in names or len(apps) >= 400
+                        or any(word in name.casefold() for word in SKIPPED_SHORTCUT_WORDS)):
+                    continue
+                bundle_id = 'startapp:'+app_id
+                apps.append({'bundle_id': bundle_id, 'name': name})
+                targets[bundle_id] = 'shell:AppsFolder\\'+app_id
+                names.add(name.casefold())
             for root in self.shortcut_roots():
                 for shortcut in sorted(root.rglob('*.lnk'))[:600] if root.is_dir() else []:
                     name = shortcut.stem.strip()[:100]
@@ -259,13 +275,35 @@ class WindowsDesktopBridge:
             self.catalog_cache = (apps, targets, time.monotonic())
             return self.catalog_cache
 
+    @staticmethod
+    def start_apps():
+        """Name and AppID of each Start-menu app, from Windows' own Get-StartApps."""
+        script = ('[Console]::OutputEncoding=[Text.Encoding]::UTF8; '
+                  'Get-StartApps | Select-Object Name,AppID | ConvertTo-Json -Compress')
+        try:
+            result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script],
+                                    capture_output=True, timeout=15,
+                                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            items = json.loads(result.stdout.decode('utf-8-sig') or '[]')
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            return []  # .lnk shortcuts below remain a fallback
+        if isinstance(items, dict):
+            items = [items]
+        apps = []
+        for item in items if isinstance(items, list) else []:
+            name = item.get('Name') if isinstance(item, dict) else None
+            app_id = item.get('AppID') if isinstance(item, dict) else None
+            if isinstance(name, str) and isinstance(app_id, str) and name.strip() and app_id.strip():
+                apps.append({'name': name.strip()[:100], 'app_id': app_id.strip()[:300]})
+        return apps
+
     def catalog(self):
         return self.catalog_entries()[0]
 
     def running_windows(self, bundle_id):
         """Windows of an app, whether addressed by its running id or by its catalog id."""
         windows = self.windows()
-        if not bundle_id.startswith(('builtin:', 'shortcut:')):
+        if not bundle_id.startswith(('builtin:', 'startapp:', 'shortcut:')):
             return [w for w in windows if w['bundle_id'] == bundle_id]
         apps, targets, _ = self.catalog_entries()
         name = next((app['name'].casefold() for app in apps if app['bundle_id'] == bundle_id), None)

@@ -68,8 +68,9 @@ class FakeWin32:
 BOUNDS = {'x': 10, 'y': 20, 'width': 600, 'height': 400}
 
 
-def bridge(records, foreground=None):
-    with mock.patch.dict(os.environ, {'PROGRAMDATA': '', 'APPDATA': ''}):
+def bridge(records, foreground=None, start_apps=()):
+    with mock.patch.dict(os.environ, {'PROGRAMDATA': '', 'APPDATA': ''}), \
+            mock.patch.object(WindowsDesktopBridge, 'start_apps', return_value=list(start_apps)):
         value = WindowsDesktopBridge(win32=FakeWin32(records, foreground))
         value.catalog()
     return value
@@ -108,6 +109,17 @@ class WindowsDesktopBridgeTest(unittest.TestCase):
         self.assertTrue(b.app_state('builtin:settings')['running'])
         self.assertTrue(b.app_state('builtin:notepad')['running'])
         self.assertFalse(b.app_state('builtin:calculator')['running'])
+
+    def test_store_apps_from_start_menu(self):
+        teams = {'name': 'Microsoft Teams', 'app_id': 'MSTeams_8wekyb3d8bbwe!MSTeams'}
+        b = bridge({7: (500, 'C:\\Apps\\ms-teams.exe', 'Chat | Microsoft Teams', BOUNDS)}, start_apps=[teams])
+        b.win32.description = lambda path: 'Microsoft Teams'
+        self.assertIn({'bundle_id': 'startapp:'+teams['app_id'], 'name': 'Microsoft Teams'}, b.catalog())
+        self.assertTrue(b.app_state('startapp:'+teams['app_id'])['running'])
+        with mock.patch('os.startfile', create=True) as start, mock.patch('time.sleep'), \
+                mock.patch('companion.windows_desktop.time.monotonic', side_effect=[0, 0, 10]):
+            b.application_action({'type': 'launch_app', 'bundle_id': 'startapp:'+teams['app_id']})
+        start.assert_called_once_with('shell:AppsFolder\\'+teams['app_id'])
 
     def test_launch_only_catalog_apps(self):
         b = bridge({})
@@ -160,6 +172,33 @@ class CitationSchemaTest(unittest.TestCase):
         self.assertEqual(steps['properties']['source_ids']['items'], {'enum': ['doc-1']})
         self.assertEqual(cite_only(RESPONSE_SCHEMA, set())['properties']['source_ids'], {'type': 'array', 'maxItems': 0})
         self.assertEqual(RESPONSE_SCHEMA['properties']['source_ids']['items'], {'type': 'string'})
+
+
+
+class WindowsScreenTest(unittest.TestCase):
+    def test_png_encoding(self):
+        import struct
+        import zlib
+        from companion.windows_screen import png
+        # Two pixels, BGRA: blue, red.
+        data = png(2, 1, bytes([255, 0, 0, 255, 0, 0, 255, 255]))
+        self.assertTrue(data.startswith(b'\x89PNG\r\n\x1a\n'))
+        self.assertEqual(struct.unpack('>II', data[16:24]), (2, 1))
+        start = data.index(b'IDAT')+4
+        length = struct.unpack('>I', data[start-8:start-4])[0]
+        self.assertEqual(zlib.decompress(data[start:start+length]), bytes([0, 0, 0, 255, 255, 0, 0]))
+
+    def test_vision_uses_windows_capture_on_windows(self):
+        from companion.vision import ScreenVision
+        vision = ScreenVision('.data')
+        bridge = mock.Mock()
+        bridge.call.return_value = {'error': 'Screen vision paused while a protected app is active.'}
+        vision.windows_bridge = bridge
+        with mock.patch('sys.platform', 'win32'):
+            with self.assertRaisesRegex(RuntimeError, 'protected app'):
+                vision.call('--x', '0', '--y', '0')
+            bridge.call.return_value = {'granted': True}
+            self.assertEqual(vision.request_access(), {'granted': True})
 
 
 if __name__ == '__main__':

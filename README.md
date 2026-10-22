@@ -40,6 +40,10 @@ Launch the desktop app with local document-management permission:
 .venv/bin/python a11y_desktop.py --admin
 ```
 
+Opening an installed app starts it immediately and reports whether its window appeared;
+closing, quitting, switching and pressing still wait for a confirmation click. A request
+such as "open teams" matches "Microsoft Teams" when exactly one installed app fits.
+
 ### Windows
 
 Run the companion with Windows Python, not from WSL: WSLg cannot draw the
@@ -53,10 +57,13 @@ WSL; WSL forwards `localhost:11434` to Windows by default.
 
 On Windows, `companion/windows_desktop.py` replaces the Swift bridge: it reads window
 titles, owners and bounds through Win32 (no extra dependencies, no permission prompt)
-and supports the same confirmed actions for opening an app from the Start-menu catalog
-or a built-in app (Settings, Calculator, Notepad…), switching to a running app, closing
-an observed window and asking an app to quit. Pressing app controls, the Terminal
-new-window action and screen vision remain macOS-only for now.
+and supports the same actions: opening a Start-menu app (including Store apps such as
+the new Teams) or a built-in app (Settings, Calculator, Notepad…), switching to a running
+app, closing an observed window and asking an app to quit. Screen vision uses
+`companion/windows_screen.py`: one GDI frame per request, scaled to 1440 px, with the
+companion excluded through `WDA_EXCLUDEFROMCAPTURE` (Windows 10 2004+) only while
+capturing. It needs an image-capable model, for example `ollama pull gemma3:4b`.
+Pressing app controls and the Terminal new-window action remain macOS-only.
 
 Or launch the browser companion, which needs **no third-party Python dependencies**:
 

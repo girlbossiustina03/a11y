@@ -166,6 +166,20 @@ Return ONLY a JSON object with these fields, including desktop_action (null when
 Do not include markdown code fences or additional action types.'''
 
 
+def matching_apps(apps, requested):
+    """Apps whose name is the requested name, else whose name contains every requested word.
+
+    "Teams" finds "Microsoft Teams"; callers treat anything other than one match as ambiguous."""
+    normalized = lambda name: ''.join(character for character in name.casefold() if character.isalnum())
+    wanted = normalized(requested)
+    matches = [app for app in apps if wanted and normalized(app['name']) == wanted]
+    if not matches:
+        words = lambda name: {''.join(c for c in word if c.isalnum()) for word in name.casefold().split()} - {''}
+        asked = words(requested)
+        matches = [app for app in apps if asked and asked <= words(app['name'])]
+    return matches
+
+
 class Companion:
     def __init__(self, store, identity, provider=None):
         self.store, self.identity = store, identity
@@ -306,18 +320,40 @@ class Companion:
         if request_plan:
             operation = request_plan['operation']
             if operation == 'launch_app':
-                catalog = self.desktop_context.installed_apps()
-                normalized = lambda name: ''.join(character for character in name.casefold() if character.isalnum())
-                wanted = normalized(request_plan['app_name'])
-                matches = [app for app in catalog if wanted and normalized(app['name']) == wanted]
+                matches = matching_apps(self.desktop_context.installed_apps(), request_plan['app_name'])
                 if len(matches) == 1:
                     app = matches[0]
-                    prebuilt = {'request_kind': operation, 'message': 'Ready to open '+app['name']+'. Confirm below.',
+                    prebuilt = {'request_kind': operation, 'message': 'Opening '+app['name']+'…',
                         'source_ids': [], 'workflow': None, 'target': None,
                         'desktop_action': {'type': operation, 'bundle_id': app['bundle_id']}}
                 else:
                     prebuilt = {'request_kind': 'answer', 'message': 'I could not identify one installed app named “'+request_plan['app_name']+'”. Please give its exact application name.',
                                 'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
+            elif operation in ('close_window', 'quit_app', 'focus_app') and desktop.get('enabled') and request_plan['app_name']:
+                # Resolve the named app from the fresh observation instead of asking the model to
+                # copy ids; small local models often get that wrong. The action is still confirmed.
+                running = {app['bundle_id']: app for app in desktop.get('available_apps', [])}
+                if operation == 'close_window':
+                    # Window owners count too; quitting and focusing need an app the bridge lists.
+                    for window in desktop.get('app_windows', []):
+                        running.setdefault(window['bundle_id'], {'name': window['name'], 'bundle_id': window['bundle_id']})
+                matches = matching_apps(list(running.values()), request_plan['app_name'])
+                if len(matches) != 1:
+                    prebuilt = {'request_kind': 'answer', 'message': 'I can’t see one open app named “'+request_plan['app_name']+'”. '
+                                'Make sure its window is open, or give its exact name.',
+                                'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
+                elif operation != 'close_window':
+                    prebuilt = {'request_kind': operation, 'message': 'Proposed.', 'source_ids': [], 'workflow': None, 'target': None,
+                                'desktop_action': {'type': operation, 'bundle_id': matches[0]['bundle_id']}}
+                else:
+                    windows = [w for w in desktop.get('app_windows', []) if w['bundle_id'] == matches[0]['bundle_id'] and w.get('can_close')]
+                    if len(windows) == 1:
+                        prebuilt = {'request_kind': operation, 'message': 'Proposed.', 'source_ids': [], 'workflow': None, 'target': None,
+                                    'desktop_action': {'type': operation, 'window_id': windows[0]['window_id']}}
+                    elif not windows:
+                        prebuilt = {'request_kind': 'answer', 'message': matches[0]['name']+' has no open window I can close.',
+                                    'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
+                    # Several windows: the model picks one using the request's target description.
             elif operation in ('move_object', 'highlight', 'inspect_screen') and not image_data:
                 prebuilt = {'request_kind': operation if operation != 'inspect_screen' else 'answer',
                     'message': 'I need a fresh look to identify that. Enable local screen vision below.',
@@ -365,7 +401,10 @@ class Companion:
                 messages = [{'role': 'user', 'content': json.dumps(dict(context, correction=correction), ensure_ascii=False)},
                             {'role': 'user', 'content': request}]
         action = response.get('desktop_action') or {}
-        if action.get('type') in ('launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'press_control'):
+        if action.get('type') == 'launch_app':
+            # Opening an installed app is harmless, so the companion starts it right away.
+            response['message'] = action['label'].replace('Open ', 'Opening ', 1)+'…'
+        elif action.get('type') in ('new_window', 'close_window', 'quit_app', 'focus_app', 'press_control'):
             label = action.get('confirmation_label', action['label'])
             response['message'] = 'Ready to '+label[0].lower()+label[1:]+'. Confirm below.'
         used = set(response['source_ids'])
