@@ -1,6 +1,9 @@
 """Native local Ollama transport. No API key, cloud fallback, downloads or tool execution."""
+import http.client
 import json
 import os
+import socket
+import threading
 import time
 from urllib.parse import urlparse
 import urllib.error
@@ -17,6 +20,11 @@ def local_url(value):
             or parsed.path not in ('', '/')):
         raise ProviderError('Ollama must use a local loopback address, for example http://127.0.0.1:11434.')
     return value.rstrip('/')
+
+
+class RequestCancelled(ProviderError):
+    def __init__(self):
+        super().__init__('The model request was stopped. No action was sent.')
 
 
 class OllamaRequestError(ProviderError):
@@ -73,8 +81,10 @@ class OllamaProvider:
         self.metadata = {}
         self.json_fallbacks = set()
 
-    def request(self, path, body=None, *, timeout=None):
+    def request(self, path, body=None, *, timeout=None, cancel=None):
         endpoint = local_url(self.config.base_url)
+        if isinstance(body, dict) and body.get('stream'):
+            return self.stream(endpoint, path, body, timeout=timeout or self.config.timeout, cancel=cancel)
         req = urllib.request.Request(endpoint+path,
             None if body is None else json.dumps(body).encode(), {'Content-Type': 'application/json'})
         try:
@@ -102,6 +112,81 @@ class OllamaProvider:
                                 'then select Find installed models in AI model.') from None
         except (ValueError, TypeError):
             raise ProviderError('Ollama returned an invalid response. No actions were applied.') from None
+
+    def stream(self, endpoint, path, body, *, timeout, cancel=None):
+        """Stream one chat request so a stopped task closes the socket.
+
+        Ollama aborts generation when its client disconnects, so a cancelled task
+        neither waits for nor keeps the local model busy with a stale request.
+        Returns the same shape as a non-streaming response."""
+        if cancel is not None and cancel.is_set():
+            raise RequestCancelled()
+        parsed = urlparse(endpoint)
+        connection = http.client.HTTPConnection(parsed.hostname, parsed.port or 80, timeout=timeout)
+        finished = threading.Event()
+        held = []  # http.client drops connection.sock once a response will close
+        def watch():
+            while not finished.is_set():
+                if cancel.wait(0.05):
+                    for sock in held:
+                        try:
+                            sock.shutdown(socket.SHUT_RDWR)
+                        except OSError:
+                            pass
+                    return
+        watcher = threading.Thread(target=watch, daemon=True) if cancel is not None else None
+        content, result, size = [], {}, 0
+        try:
+            connection.request('POST', path, json.dumps(body).encode(), {'Content-Type': 'application/json'})
+            held.append(connection.sock)
+            if watcher:
+                watcher.start()
+            response = connection.getresponse()
+            if response.status >= 400:
+                payload = response.read(8192)
+                raise OllamaRequestError(response.status, error_category(response.status, payload))
+            if 300 <= response.status < 400:
+                raise ProviderError('AI endpoint redirects are disabled. Configure its final URL.')
+            while True:
+                line = response.readline(1_000_001)
+                if not line:
+                    break
+                size += len(line)
+                if size > 1_000_000:
+                    raise ProviderError('Ollama response exceeded the size limit.')
+                if not line.strip():
+                    continue
+                chunk = json.loads(line)
+                if not isinstance(chunk, dict) or chunk.get('error'):
+                    raise ProviderError('Ollama could not complete the request. Check the selected local model.')
+                message = chunk.get('message') or {}
+                if isinstance(message.get('content'), str):
+                    content.append(message['content'])
+                if chunk.get('done'):
+                    result = chunk
+                    break
+        except ProviderError:
+            if cancel is not None and cancel.is_set():
+                raise RequestCancelled() from None
+            raise
+        except (OSError, http.client.HTTPException, TimeoutError):
+            if cancel is not None and cancel.is_set():
+                raise RequestCancelled() from None
+            raise ProviderError('Local Ollama is not reachable. Run ollama serve in a separate terminal, '
+                                'then select Find installed models in AI model.') from None
+        except (ValueError, TypeError):
+            if cancel is not None and cancel.is_set():
+                raise RequestCancelled() from None
+            raise ProviderError('Ollama returned an invalid response. No actions were applied.') from None
+        finally:
+            finished.set()
+            connection.close()
+        if cancel is not None and cancel.is_set():
+            raise RequestCancelled()
+        if not result:
+            raise ProviderError('Ollama response was incomplete. Try a shorter request.')
+        result = dict(result, message={'role': 'assistant', 'content': ''.join(content)})
+        return result
 
     def model_info(self, name):
         if name not in self.metadata:
@@ -159,9 +244,9 @@ class OllamaProvider:
                 plan = dict(plan, operation='computer_task', target=request, remaining_request='')
         return validate_plan(plan)
 
-    def complete_structured(self, system, messages, *, schema, image_data=None, max_tokens=3000, thinking=None):
+    def complete_structured(self, system, messages, *, schema, image_data=None, max_tokens=3000, thinking=None, cancel=None):
         return self.complete(system, messages, image_data=image_data, response_schema=schema,
-                             max_tokens=max_tokens, thinking=thinking)
+                             max_tokens=max_tokens, thinking=thinking, cancel=cancel)
 
     def classify_task_goal(self, goal):
         schema = {'type': 'object', 'additionalProperties': False, 'required': ['mode'],
@@ -179,7 +264,7 @@ class OllamaProvider:
             raise ProviderError('Could not determine the task scope. No action was sent.')
         return result['mode']
 
-    def complete(self, system, messages, *, image_data=None, response_schema=None, max_tokens=3000, thinking=None):
+    def complete(self, system, messages, *, image_data=None, response_schema=None, max_tokens=3000, thinking=None, cancel=None):
         local_url(self.config.base_url)
         if not self.config.model:
             raise ProviderError('Select a local model in Settings → Advanced → AI model → Find installed models.')
@@ -201,7 +286,7 @@ class OllamaProvider:
         wire_schema = grammar_schema(schema)
         schema_key = (model, json.dumps(wire_schema, sort_keys=True))
         body = {'model': model, 'messages': [{'role': 'system', 'content': system}] + messages,
-            'stream': False, 'format': wire_schema, 'keep_alive': '5m',
+            'stream': True, 'format': wire_schema, 'keep_alive': '5m',
             'options': {'temperature': 0.2, 'num_ctx': context_length, 'num_predict': max_tokens}}
         requested_thinking = thinking
         thinking = os.getenv('A11Y_OLLAMA_THINKING', 'default').lower()
@@ -221,7 +306,10 @@ class OllamaProvider:
             timing('ollama.start', started, image=bool(image_data), output_limit=max_tokens,
                    thinking=body.get('think', 'model_default'), json_fallback=body['format'] == 'json')
             try:
-                response = self.request('/api/chat', body)
+                response = self.request('/api/chat', body, cancel=cancel) if cancel is not None else self.request('/api/chat', body)
+            except RequestCancelled:
+                timing('ollama.cancelled', started)
+                raise
             except Exception:
                 timing('ollama.failed', started)
                 raise

@@ -301,6 +301,63 @@ class NativeTests(unittest.TestCase):
                 self.assertIsNone(call.kwargs['image_data'])
         self.assertIsNone(self.window.pending_desktop_action)
 
+    def test_cloud_messages_and_history_record_the_same_task_text(self):
+        import base64
+        from copy import deepcopy
+        from unittest.mock import Mock
+        from PyQt6.QtCore import QByteArray, QBuffer, QIODevice
+        from PyQt6.QtGui import QImage
+        from companion.desktop_context import DesktopContext
+        from test_desktop_context import FakeBridge
+        from test_computer_task import context
+        self.window.setup_dialog.reject()
+        bridge = FakeBridge()
+        bridge.value = context()
+        monitor = self.window.desktop_monitor = self.service.desktop_context = DesktopContext(bridge, clock=lambda: 100)
+        monitor.enabled = True
+        monitor.collect_once()
+        self.window.vision.set_enabled(True)
+        area = self.window.mascot.screen().geometry()
+        image = QImage(200, 120, QImage.Format.Format_RGB32)
+        image.fill(Qt.GlobalColor.blue)
+        png = QByteArray()
+        buffer = QBuffer(png)
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        image.save(buffer, 'PNG')
+        frame = {'image_data': 'data:image/png;base64,'+base64.b64encode(bytes(png)).decode(),
+                 'screen': {'x': area.x(), 'y': area.y(), 'width': area.width(), 'height': area.height()},
+                 'display_id': 7, 'captured_monotonic': time.monotonic(), 'windows': []}
+        outputs = [{'status': 'action', 'message': 'Search is visible; opening it.', 'risk': 'navigation',
+                    'action': {'type': 'press_control', 'control_id': 'control-0'}},
+                   {'status': 'done', 'message': 'Help results are listed.', 'risk': 'navigation', 'action': None},
+                   {'status': 'done', 'message': 'Help results are listed.', 'risk': 'navigation', 'action': None}]
+        class Provider:
+            complete_structured = Mock(side_effect=outputs)
+        self.service.provider = Provider()
+        shown = []
+        present = self.window.mascot.present
+        def record(message, *args, **kwargs):
+            shown.append(message)
+            return present(message, *args, **kwargs)
+        def submitted(proposal):
+            return {'type': proposal['type'], 'label': proposal['label'], 'status': 'submitted'}
+        start = len(self.window.transcript.toPlainText())
+        with patch.object(self.window.vision, 'capture', side_effect=lambda *args, **kwargs: deepcopy(frame)), \
+                patch('companion.desktop.ComputerUse.execute_confirmed', side_effect=submitted), \
+                patch.object(self.window.mascot, 'present', side_effect=record):
+            self.window.offer_computer_task('Find accessibility help')
+            deadline = time.monotonic()+6
+            while time.monotonic() < deadline:
+                self.qt.processEvents()
+                QTest.qWait(5)
+                if self.window.computer_task.status == 'done' and not self.window.worker.isRunning():
+                    break
+        history = self.window.transcript.toPlainText()[start:]
+        recorded = [entry.strip() for entry in history.split('A11y: ')[1:]]
+        self.assertEqual(recorded, [message.strip() for message in shown])
+        self.assertTrue(any('Search is visible; opening it.' in message for message in shown))
+        self.assertIn('Help results are listed.', shown[-1])
+
     def test_stop_cancels_an_automatic_step_queued_for_execution(self):
         from companion.computer_task import ComputerTask
         task = self.window.computer_task = ComputerTask('Find help', automatic=True)

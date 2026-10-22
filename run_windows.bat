@@ -29,6 +29,13 @@ if not exist "%VENV%\Scripts\python.exe" (
     "%VENV%\Scripts\python.exe" -m pip install -r requirements.txt || goto :failed
 )
 
+rem Install new or changed dependencies (for example the UI Automation and OCR adapters).
+fc /b requirements.txt "%VENV%\requirements.installed" >nul 2>&1
+if errorlevel 1 (
+    "%VENV%\Scripts\python.exe" -m pip install -r requirements.txt || goto :failed
+    copy /y requirements.txt "%VENV%\requirements.installed" >nul
+)
+
 "%VENV%\Scripts\python.exe" a11y_desktop.py %*
 set "CODE=%ERRORLEVEL%"
 popd

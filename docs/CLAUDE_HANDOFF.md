@@ -82,21 +82,31 @@ previously attempted live scenario works.
 2. `preserve_desktop_goal` routes compound desktop goals and direct click/control
    requests into `ComputerTask`. A compatibility alias retains the former
    `preserve_browser_goal` name.
-3. Tasks classify the goal once as `inspect`, `draft` or `change` when the provider
-   supports this classifier. Inspection rejects compose/post/send/change proposals,
-   including actual AX/OCR labels under model-selected coordinates.
+3. The intent call also returns `goal_mode` (`inspect`, `draft` or `change`), carried
+   on `start_task` into `ComputerTask`; only tasks started without a plan still make
+   the separate classifier call. Inspection rejects compose/post/send/change
+   proposals, including actual AX/UIA/OCR labels under model-selected coordinates.
+   "Mark/show me where…" requests are forced to `highlight` by
+   `request_plan.highlight_only` unless the user also asks to click/close/etc.
 4. The task obtains current desktop metadata and one transient screenshot. macOS
    can return OCR text rectangles from the same frame. The app excludes its own
    windows; sensitive/protected app checks remain important.
-5. When OCR or supported AX evidence is available, the first model call is text-only.
-   It can select an exact control ID or a point grounded in a text/control rectangle.
-   Missing visual detail returns `needs_vision`; ungrounded points or uncertainty
-   fall back to a full image. When there is no fast evidence, use the image path.
+5. When at least three OCR regions or AX/UIA controls are available, the first model
+   call is text-only. It can select an exact control ID or a point grounded in a
+   text/control rectangle. Missing visual detail returns `needs_vision`; ungrounded
+   points or uncertainty fall back to a full image. Thin evidence goes straight to
+   the image path. Both passes share ONE system prompt and observation message; only
+   the final message (pass instructions, corrections, image) differs, so Ollama can
+   reuse the evaluated prefix. `installed_apps` is sent as names; `launch_app` names
+   are resolved to catalog IDs by `resolve_app` after inference.
 6. The structured schema separates action responses from terminal responses:
    `status=action` requires one operation; `done`/`needs_user` require `action=null`.
    The fast schema also allows `needs_vision` with a null action.
 7. At most two decision calls are allowed per observation, shared between correction,
-   pause reconsideration and image fallback. Invalid proposals are never executed.
+   pause reconsideration, image fallback and one recheck of a `done` reported when
+   only opening/focus/navigation actions have run. Invalid proposals never execute.
+   Ollama requests stream; Stop sets the task's cancel event, which closes the socket
+   (Ollama then aborts generation) and no late action is proposed.
 8. The GUI executes approved navigation automatically, then schedules another fresh
    observation. There is a 24-action bound and visible Stop control / `⌘.` shortcut.
 9. Clicks retain capture age, display geometry, target-region hash and window checks.
@@ -130,11 +140,32 @@ means every platform adapter implements an action.
   focus, observed close and graceful quit are implemented.
 - Request-time GDI screen capture and own-window exclusion are implemented. Permission
   checks must not take a screenshot. Known protected windows block capture.
-- **Coordinate clicks, keyboard/text input, AX/UI Automation control presses and OCR
-  parity are not implemented in the current Windows adapter.** These are major gaps
-  for the requested macOS/Windows outcome. Implement and validate them explicitly.
-- Windows runtime has not been exercised by this coding environment. Test with real
-  Windows apps, DPI scaling, multiple monitors and foreground/focus changes.
+- Implemented (Oct 2026 pass) in `windows_input.py`, `windows_desktop.py`,
+  `windows_screen.py`, `windows_ocr.py`:
+  - guarded `click_point` through SendInput in physical pixels of the captured
+    monitor (capture now returns `display_id` = monitor handle and window ids/bounds;
+    refuses a changed display or a point covered by the companion);
+  - `type_text` (KEYEVENTF_UNICODE, focus re-checked every 20 UTF-16 units),
+    `press_key` (Command shortcuts map to Ctrl) and wheel `scroll`, bound to the
+    observed foreground window and focused non-password field; shells/terminals and
+    registry/MMC are blocked;
+  - UI Automation (comtypes): focused role/bounds and up to 45 named actionable
+    controls of the foreground window, `press_control` via Invoke/Select/Toggle/
+    Expand/LegacyIAccessible after re-enumeration and label/bounds checks. Without
+    comtypes a Win32 focus fallback identifies classic Edit/RichEdit fields only;
+  - `browse_url` for Edge/Chrome/Firefox found via App Paths (`browser:*` ids), with
+    window/tab placement through fixed browser arguments, never a shell;
+  - OCR with the built-in Windows.Media.Ocr engine (pywinrt), falling back to the
+    image path when packages or language recognizers are missing.
+  - Coordinates use Qt's space per monitor (`logical_rect`), which also fixes window
+    bounds on scaled secondary monitors.
+- Still missing on Windows: `new_window` (removed from the Windows task grammar),
+  reading the browser's current URL after navigation, media playback control.
+- **None of this has run on real Windows.** It was written against the documented
+  APIs and pywinrt 3.2.1 stubs and is covered only by doubled tests. Validate with
+  `scripts/benchmark_pipeline.py` and the scenarios below: DPI 100/150/200%, a
+  secondary monitor, elevated target windows (UIPI blocks SendInput: reported as an
+  error), Win11 Notepad (RichEditD2DPT/Document), Calculator UIA names and new Teams.
 
 ## Observed bottlenecks and suggested priorities
 
@@ -173,7 +204,24 @@ path. Logs emit `A11y timing` records without screen/prompt/model content.
    models with the same fixtures and latency measurements. Do not claim a larger
    model or another runtime is faster without measuring it on the target machine.
 
-## Current local changes in this implementation pass
+## Performance/reliability pass (after `0ce04dd`)
+
+- Model calls per task start: intent + (shortcut coverage check) + per-step calls.
+  The separate scope-classifier call is gone when the intent supplied `goal_mode`.
+- Shared cacheable prompt prefix for text/image passes; app catalog sent as names.
+- Streaming, cancellable Ollama transport (`OllamaProvider.stream`, `RequestCancelled`).
+- `task.step.summary` timing per step (classify/metadata/capture/OCR/context size/each
+  model call) and `action.executed` timing; no screen content is logged.
+- One recheck when `done` is reported after only opening actions (Calculator/
+  Notepad stopping after launch), regression tests in `tests/test_reported_failures.py`.
+- Windows adapters listed under Important platform gaps → Windows.
+- History records outcome notes shown under the mascot (highlight, stop, errors);
+  a Qt test checks that every cloud message of a task is the same text in History.
+  Desktop/screen exchanges are still kept out of persistent history by design, so
+  after a restart History shows only non-screen conversation.
+- `scripts/benchmark_pipeline.py`: cold/warm metadata, catalog, capture, OCR, intent
+  and task-step latency (p50/p95) and Ollama prompt/eval counts on the real host.
+  It never executes proposals.
 
 These changes followed merged commit `f576bfc` (PRs #2/#3 plus earlier task/UI work):
 
@@ -194,8 +242,17 @@ The mascot is a white cloud; the user may provide different assets later.
 
 ## Validation status: be precise
 
-- Latest full automated run: **262 Python tests passed**; **4 web tests passed**.
-- Python compilation and the Swift ScreenBridge compilation passed.
+- Latest full automated run (Linux container, PyQt6 offscreen): **303 Python tests
+  passed**; **4 web tests passed**; `compileall` passed. Swift was not compiled in this
+  pass (no Swift changes were made).
+- Streaming/cancellation was verified over real loopback sockets against a local
+  NDJSON server (`tests/test_ollama_stream.py`): cancel during a 3 s silent prompt
+  phase returns in <1 s and the server observes the disconnect. Not yet measured
+  against a real Ollama process.
+- Prompt size for a realistic step (150 installed apps, 30 controls, 60 OCR lines):
+  text pass 20.1k → 17.8k chars, image pass 23.6k → 17.6k chars, and the two passes
+  now share a 17.2k-char prefix (previously none). Whether Ollama reuses it must be
+  confirmed with `prompt_eval_count` in the benchmark's `ollama_calls` output.
 - Tests include actual Qt workers/UI sequencing, but model responses and OS action
   submission are doubled. They do **not** prove real Teams/Calculator/TextEdit success.
 - The synthetic native OCR runtime probe failed here; both fast and accurate paths
@@ -231,6 +288,9 @@ tail -f /private/tmp/a11y-desktop.log
 QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest discover -s tests -q
 node --test tests/web.test.cjs
 .venv/bin/python -m compileall -q companion scripts a11y_desktop.py server.py
+
+# Stage latency on this machine (real capture/OCR/model; never executes actions)
+A11Y_AI_MODEL=qwen3-vl:8b-instruct .venv/bin/python scripts/benchmark_pipeline.py --runs 5
 
 # Synthetic model evaluation; does not operate the actual desktop
 .venv/bin/python scripts/evaluate_computer_tasks.py --model qwen3-vl:8b-instruct

@@ -146,7 +146,7 @@ class IntentTransportTests(unittest.TestCase):
         body = request.call_args_list[0].args[1]
         self.assertFalse(body['think'])
         self.assertEqual(body['options']['num_predict'], 400)
-        self.assertEqual(body['format']['required'], ['operation', 'app_name', 'target', 'browser_mode', 'remaining_request'])
+        self.assertEqual(body['format']['required'], ['operation', 'app_name', 'target', 'browser_mode', 'remaining_request', 'goal_mode'])
         self.assertNotIn('images', body['messages'][-1])
         self.assertEqual(plan['app_name'], 'Stremio')
 

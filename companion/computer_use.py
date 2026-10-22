@@ -1,5 +1,7 @@
 """One confirmed desktop action followed by observation; never an open-ended executor."""
 from copy import deepcopy
+import time
+from .timing import timing
 
 
 class ComputerUse:
@@ -8,6 +10,13 @@ class ComputerUse:
         self.vision, self.provider = vision, provider
 
     def execute_confirmed(self, proposal):
+        started = time.monotonic()
+        try:
+            return self._execute(proposal)
+        finally:
+            timing('action.executed', started, type=str(proposal.get('type', ''))[:20])
+
+    def _execute(self, proposal):
         generation = self.desktop.generation
         before = self.desktop.context()
         kind = proposal.get('type')

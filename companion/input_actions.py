@@ -3,7 +3,10 @@ INPUT_TYPES = ('type_text', 'press_key', 'scroll')
 KEYS = ('enter', 'tab', 'escape', 'space', 'backspace', 'left', 'right', 'up', 'down',
         'cmd_l', 'cmd_f', 'cmd_t', 'cmd_n', 'cmd_w', 'cmd_a', 'cmd_r')
 BLOCKED = {'com.apple.Terminal', 'com.googlecode.iterm2', 'dev.warp.Warp-Stable',
-           'com.apple.Passwords', 'com.apple.keychainaccess', 'com.1password.1password', 'com.bitwarden.desktop'}
+           'com.apple.Passwords', 'com.apple.keychainaccess', 'com.1password.1password', 'com.bitwarden.desktop',
+           # Windows executables observed as app ids: shells, terminals and system editors.
+           'cmd.exe', 'powershell.exe', 'pwsh.exe', 'windowsterminal.exe', 'wt.exe', 'conhost.exe',
+           'openconsole.exe', 'wsl.exe', 'bash.exe', 'mintty.exe', 'regedit.exe', 'mmc.exe'}
 
 
 def authorize_input(action, context):

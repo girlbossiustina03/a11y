@@ -49,7 +49,8 @@ class ChatProvider:
     def __init__(self, config=None):
         self.config = config or AIConfig.from_env()
 
-    def complete_structured(self, system, messages, *, schema, image_data=None, max_tokens=3000, thinking=None):
+    def complete_structured(self, system, messages, *, schema, image_data=None, max_tokens=3000, thinking=None, cancel=None):
+        # Compatible endpoints are not streamed; a stopped task discards the late result.
         return self.complete(system+'\nReturn only JSON matching this schema:\n'+json.dumps(schema),
                              messages, image_data=image_data, max_tokens=max_tokens)
 

@@ -1,8 +1,11 @@
 """Windows desktop bridge with the same interface as MacDesktopBridge.
 
-Reads only window metadata (titles, owners, bounds) through Win32; never window
-contents. Actions are limited to opening catalog apps, focusing an app, closing an
-observed window and asking an app to quit. Control pressing is macOS-only for now.
+Reads window metadata (titles, owners, bounds) through Win32 and, when UI Automation
+is available, the focused element's role and named actionable controls of the
+foreground window. Field contents are never read. Actions: opening catalog apps and
+supported browsers, focusing an app, closing an observed window, asking an app to
+quit, pressing an observed UIA control, clicking a guarded screen point, and
+bounded text/key/scroll input into the observed foreground window.
 """
 import ctypes
 from ctypes import wintypes
@@ -12,6 +15,7 @@ from pathlib import Path, PureWindowsPath
 import subprocess
 import threading
 import time
+from urllib.parse import urlsplit
 
 DENIED_EXECUTABLES = {'1password.exe', 'bitwarden.exe', 'keepass.exe', 'keepassxc.exe', 'dashlane.exe',
                       'lastpass.exe', 'credentialuibroker.exe'}
@@ -29,6 +33,12 @@ BUILTIN_APPS = [
 SKIPPED_SHORTCUT_WORDS = ('uninstall', 'readme', 'read me', 'help', 'documentation', 'license',
                           'release notes', 'website', 'manual')
 CATALOG_TTL = 600
+# Browsers found through the App Paths registry; ids are stable across machines.
+BROWSERS = (('browser:edge', 'Microsoft Edge', 'msedge.exe'), ('browser:chrome', 'Google Chrome', 'chrome.exe'),
+            ('browser:firefox', 'Firefox', 'firefox.exe'))
+BLOCKED_INPUT = {'cmd.exe', 'powershell.exe', 'pwsh.exe', 'windowsterminal.exe', 'wt.exe', 'conhost.exe',
+                 'openconsole.exe', 'mintty.exe', 'wsl.exe', 'bash.exe', 'regedit.exe', 'mmc.exe'}
+GA_ROOT = 2
 WM_CLOSE = 0x0010
 SW_RESTORE = 9
 GW_OWNER = 4
@@ -58,6 +68,10 @@ class _Win32:
         u.GetWindow.restype = wintypes.HWND
         u.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
         u.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+        u.WindowFromPoint.argtypes = [wintypes.POINT]
+        u.WindowFromPoint.restype = wintypes.HWND
+        u.GetAncestor.argtypes = [wintypes.HWND, ctypes.c_uint]
+        u.GetAncestor.restype = wintypes.HWND
         u.GetForegroundWindow.restype = wintypes.HWND
         u.SetForegroundWindow.argtypes = [wintypes.HWND]
         u.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
@@ -113,9 +127,27 @@ class _Win32:
         # callers (Qt sets per-monitor awareness) get physical pixels; unaware callers
         # already get virtualized logical ones.
         aware = self.user32.GetAwarenessFromDpiAwarenessContext(self.user32.GetThreadDpiAwarenessContext())
-        scale = (self.user32.GetDpiForWindow(hwnd) or 96)/96 if aware > 0 else 1
-        return {'x': rect.left/scale, 'y': rect.top/scale,
-                'width': (rect.right-rect.left)/scale, 'height': (rect.bottom-rect.top)/scale}
+        if aware <= 0:
+            return {'x': rect.left, 'y': rect.top, 'width': rect.right-rect.left, 'height': rect.bottom-rect.top}
+        # Per-monitor mapping, the same as screen captures and UIA controls use, so
+        # windows on a scaled secondary monitor line up with OCR and click points.
+        from .windows_input import logical_rect
+        return logical_rect(self.monitors(), rect.left, rect.top, rect.right, rect.bottom)
+
+    def physical_rect(self, hwnd):
+        rect = wintypes.RECT()
+        self.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+        return rect.left, rect.top, rect.right, rect.bottom
+
+    def root_at(self, x, y):
+        """Top-level window under a physical point (what a click would reach)."""
+        return self.user32.GetAncestor(self.user32.WindowFromPoint(wintypes.POINT(int(x), int(y))), GA_ROOT)
+
+    def monitors(self):
+        if not hasattr(self, '_monitors'):
+            from .windows_input import Monitors
+            self._monitors = Monitors(self.user32)
+        return self._monitors
 
     def executable(self, pid):
         handle = self.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
@@ -149,15 +181,47 @@ class _Win32:
 
 
 class WindowsDesktopBridge:
-    def __init__(self, directory=None, *, win32=None):
+    def __init__(self, directory=None, *, win32=None, monitors=None, sender=None, uia=None, focus=None):
         self.win32 = win32 or _Win32()
         self.own_pid = os.getpid()
         self.lock = threading.Lock()
         self.catalog_cache = ([], {}, 0.0)
         self.names = {}
+        self._monitors, self._sender, self._uia, self._focus = monitors, sender, uia, focus
+        self.uia_ready = threading.Event()
         if win32 is None:
-            # Reading the Start menu takes a few seconds; do it before the first request needs it.
+            # Reading the Start menu takes a few seconds and the first comtypes import
+            # generates UIA wrappers; do both before the first request needs them.
             threading.Thread(target=self.catalog_entries, daemon=True).start()
+            threading.Thread(target=self.automation, kwargs={'create': True}, daemon=True).start()
+        else:
+            self.uia_ready.set()
+
+    # --- Native adapters (created lazily on Windows; doubled in tests) ---
+    def monitors(self):
+        if self._monitors is None:
+            self._monitors = self.win32.monitors()
+        return self._monitors
+
+    def sender(self):
+        if self._sender is None:
+            from .windows_input import SendInput
+            self._sender = SendInput(self.win32.user32)
+        return self._sender
+
+    def automation(self, *, create=False):
+        """UIA adapter once the startup thread has created it; observation never waits for it."""
+        if create and self._uia is None:
+            from .windows_input import ui_automation
+            self._uia = ui_automation(self.monitors()) or False
+            self.uia_ready.set()
+        return self._uia or None
+
+    def focus_reader(self):
+        if self._focus is None:
+            from .windows_input import Win32Focus
+            self._focus = Win32Focus(self.win32.user32, self.monitors())
+        return self._focus
 
     # --- Observation ---
     def app_name(self, path):
@@ -223,7 +287,38 @@ class WindowsDesktopBridge:
         output['status'] = 'available'
         output['app'] = {'name': front['name'], 'bundle_id': front['bundle_id'], 'pid': front['pid']}
         output['window'] = {'title': front['title'], 'bounds': front['bounds']}
+        focus = self.focused(front)
+        if focus:
+            # Role and bounds only; field contents are never read.
+            output['focused_role'] = focus['role']
+            if focus.get('bounds'):
+                output['focused_bounds'] = focus['bounds']
+        output['controls'] = [descriptor for descriptor, _ in self.controls(front)]
+        output['control_source'] = 'uia' if self.automation() else 'unavailable'
         return output
+
+    def focused(self, window):
+        """Focused element of the foreground window: UIA first, classic Win32 fallback."""
+        automation = self.automation()
+        focus = automation.focused() if automation else None
+        if focus and focus.get('pid') not in (None, window['pid']):
+            focus = None
+        if focus is None:
+            try:
+                focus = self.focus_reader().focused(window['hwnd'])
+            except (OSError, AttributeError, ValueError):
+                focus = None
+        return focus
+
+    def controls(self, window):
+        automation = self.automation()
+        if not automation:
+            return []
+        try:
+            found = automation.controls(window['hwnd'])
+        except Exception:  # COM errors and timeouts from the observed app
+            return []
+        return [(dict(descriptor, id='control-%d' % index), element) for index, (descriptor, element) in enumerate(found)]
 
     def request_access(self):
         # Window metadata needs no special permission on Windows.
@@ -250,6 +345,11 @@ class WindowsDesktopBridge:
                 apps.append({'bundle_id': bundle_id, 'name': name})
                 targets[bundle_id] = target
                 names.add(name.casefold())
+            for bundle_id, name, path in self.browser_paths():
+                if name.casefold() not in names:
+                    apps.append({'bundle_id': bundle_id, 'name': name})
+                    targets[bundle_id] = path
+                    names.add(name.casefold())
             # Every Start-menu app, including Store/MSIX apps such as the new Teams,
             # which have no .lnk file. Launched through shell:AppsFolder.
             for item in self.start_apps():
@@ -297,6 +397,26 @@ class WindowsDesktopBridge:
                 apps.append({'name': name.strip()[:100], 'app_id': app_id.strip()[:300]})
         return apps
 
+    @staticmethod
+    def browser_paths():
+        """(id, name, executable) of installed supported browsers from App Paths."""
+        try:
+            import winreg
+        except ImportError:
+            return []
+        found = []
+        for bundle_id, name, executable in BROWSERS:
+            for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+                try:
+                    with winreg.OpenKey(hive, 'SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\'+executable) as key:
+                        path = winreg.QueryValue(key, None).strip().strip('"')
+                except OSError:
+                    continue
+                if path and os.path.isfile(path):
+                    found.append((bundle_id, name, path))
+                    break
+        return found
+
     def catalog(self):
         return self.catalog_entries()[0]
 
@@ -325,6 +445,10 @@ class WindowsDesktopBridge:
 
     def application_action(self, action):
         kind = action['type']
+        if kind in ('type_text', 'press_key', 'scroll'):
+            return self.input(action)
+        if kind == 'browse_url':
+            return self.browse(action)
         if kind == 'launch_app':
             target = self.catalog_entries()[1].get(action['bundle_id'])
             if not target:
@@ -364,5 +488,109 @@ class WindowsDesktopBridge:
         while time.monotonic() < deadline and any(self.win32.user32.IsWindow(h) and self.win32.user32.IsWindowVisible(h) for h in handles):
             time.sleep(0.2)
 
+    def foreground_target(self, bundle_id, title):
+        """The observed window, brought forward if the companion currently has focus."""
+        user32 = self.win32.user32
+        foreground = int(user32.GetForegroundWindow() or 0)
+        windows = self.windows()
+        if foreground and self.win32.pid(foreground) == self.own_pid:
+            target = next((w for w in windows if w['bundle_id'] == bundle_id and w['title'] == title), None)
+            if target is None or not user32.SetForegroundWindow(target['hwnd']):
+                raise RuntimeError('The target window could not be brought forward. Nothing was sent.')
+            deadline = time.monotonic()+0.5
+            while int(user32.GetForegroundWindow() or 0) != target['hwnd'] and time.monotonic() < deadline:
+                time.sleep(0.02)
+            foreground = int(user32.GetForegroundWindow() or 0)
+        window = next((w for w in windows if w['hwnd'] == foreground), None)
+        if window is None or window['bundle_id'] != bundle_id or window['title'] != title:
+            raise RuntimeError('Another window became active. Nothing was sent.')
+        return window
+
+    def input(self, action):
+        window = self.foreground_target(action['bundle_id'], action['window_title'])
+        executable = PureWindowsPath(self.win32.executable(window['pid'])).name.lower()
+        if executable in BLOCKED_INPUT or executable in DENIED_EXECUTABLES:
+            raise RuntimeError('Input is unavailable for that application. Shell and protected-app input is disabled.')
+        if any(abs(window['bounds'][key]-action['bounds'][key]) > 1 for key in ('x', 'y', 'width', 'height')):
+            raise RuntimeError('The input window moved or changed. Nothing was sent.')
+        focus = self.focused(window)
+        if not focus or focus['role'] == 'secure_input':
+            raise RuntimeError('Input is blocked while a password field or unknown control is focused.')
+        sender = self.sender()
+        if action['type'] == 'type_text':
+            expected = action.get('focused_bounds') or {}
+            if (focus['role'] != action.get('focused_role') or not focus.get('bounds')
+                    or any(abs(focus['bounds'][key]-expected.get(key, float('inf'))) > 1 for key in ('x', 'y', 'width', 'height'))):
+                raise RuntimeError('Focus the same non-password text field before typing.')
+            def still_focused():
+                current = self.focused(window)
+                return (int(self.win32.user32.GetForegroundWindow() or 0) == window['hwnd'] and current is not None
+                        and current.get('key') == focus.get('key') and current['role'] != 'secure_input')
+            sender.type_text(action['text'], still_focused)
+        elif action['type'] == 'press_key':
+            sender.press(action['key'])
+        else:
+            if action['direction'] not in ('up', 'down'):
+                raise RuntimeError('Unsupported scroll direction.')
+            x, y = self.physical_center(window['hwnd'])
+            sender.scroll(x, y, action['direction'])
+        return {'submitted': True, 'verification_required': True}
+
+    def physical_center(self, hwnd):
+        left, top, right, bottom = self.win32.physical_rect(hwnd)
+        return (left+right)//2, (top+bottom)//2
+
+    def browse(self, action):
+        url = urlsplit(action.get('url', ''))
+        if url.scheme not in ('http', 'https') or not url.hostname or url.username or url.password:
+            raise RuntimeError('Only a public HTTP(S) address can be opened.')
+        path = self.catalog_entries()[1].get(action['bundle_id'])
+        if not path or not action['bundle_id'].startswith('browser:'):
+            raise RuntimeError('Choose an installed supported browser.')
+        mode = action.get('browser_mode', 'default')
+        firefox = action['bundle_id'] == 'browser:firefox'
+        flags = {'window': ['-new-window' if firefox else '--new-window'],
+                 'tab': ['-new-tab'] if firefox else [], 'default': []}.get(mode)
+        if flags is None:
+            raise RuntimeError('Invalid browser placement.')
+        # A fixed executable with the validated URL as one argument; never a shell.
+        try:
+            subprocess.Popen([path, *flags, url.geturl()], close_fds=True,
+                             creationflags=getattr(subprocess, 'DETACHED_PROCESS', 0))
+        except OSError:
+            raise RuntimeError('Windows could not open that browser.') from None
+        return {'submitted': True, 'verification_required': True,
+                'tab_placement': mode if mode != 'default' else 'browser_preference'}
+
+    def click(self, action, guard):
+        """Click a fraction of the captured monitor, after checking the display is unchanged."""
+        screen = guard['screen']
+        handle, (mx, my, mw, mh), scale = self.monitors().at(screen['x']+1, screen['y']+1)
+        if (handle != guard['display_id'] or abs(mw/scale-screen['width']) > 1 or abs(mh/scale-screen['height']) > 1
+                or (mx, my) != (int(screen['x']), int(screen['y']))):
+            raise RuntimeError('The display changed. No click was sent.')
+        x, y = int(mx+action['x']*mw), int(my+action['y']*mh)
+        root = self.win32.root_at(x, y)
+        if root and self.win32.pid(root) == self.own_pid:
+            raise RuntimeError('The companion is covering that target. Move it aside; no click was sent.')
+        self.sender().click(x, y, action.get('button', 'left'), action.get('click_count', 1))
+        return {'submitted': True, 'verification_required': True}
+
     def press(self, action):
-        raise RuntimeError('Pressing app controls is currently available only on macOS.')
+        automation = self.automation()
+        if not automation:
+            raise RuntimeError('Pressing app controls needs Windows UI Automation (install comtypes).')
+        window = self.foreground_target(action['bundle_id'], action['window_title'])
+        found = dict((descriptor['id'], (descriptor, element)) for descriptor, element in self.controls(window))
+        descriptor, element = found.get(action['control_id'], (None, None))
+        if (descriptor is None or descriptor['label'] != action['label'] or not descriptor['enabled']
+                or any(abs(descriptor['bounds'][key]-action['bounds'][key]) > 1 for key in ('x', 'y', 'width', 'height'))):
+            raise RuntimeError('The control changed. Request a fresh observation before pressing it.')
+        try:
+            invoked = automation.invoke(element)
+        except Exception:
+            # The app may have started handling it; never retry automatically.
+            raise RuntimeError('The press result is uncertain. Check the app before trying again.') from None
+        if not invoked:
+            raise RuntimeError('That control does not support being pressed. Ask for a visual click instead.')
+        return {'submitted': True, 'verification_required': True}

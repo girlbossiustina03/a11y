@@ -1,5 +1,6 @@
 """Small semantic request planner, separate from screen evidence and old assistant prose."""
 from copy import deepcopy
+import re
 from .models import RESPONSE_SCHEMA, ValidationError
 
 OPERATIONS = ('answer', 'plan', 'inspect_screen', 'move_object', 'move_geometry',
@@ -8,7 +9,9 @@ INTENT_SCHEMA = {'type': 'object', 'additionalProperties': False,
     'required': ['operation', 'app_name', 'target', 'browser_mode', 'remaining_request'], 'properties': {
         'operation': {'enum': list(OPERATIONS)}, 'app_name': {'type': 'string'}, 'target': {'type': 'string'},
         'browser_mode': {'enum': ['window', 'tab', 'default']},
-        'remaining_request': {'type': 'string'}, 'media_artist': {'type': 'string'}}}
+        'remaining_request': {'type': 'string'}, 'media_artist': {'type': 'string'},
+        'goal_mode': {'enum': ['inspect', 'draft', 'change']}}}
+INTENT_SCHEMA['required'].append('goal_mode')
 INTENT_SYSTEM = '''Interpret ONLY the latest user request. Do not execute or answer it.
 Return operation, app_name (the actual requested app, empty if none), target, and
 browser_mode (default for non-browser requests), remaining_request (empty if the
@@ -61,6 +64,11 @@ These operations are not substitutes. "close lower right terminal" is close_wind
 app_name Terminal, not movement. "open Stremio" is launch_app, app_name Stremio,
 never Terminal. "open a new terminal" is new_window, app_name Terminal.
 A complaint such as "you did not close it" is answer; do not repeat an action.
+goal_mode classifies the requested outcome: inspect means opening, navigating,
+searching, reading, checking information (including activity/tasks) or calculator
+arithmetic; draft means explicitly writing or composing local text without sending
+it; change means explicitly sending, posting, deleting, purchasing or changing
+settings. Use inspect unless the user explicitly requests drafting or a change.
 Use earlier USER requests only to resolve explicit pronouns. No old assistant replies
 are supplied because they are not instructions. Never invent a multi-app workaround.'''
 VERIFY_SCHEMA = {'type': 'object', 'additionalProperties': False, 'required': ['message'],
@@ -73,12 +81,14 @@ not a new window. Submission never proves task completion. Keep the report short
 
 
 def validate_plan(value):
-    if not isinstance(value, dict) or not {'operation', 'app_name', 'target'} <= set(value) or set(value) - {'operation', 'app_name', 'target', 'browser_mode', 'remaining_request', 'media_artist'}:
+    if not isinstance(value, dict) or not {'operation', 'app_name', 'target'} <= set(value) or set(value) - {'operation', 'app_name', 'target', 'browser_mode', 'remaining_request', 'media_artist', 'goal_mode'}:
         raise ValidationError('The request could not be interpreted reliably. Please name the action and target.')
     if value['operation'] not in OPERATIONS or any(not isinstance(value[key], str) or len(value[key]) > (2000 if key == 'target' else 500) for key in ('app_name', 'target')):
         raise ValidationError('The request planner returned an invalid operation.')
     if value.get('browser_mode', 'default') not in ('window', 'tab', 'default'):
         raise ValidationError('Invalid browser window mode.')
+    if value.get('goal_mode', 'inspect') not in ('inspect', 'draft', 'change'):
+        raise ValidationError('Invalid goal scope.')
     for field in ('remaining_request', 'media_artist'):
         if not isinstance(value.get(field, ''), str) or len(value.get(field, '')) > 500:
             raise ValidationError('Invalid remaining request or media artist.')
@@ -163,9 +173,23 @@ Current pixels override older metadata. If evidence is insufficient, ask a short
 clarification with request_kind=answer and no action/target. No shell commands.'''
 
 
+HIGHLIGHT_REQUEST = re.compile(r"\b(mark|highlight|point (?:out|to|at)|show me where|show where|where is|where's|where are|locate)\b", re.I)
+ACTIVATION_FOLLOWUP = re.compile(r"\b(?:and|then)\s+(?:also\s+)?(?:click|press|tap|close|open|select|activate|type|send|delete|quit|choose|submit)\b", re.I)
+ACTIVATING_OPERATIONS = ('click_point', 'press_control', 'computer_task', 'close_window', 'quit_app')
+
+
+def highlight_only(request):
+    """"Mark/show where" requests show a target; they never authorize activating it."""
+    return isinstance(request, str) and bool(HIGHLIGHT_REQUEST.search(request)) and not ACTIVATION_FOLLOWUP.search(request)
+
+
 def preserve_desktop_goal(plan, request):
     """Preserve follow-up work across app launches, browser and input shortcuts."""
     plan = validate_plan(plan)
+    if plan['operation'] in ACTIVATING_OPERATIONS and highlight_only(request):
+        # A model may route "mark where the close button is" to clicking or
+        # closing. Highlighting is the only operation such a request authorizes.
+        return dict(plan, operation='highlight', remaining_request='')
     is_shortcut = plan['operation'] in ('browser_open', 'browser_search', 'new_window',
         'launch_app', 'focus_app', 'type_text', 'press_key', 'scroll', 'click_point', 'press_control')
     if plan['operation'] in ('click_point', 'press_control') or is_shortcut and plan.get('remaining_request', '').strip():

@@ -96,12 +96,16 @@ class TaskTests(unittest.TestCase):
             events.append('model') or {'status': 'done', 'message': 'Found tasks.', 'risk': 'navigation', 'action': None})
         self.task.propose(self.desktop, self.vision, self.provider, {'x': 0, 'y': 0},
                           progress=lambda message: events.append(message))
-        self.assertEqual(events, ['Choosing the next action with the local model…', 'model'])
+        # A completion reported before anything ran is rechecked once.
+        self.assertEqual(events, ['Choosing the next action with the local model…', 'model',
+                                  'Rechecking the next action with the local model…', 'model'])
 
     def enable_ocr(self):
         capture = self.vision.capture.side_effect
         self.vision.capture.side_effect = lambda *args, **kwargs: dict(capture(*args, **kwargs),
-            text_regions=[{'text': 'Battery', 'x': .2, 'y': .3, 'width': .2, 'height': .1}])
+            text_regions=[{'text': 'Battery', 'x': .2, 'y': .3, 'width': .2, 'height': .1},
+                          {'text': 'Wi-Fi', 'x': .2, 'y': .45, 'width': .2, 'height': .1},
+                          {'text': 'Bluetooth', 'x': .2, 'y': .6, 'width': .2, 'height': .1}])
 
     def test_ocr_step_uses_text_only_inference_but_keeps_a_screenshot_click_guard(self):
         self.enable_ocr()

@@ -10,6 +10,10 @@ import sys
 import threading
 import time
 
+# macOS bundle IDs and Windows browser ids (see windows_desktop.BROWSERS).
+BROWSER_IDS = {'com.apple.Safari', 'com.google.Chrome', 'org.mozilla.firefox', 'com.microsoft.edgemac',
+               'browser:edge', 'browser:chrome', 'browser:firefox'}
+
 
 class MacDesktopBridge:
     def __init__(self, directory):
@@ -259,8 +263,7 @@ class DesktopContext:
         raise ValueError('The requested desktop target was not observed or is no longer available.')
 
     def authorize_browser(self, action):
-        allowed = {'com.apple.Safari', 'com.google.Chrome', 'org.mozilla.firefox', 'com.microsoft.edgemac'}
-        app = next((app for app in self.installed_apps() if app['bundle_id'] == action['bundle_id'] and app['bundle_id'] in allowed), None)
+        app = next((app for app in self.installed_apps() if app['bundle_id'] == action['bundle_id'] and app['bundle_id'] in BROWSER_IDS), None)
         if app is None:
             raise ValueError('Choose an installed supported browser.')
         return dict(action)

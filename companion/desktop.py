@@ -1199,10 +1199,12 @@ class CompanionWindow(QMainWindow):
         self.switch_app_btn.setEnabled(bool(self.running_apps.count()))
         self.control_highlight_btn.setEnabled(bool(self.observed_controls.count()))
 
-    def offer_computer_task(self, goal):
+    def offer_computer_task(self, goal, goal_mode=None):
         goal = text(goal, 'computer task', 2000)
         self.stop_computer_task(announce=False)
         self.pending_desktop_action = {'type': 'start_task', 'goal': goal, 'label': 'Start computer task'}
+        if goal_mode:
+            self.pending_desktop_action['goal_mode'] = goal_mode
         proposal = self.pending_desktop_action
         self.say('Starting: '+goal, [('Stop task', 'computer:stop')], compact=True)
         def begin():
@@ -1223,7 +1225,7 @@ class CompanionWindow(QMainWindow):
             self.say('Enable app awareness and local screen vision in Settings, then try this task again.',
                      [('Settings', 'settings'), ('Try again', 'computer:start:auto' if automatic else 'computer:start:review'), ('Cancel', 'computer:stop')], compact=True)
             return
-        self.computer_task = ComputerTask(proposal['goal'], automatic=automatic)
+        self.computer_task = ComputerTask(proposal['goal'], automatic=automatic, goal_mode=proposal.get('goal_mode'))
         self.pending_desktop_action = None
         self.next_computer_step()
 
@@ -1362,7 +1364,7 @@ class CompanionWindow(QMainWindow):
                 if not proposed:
                     return
                 if proposed['type'] == 'start_task':
-                    self.offer_computer_task(proposed['goal'])
+                    self.offer_computer_task(proposed['goal'], proposed.get('goal_mode'))
                     return
                 if proposed['type'] == 'capture_once':
                     self.pending_desktop_action = None
@@ -1411,7 +1413,7 @@ class CompanionWindow(QMainWindow):
                                      max(area.top(), min(int(rect['y']), area.bottom()-self.mascot.height())))
                 self.mascot.set_state('guiding')
                 self.hide()
-                self.mascot.footer.setText('Highlighted: '+current['label']+' · expires in 10 seconds')
+                self.note('Highlighted: '+current['label']+' · expires in 10 seconds')
         except (ValueError, RuntimeError) as e:
             self.mascot_home(str(e))
             self.mascot.expand_chat()
@@ -1539,6 +1541,11 @@ class CompanionWindow(QMainWindow):
             self.transcript.appendPlainText('A11y: '+message+'\n')
             self._last_companion_message = message
 
+    def note(self, message):
+        """A short outcome shown under the mascot; History records the same text."""
+        self.mascot.footer.setText(message)
+        self.record_companion_message(message)
+
     def say(self, message, choices=(), **options):
         self.record_companion_message(message)
         self.latest_response = message
@@ -1576,7 +1583,7 @@ class CompanionWindow(QMainWindow):
         if self.pending_target:
             choices.append(('Show me where', 'guide'))
         elif self.pending_desktop_action and self.pending_desktop_action['type'] == 'start_task':
-            self.offer_computer_task(self.pending_desktop_action['goal'])
+            self.offer_computer_task(self.pending_desktop_action['goal'], self.pending_desktop_action.get('goal_mode'))
             return
         elif self.pending_desktop_action:
             choices.append((self.pending_desktop_action.get('confirmation_label', self.pending_desktop_action['label']), 'desktop:apply'))
@@ -1598,13 +1605,13 @@ class CompanionWindow(QMainWindow):
             self.input.setPlainText(request)
             self.ask(mode='plan' if action == 'plan' else 'assist', from_mascot=True)
         except (ValueError, PermissionError) as e:
-            self.mascot.footer.setText(str(e))
+            self.note(str(e))
 
     def mascot_action(self, action):
         if action == 'computer:interrupt':
             if self.computer_task and not self.computer_task.cancelled.is_set():
                 self.stop_computer_task(announce=False)
-                self.mascot.footer.setText('Task stopped while you type. Send your next request when ready.')
+                self.note('Task stopped while you type. Send your next request when ready.')
             return
         if action == 'computer:stop':
             self.stop_computer_task()
@@ -1711,7 +1718,7 @@ class CompanionWindow(QMainWindow):
                 self.mascot_home((f'We’re all set, {name}!' if name else 'We’re all set!')+
                                  ' I’ve saved your choices. You can talk to me right here. What are we working on first?')
         except (ValueError, PermissionError) as e:
-            self.mascot.footer.setText(str(e))
+            self.note(str(e))
 
     def request_quit(self):
         if (self.worker and self.worker.isRunning()) or (self.discovery and self.discovery.isRunning()) or (self.vision_permission and self.vision_permission.isRunning()):

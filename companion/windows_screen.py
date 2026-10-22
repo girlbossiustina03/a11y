@@ -82,7 +82,7 @@ class WindowsScreenBridge:
             # Windows has no screen-recording permission; capture only needs exclusion support.
             return {'granted': True}
         values = dict(zip(args[::2], args[1::2]))
-        return self.capture(float(values.get('--x', 0)), float(values.get('--y', 0)))
+        return self.capture(float(values.get('--x', 0)), float(values.get('--y', 0)), ocr='--ocr' in args)
 
     def own_windows(self):
         own = []
@@ -110,9 +110,9 @@ class WindowsScreenBridge:
             raise RuntimeError('No display is available to capture.')
         dpi_x, dpi_y = wintypes.UINT(96), wintypes.UINT(96)
         self.shcore.GetDpiForMonitor(handle, MDT_EFFECTIVE_DPI, ctypes.byref(dpi_x), ctypes.byref(dpi_y))
-        return info.rcMonitor, (dpi_x.value or 96)/96
+        return info.rcMonitor, (dpi_x.value or 96)/96, int(handle)
 
-    def capture(self, x, y):
+    def capture(self, x, y, ocr=False):
         # Windows cannot exclude another application's windows with affinity.
         # Refuse capture when a known protected app is visible in the background.
         if self.protected_visible():
@@ -122,7 +122,7 @@ class WindowsScreenBridge:
             path = self.desktop.win32.executable(self.desktop.win32.pid(foreground))
             if path and path.rsplit('\\', 1)[-1].lower() in DENIED_EXECUTABLES:
                 return {'error': 'Screen vision paused while a protected app is active.'}
-        rect, scale = self.monitor(x, y)
+        rect, scale, handle = self.monitor(x, y)
         width, height = rect.right-rect.left, rect.bottom-rect.top
         out_w, out_h = CAPTURE_WIDTH, max(1, round(CAPTURE_WIDTH*height/width))
         own = self.own_windows()
@@ -142,11 +142,23 @@ class WindowsScreenBridge:
         windows = [w for w in self.desktop.windows()
                    if w['bounds']['x'] < x+screen['width'] and w['bounds']['x']+w['bounds']['width'] > x
                    and w['bounds']['y'] < y+screen['height'] and w['bounds']['y']+w['bounds']['height'] > y][:14]
-        return {'image_data': 'data:image/png;base64,'+base64.b64encode(png(out_w, out_h, pixels)).decode(),
-                'screen': screen,
-                'captured_at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
-                'windows': [{'app': w['name'], 'title': w['title']} for w in windows],
-                'companion_excluded': True}
+        result = {'image_data': 'data:image/png;base64,'+base64.b64encode(png(out_w, out_h, pixels)).decode(),
+                  'screen': screen,
+                  # The monitor handle binds a click to this display; it changes when
+                  # displays are reconfigured, which then refuses a stale click.
+                  'display_id': handle,
+                  'captured_at': datetime.now(timezone.utc).isoformat(timespec='seconds'),
+                  'windows': [{'app': w['name'], 'title': w['title'], 'window_id': w['hwnd'], 'bounds': w['bounds']} for w in windows],
+                  'companion_excluded': True}
+        if ocr:
+            from .windows_ocr import recognize
+            started = time.monotonic()
+            regions = recognize(pixels, out_w, out_h)
+            # Missing OCR falls back to image analysis, never guessed text.
+            result['text_regions'] = regions or []
+            result['ocr_ms'] = round((time.monotonic()-started)*1000)
+            result['ocr'] = 'windows_media_ocr' if regions is not None else 'unavailable'
+        return result
 
     def grab(self, rect, out_w, out_h):
         screen = self.user32.GetDC(None)

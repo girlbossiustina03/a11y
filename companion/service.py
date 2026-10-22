@@ -353,7 +353,8 @@ class Companion:
             operation = request_plan['operation']
             if operation == 'computer_task':
                 prebuilt = {'request_kind': 'answer', 'message': 'Starting this goal using fresh screen observations.', 'source_ids': [], 'workflow': None, 'target': None,
-                    'desktop_action': {'type': 'start_task', 'goal': request_plan['target'] or request}}
+                    'desktop_action': {'type': 'start_task', 'goal': request_plan['target'] or request,
+                                       **({'goal_mode': request_plan['goal_mode']} if request_plan.get('goal_mode') else {})}}
             elif operation == 'inspect_media':
                 message = describe_music(self.desktop_context.media_state())
                 prebuilt = {'request_kind': 'answer', 'message': message, 'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
@@ -389,9 +390,10 @@ class Companion:
                     prebuilt = {'request_kind': 'answer', 'message': 'I could not identify one installed app named “'+request_plan['app_name']+'”. Please give its exact application name.',
                                 'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
             elif operation in ('browser_search', 'browser_open'):
-                matches = resolve_app(request_plan['app_name'] or 'Safari', self.desktop_context.installed_apps())
-                browsers = {'com.apple.Safari', 'com.google.Chrome', 'org.mozilla.firefox', 'com.microsoft.edgemac'}
-                matches = [app for app in matches if app['bundle_id'] in browsers]
+                from .desktop_context import BROWSER_IDS
+                catalog = self.desktop_context.installed_apps()
+                default = 'Safari' if any(app['bundle_id'] == 'com.apple.Safari' for app in catalog) else 'Microsoft Edge'
+                matches = [app for app in resolve_app(request_plan['app_name'] or default, catalog) if app['bundle_id'] in BROWSER_IDS]
                 target = request_plan['target'].strip()
                 # A complete domain is navigation even if intent called it search.
                 is_address = bool(re.fullmatch(r'(?:https?://)?(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}(?::[0-9]+)?(?:[/?#][^\s]*)?', target))

@@ -24,7 +24,7 @@ class OllamaTests(unittest.TestCase):
             self.assertEqual(args[1]['messages'][1]['content'], 'Earlier question')
             self.assertEqual(args[1]['format']['type'], 'object')
             self.assertIn('desktop_action', args[1]['format']['properties'])
-            self.assertFalse(args[1]['stream'])
+            self.assertTrue(args[1]['stream'])
             self.assertEqual(result['message'], 'A model-generated answer')
 
     def test_discovery_excludes_embedding_and_cloud_models(self):
