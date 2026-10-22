@@ -1,16 +1,18 @@
 """Interactive mascot conversation. Artwork is independently replaceable."""
+import math
 import os
 from .theme import MASCOT_STYLE
 from .icons import control_icon
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QFrame, QVBoxLayout, QHBoxLayout, QPushButton,
     QPlainTextEdit, QLineEdit, QLabel, QAbstractButton, QMenu, QScrollArea, QGraphicsDropShadowEffect)
-from PyQt6.QtCore import Qt, QTimer, QPoint, pyqtSignal, QRect, QSize, QEvent
-from PyQt6.QtGui import QPainter, QColor, QPen, QShortcut, QKeySequence, QPixmap, QFontMetrics
+from PyQt6.QtCore import Qt, QTimer, QPoint, QPointF, QRectF, QElapsedTimer, pyqtSignal, QRect, QSize, QEvent
+from PyQt6.QtGui import QPainter, QPainterPath, QColor, QPen, QShortcut, QKeySequence, QPixmap, QFontMetrics
 
 
 class Composer(QPlainTextEdit):
     returnPressed = pyqtSignal()
+    editingStarted = pyqtSignal()
 
     def setText(self, value):
         self.setPlainText(value)
@@ -23,6 +25,7 @@ class Composer(QPlainTextEdit):
             self.returnPressed.emit()
             event.accept()
         else:
+            self.editingStarted.emit()
             super().keyPressEvent(event)
 
 
@@ -36,6 +39,8 @@ class Mascot(QWidget):
         self.setWindowTitle('A11y · Desktop companion')
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        # Qt Tool windows otherwise hide when another macOS app activates.
+        self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
         self.setAccessibleName('Desktop companion. Conversation and task controls.')
         self.setObjectName('mascotRoot')
         self.idle_footer = 'Enter to send · Shift+Enter for a new line'
@@ -126,7 +131,11 @@ class Mascot(QWidget):
         self.input.textChanged.connect(self.limit_input)
         self.input.setAccessibleName('Reply to your companion')
         self.input.installEventFilter(self)
+        self.input.viewport().installEventFilter(self)
+        self.card.installEventFilter(self)
+        self.entry_row.installEventFilter(self)
         self.input.returnPressed.connect(self.submit)
+        self.input.editingStarted.connect(lambda: self.action_requested.emit('computer:interrupt'))
         self.send = QPushButton()
         self.send.setIcon(control_icon('send'))
         self.send.setIconSize(QSize(20, 20))
@@ -199,6 +208,15 @@ class Mascot(QWidget):
         QShortcut(QKeySequence('Menu'), self).activated.connect(lambda: self.show_menu())
 
     def eventFilter(self, watched, event):
+        if watched in (getattr(self, 'card', None), getattr(self, 'entry_row', None)) and getattr(self, 'compact', False) and event.type() == QEvent.Type.MouseButtonPress:
+            self.action_requested.emit('computer:interrupt')
+            self.activateWindow()
+            self.input.setFocus(Qt.FocusReason.MouseFocusReason)
+            return True
+        if watched in (self.input, self.input.viewport()) and event.type() == QEvent.Type.MouseButtonPress:
+            self.action_requested.emit('computer:interrupt')
+            self.activateWindow()
+            self.input.setFocus(Qt.FocusReason.MouseFocusReason)
         if watched is self.input and event.type() in (QEvent.Type.FocusIn, QEvent.Type.FocusOut):
             self.card.setProperty('inputFocused', event.type() == QEvent.Type.FocusIn)
             self.card.style().unpolish(self.card)
@@ -225,6 +243,7 @@ class Mascot(QWidget):
                   max(area.top(), min(self.y(), area.bottom()-self.height())))
 
     def present(self, message, choices=(), *, placeholder=None, value='', submit_action='chat', stage='', compact=False):
+        draft = self.input.toPlainText() if compact and submit_action == self.submit_action and not value else value
         anchor = self.character.mapToGlobal(QPoint()) if self.isVisible() else None
         self.expanded_width = 240 if compact else 420
         self.header_widget.setVisible(not compact)
@@ -287,10 +306,11 @@ class Mascot(QWidget):
             self.choice_layout.addWidget(choice)
         self.choice_area.setFixedHeight(min(190, len(choices)*44))
         self.choice_area.setVisible(bool(choices))
-        self.entry_row.setVisible(placeholder is not None)
+        self.entry_row.setVisible(placeholder is not None or compact)
         self.submit_action = submit_action
-        self.input.setPlaceholderText(placeholder or '')
-        self.input.setText(value)
+        self.input.setPlaceholderText(placeholder or ('Ask anything…' if compact else ''))
+        self.input.setText(draft)
+        self.update_interaction_state()
         self.reply_available = bool(message) or bool(choices)
         self.reply_panel.setVisible(compact and self.reply_available and not self.user_collapsed)
         self.controls_row.setVisible(not self.user_collapsed)
@@ -315,14 +335,22 @@ class Mascot(QWidget):
             return
         value = self.input.text().strip()
         if value:
+            self.input.clear()
             self.submitted.emit(value, self.submit_action)
 
     def set_busy(self, busy):
         self.busy = busy
-        self.input.setEnabled(not busy)
-        self.send.setEnabled(not busy)
-        self.choice_box.setEnabled(not busy)
+        self.update_interaction_state()
         self.footer.setText('Thinking locally…' if busy else self.idle_footer)
+
+    def update_interaction_state(self):
+        # Drafting and Stop remain usable while inference is running.
+        self.input.setEnabled(True)
+        self.send.setEnabled(not self.busy)
+        self.choice_box.setEnabled(True)
+        for index in range(self.choice_layout.count()):
+            choice = self.choice_layout.itemAt(index).widget()
+            choice.setEnabled(not self.busy or choice.property('companion_action') in ('computer:stop', 'settings', 'stop_speech'))
 
     def set_state(self, state, message=None):
         self.state = state
@@ -388,7 +416,7 @@ class Mascot(QWidget):
     def show_menu(self, position=None):
         menu = QMenu(self)
         menu.setAccessibleName('Companion actions')
-        for title, action in [('Talk to me', 'talk'), ('Show last reply', 'reply'),
+        for title, action in [('Talk to me', 'talk'), ('Computer task…', 'computer:prompt'), ('Stop computer task', 'computer:stop'), ('Show last reply', 'reply'),
                               ('My saved tasks', 'tasks'), ('Mark current step done', 'confirm'),
                               ('Pause screen vision' if self.vision_button.text() == 'Screen on' else 'Enable screen vision…', 'vision:toggle'),
                               ('Personalize and set up access…', 'setup:wizard'),
@@ -412,34 +440,69 @@ class Mascot(QWidget):
         self.drag_position = None
 
 
+# Paleta norișorului (din designul "Cloud Desktop Assistant")
+CLOUD_SHADE = QColor('#E2EAF4')
+CLOUD_BODY = QColor('#FFFFFF')
+CLOUD_LINE = QColor('#C9D6E6')
+CLOUD_INK = QColor('#1E2838')
+
+
+def cloud_path():
+    """Conturul norișorului, în coordonatele viewBox-ului original (-20 -20 240 180)."""
+    path = QPainterPath(QPointF(57, 124))
+    path.cubicTo(35, 124, 23, 108, 26, 90)
+    path.cubicTo(29, 76, 41, 68, 53, 70)
+    path.cubicTo(55, 46, 73, 30, 95, 32)
+    path.cubicTo(111, 33, 123, 44, 129, 58)
+    path.cubicTo(136, 50, 150, 50, 159, 60)
+    path.cubicTo(168, 70, 168, 84, 163, 92)
+    path.cubicTo(176, 96, 181, 110, 174, 120)
+    path.cubicTo(170, 124, 165, 124, 159, 124)
+    path.quadTo(108, 131, 57, 124)
+    path.closeSubpath()
+    return path
+
+
+def ease_in_out(t):
+    return 0.5 - 0.5 * math.cos(math.pi * t)
+
+
 class CharacterButton(QAbstractButton):
-    """Replaceable visual. Optional A11Y_MASCOT_IMAGE supports supplied transparent PNG artwork."""
+    """Replaceable visual. Optional A11Y_MASCOT_IMAGE supports supplied transparent PNG artwork.
+
+    Default artwork: the A11y cloud, idle state only (slow float + blink)."""
+    SCALE = 0.75            # din coordonatele designului în cele ale butonului 150x110
+    FLOAT_PERIOD = 4000     # ms, plutire sus-jos
+    FLOAT_HEIGHT = 8        # px, în coordonatele designului
+    BLINK_PERIOD = 4200     # ms, un clipit pe ciclu
+
     def __init__(self, owner):
         super().__init__(owner)
         self.owner = owner
         self.state = 'idle'
-        self.pupil_offset = QPoint()
-        self.body_y_offset = 0
-        self.tick_count = 0
         self.press_position = None
         self.dragging = False
+        self.reduced_motion = False
         self.setFixedSize(150, 110)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setAccessibleName('Companion character. Activate to open or collapse chat; drag to move. Right-click or Shift+F10 for actions.')
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.artwork = QPixmap(os.getenv('A11Y_MASCOT_IMAGE', ''))
+        self.cloud = cloud_path()
+        self.clock = QElapsedTimer()
+        self.clock.start()
+        # ~30 fps pentru plutire și clipit fluide
         self.anim_timer = QTimer(self)
-        self.anim_timer.timeout.connect(self.update_micro_animations)
-        self.anim_timer.start(500)
+        self.anim_timer.timeout.connect(self.update)
+        self.anim_timer.start(33)
 
     def set_reduced_motion(self, enabled):
+        self.reduced_motion = enabled
         if enabled:
             self.anim_timer.stop()
-            self.body_y_offset = 0
-            self.pupil_offset = QPoint()
-            self.update()
         else:
-            self.anim_timer.start(500)
+            self.anim_timer.start(33)
+        self.update()
 
     def mousePressEvent(self, event):
         self.press_position = event.globalPosition().toPoint()
@@ -465,77 +528,76 @@ class CharacterButton(QAbstractButton):
         self.press_position = None
         self.dragging = False
 
+    def float_phase(self):
+        """0 -> 1 -> 0 pe parcursul unui ciclu de plutire."""
+        if self.reduced_motion:
+            return 0.0
+        t = (self.clock.elapsed() % self.FLOAT_PERIOD) / self.FLOAT_PERIOD
+        return ease_in_out(t * 2) if t < 0.5 else ease_in_out((1 - t) * 2)
+
+    def blink_scale(self):
+        """Scala verticală a ochilor: 1 normal, 0.1 la mijlocul clipitului."""
+        if self.reduced_motion:
+            return 1.0
+        t = (self.clock.elapsed() % self.BLINK_PERIOD) / self.BLINK_PERIOD
+        if 0.90 <= t < 0.94:
+            return 1 - 0.9 * (t - 0.90) / 0.04
+        if 0.94 <= t < 1.0:
+            return 0.1 + 0.9 * (t - 0.94) / 0.06
+        return 1.0
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        phase = self.float_phase()
+        lift = self.FLOAT_HEIGHT * self.SCALE * phase
 
         if not self.artwork.isNull():
             image = self.artwork.scaled(140, 100, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            painter.drawPixmap((self.width()-image.width())//2, (self.height()-image.height())//2+self.body_y_offset, image)
+            painter.drawPixmap((self.width()-image.width())//2, int((self.height()-image.height())//2-lift), image)
             return
 
-        # Original placeholder until supplied candy-man artwork is available.
-        cx = self.width() // 2
-        cy = self.height() // 2 + self.body_y_offset
+        # Norul e centrat pe orizontală (mijlocul lui e la x=102 în design)
+        painter.translate(self.width()/2 - 102*self.SCALE, 14 - 32*self.SCALE)
+        painter.scale(self.SCALE, self.SCALE)
 
-        # 1. Culori în funcție de starea curentă
-        if self.state in ('idle', 'listening', 'speaking', 'guiding'):
-            body_color = QColor("#48bb78")      # Verde calm
-            headphone_color = QColor("#3182ce") # Căști albastre
-        elif self.state == 'thinking':
-            body_color = QColor("#ecc94b")      # Galben gânditor
-            headphone_color = QColor("#dd6b20")
-        elif self.state == 'celebrate':
-            body_color = QColor("#4299e1")      # Albastru sărbătorire
-            headphone_color = QColor("#9f7aea")
+        # 1. Umbra de sub nor (se strânge când norul urcă)
+        shadow_w = 110 * (1 - 0.18*phase)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(0, 0, 0, int(255*0.28*(1 - 0.4*phase))))
+        painter.drawEllipse(QRectF(100 - shadow_w/2, 138, shadow_w, 12))
 
-        # 2. Coadă spiralată de cameleon
-        painter.setPen(QPen(body_color, 7, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        # 2. Corpul norului: umbră internă, corp alb, contur
+        painter.translate(0, -self.FLOAT_HEIGHT*phase)
+        painter.setBrush(CLOUD_SHADE)
+        painter.drawPath(self.cloud)
+        painter.save()
+        painter.translate(23, 0)
+        painter.scale(0.95, 1)
+        painter.translate(-23, 0)
+        painter.setBrush(CLOUD_BODY)
+        painter.drawPath(self.cloud)
+        painter.restore()
+        painter.setPen(QPen(CLOUD_LINE, 2.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawArc(cx - 65, cy - 10, 40, 40, 0, 270 * 16)
+        painter.drawPath(self.cloud)
 
-        # 3. Picioare
+        # 3. Ochii deschiși, cu clipit
+        blink = self.blink_scale()
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#2f855a"))
-        painter.drawRoundedRect(cx - 30, cy + 18, 14, 10, 4, 4)
-        painter.drawRoundedRect(cx + 10, cy + 18, 14, 10, 4, 4)
+        for cx in (82, 118):
+            painter.save()
+            painter.translate(cx, 87)
+            painter.scale(1, blink)
+            painter.setBrush(CLOUD_INK)
+            painter.drawEllipse(QPointF(0, 0), 8, 10.5)
+            painter.setBrush(CLOUD_BODY)
+            painter.drawEllipse(QPointF(3, -4), 2.8, 2.8)
+            painter.restore()
 
-        # 4. Corp principal
-        painter.setBrush(body_color)
-        painter.drawRoundedRect(cx - 40, cy - 25, 75, 45, 18, 18)
-
-        # 5. Căști Audio Mari (Simbol pentru suport senzorial / A11y)
-        painter.setPen(QPen(QColor("#2d3748"), 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        painter.drawArc(cx - 30, cy - 42, 55, 45, 0, 180 * 16) # Banda de sus
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(headphone_color)
-        painter.drawRoundedRect(cx - 36, cy - 30, 10, 22, 4, 4)  # Cupa stângă
-        painter.drawRoundedRect(cx + 20, cy - 30, 10, 22, 4, 4)  # Cupa dreaptă
-
-        # 6. Ochii specifici de cameleon (mari și independenți)
-        painter.setBrush(QColor("#ffffff"))
-        painter.drawEllipse(cx - 16, cy - 20, 20, 20) # Ochi stâng
-        painter.drawEllipse(cx + 4, cy - 20, 18, 18)  # Ochi drept
-
-        # Pupile mobile
-        painter.setBrush(QColor("#1a202c"))
-        painter.drawEllipse(cx - 8 + self.pupil_offset.x(), cy - 12 + self.pupil_offset.y(), 6, 6)
-        painter.drawEllipse(cx + 10 - self.pupil_offset.x(), cy - 12 + self.pupil_offset.y(), 5, 5)
-
-        # 7. Zâmbet prietenos
-        painter.setPen(QPen(QColor("#1a202c"), 2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        painter.drawArc(cx + 10, cy + 2, 14, 10, 200 * 16, 120 * 16)
-
-    # --- ANIMAȚIILE ȘI COMPORTAMENTUL ---
-    def update_micro_animations(self):
-        self.tick_count += 1
-
-        # Mișcare lentă a corpului (respirație)
-        self.body_y_offset = -2 if (self.tick_count % 2 == 0) else 0
-
-        # Mișcare independentă a ochilor
-        positions = [QPoint(0, 0), QPoint(-2, -1), QPoint(2, 1), QPoint(-1, 2)]
-        self.pupil_offset = positions[self.tick_count % len(positions)]
-
-        self.update() # Forțează re-desenarea
+        # 4. Zâmbet
+        smile = QPainterPath(QPointF(93, 104))
+        smile.quadTo(100, 110, 107, 104)
+        painter.setPen(QPen(CLOUD_INK, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        painter.drawPath(smile)
 

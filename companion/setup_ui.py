@@ -1,7 +1,7 @@
 """Guided first-run setup; OS permissions are requested only by explicit buttons."""
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import (QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-                            QLineEdit, QComboBox, QPushButton, QFormLayout, QStackedWidget)
+                            QLineEdit, QComboBox, QPushButton, QCheckBox, QFormLayout, QStackedWidget)
 from .onboarding import QUESTIONS
 from .theme import PANEL_STYLE
 
@@ -60,7 +60,8 @@ class SetupDialog(QDialog):
             self.fields[key] = field
         page.insertLayout(2, form)
         page = self.add_page('Let me understand your desktop', 'Both options are optional and can be paused at any time. '
-                             'macOS may ask for additional permission. Closing this setup never grants access.')
+                             'Enabling access remembers it until paused; use the restoration checkbox for session-only access. '
+                             'macOS may ask for permission. Closing setup never grants access.')
         page.insertWidget(2, description('App awareness · Reads app names, window positions and accessible controls. '
                               'No screenshots or field values. Shared with your selected AI only when you ask.'))
         self.context_button = QPushButton('Enable app awareness…')
@@ -71,9 +72,13 @@ class SetupDialog(QDialog):
         self.vision_button = QPushButton('Enable screen vision…')
         self.vision_button.clicked.connect(lambda: owner.toggle_screen_vision(consented=True))
         page.insertWidget(5, self.vision_button)
+        self.remember_access = QCheckBox('Restore enabled access when I reopen A11y')
+        self.remember_access.setChecked(owner.access_preferences.get()['remember'])
+        self.remember_access.toggled.connect(owner.set_remember_access)
+        page.insertWidget(6, self.remember_access)
         self.access_status = description('')
-        page.insertWidget(6, self.access_status)
-        page.insertWidget(7, description('Voice · Read-aloud is optional and uses your system voice. '
+        page.insertWidget(7, self.access_status)
+        page.insertWidget(8, description('Voice · Read-aloud is optional and uses your system voice. '
                               'Native microphone input is not available yet, so no microphone permission is requested.'))
         page = self.add_page('You’re ready.', 'Click the character to talk. Enter sends; Shift+Enter adds a line. '
                              'Right-click the character for more actions. You stay in control of each task step.')
@@ -162,7 +167,7 @@ class SetupDialog(QDialog):
         if context.get('enabled'):
             app_state = 'Permission needed' if context.get('accessibility') == 'permission_required' else {'available': 'On', 'companion_focused': 'On', 'private_app': 'Paused for private app', 'stale': 'Waiting for an app'}.get(context.get('status'), 'Starting or waiting for access')
         status = f'App awareness: {app_state} · Screen vision: '+('On' if self.owner.vision.enabled else 'Requesting permission…' if pending else 'Off')
-        self.access_status.setText(status+'\nAccess is enabled for this session; OS permission alone does not turn capture on.')
+        self.access_status.setText(status+'\nRestoration is opt-in. Pausing access also pauses it for future launches; OS permissions still apply.')
         self.summary.setText('Your saved details and preferences:\n'+self.owner.introduction.summary()+'\n\n'+status)
 
 

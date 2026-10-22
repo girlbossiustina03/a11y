@@ -41,6 +41,7 @@ class NativeTests(unittest.TestCase):
         self.window.context_timer.stop()
         self.window.mascot.close()
         self.window.overlay.close()
+        self.window.pointer.close()
         self.window.quitting = True
         self.window.close()
         self.window.deleteLater()
@@ -55,6 +56,323 @@ class NativeTests(unittest.TestCase):
                 self.qt.processEvents()
                 return
         self.fail('Missing mascot action: '+action)
+
+    def test_mascot_stays_visible_when_mac_app_deactivates(self):
+        self.assertTrue(self.window.mascot.windowFlags() & Qt.WindowType.WindowStaysOnTopHint)
+        self.assertTrue(self.window.mascot.testAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow))
+
+    def test_opening_actions_execute_without_an_extra_confirmation_button(self):
+        for kind in ('launch_app', 'browse_url', 'focus_app', 'new_window'):
+            action = {'type': kind, 'bundle_id': 'com.apple.Safari', 'label': 'Open Safari'}
+            response = {'message': 'Open Safari…', 'sources': [], 'workflow': None,
+                        'target': None, 'desktop_action': action}
+            with patch.object(self.window, 'execute_desktop_action') as execute:
+                self.window.received(response)
+                self.qt.processEvents()
+                execute.assert_called_once_with(action)
+            self.assertIsNone(self.window.pending_desktop_action)
+
+    def test_closing_window_still_waits_for_confirmation(self):
+        action = {'type': 'close_window', 'window_id': 'test:0', 'label': 'Close window'}
+        with patch.object(self.window, 'execute_desktop_action') as execute:
+            self.window.received({'message': 'Ready to close.', 'sources': [], 'workflow': None,
+                                  'target': None, 'desktop_action': action})
+            self.qt.processEvents()
+            execute.assert_not_called()
+        self.assertEqual(self.window.pending_desktop_action, action)
+
+    def test_remember_access_checkbox_is_explicit_and_pause_is_persisted(self):
+        self.assertFalse(self.window.remember_access.isChecked())
+        self.window.desktop_monitor.enabled = True
+        self.window.vision.set_enabled(True)
+        self.window.remember_access.setChecked(True)
+        self.assertTrue(self.window.access_preferences.get()['screen_vision'])
+        self.window.toggle_screen_vision()
+        self.assertFalse(self.window.access_preferences.get()['screen_vision'])
+        self.window.desktop_action('context:toggle')
+        self.assertFalse(self.window.access_preferences.get()['app_awareness'])
+        self.window.remember_access.setChecked(False)
+        self.assertFalse(self.window.access_preferences.get()['remember'])
+
+    def test_first_app_enable_remembers_and_pause_reenable_does_not_reprompt(self):
+        def enable(**kwargs):
+            self.window.desktop_monitor.enabled = True
+        with patch.object(self.window, 'confirm_access', return_value=True) as consent, patch.object(self.window.desktop_monitor, 'enable', side_effect=enable):
+            self.window.desktop_action('context:toggle')
+            self.assertEqual(self.window.access_preferences.get(), {'remember': True, 'app_awareness': True, 'screen_vision': False})
+            self.assertTrue(self.window.access_preferences.approved('app_awareness'))
+            self.window.desktop_action('context:toggle')
+            self.assertFalse(self.window.access_preferences.get()['app_awareness'])
+            self.window.desktop_action('context:toggle')
+            consent.assert_called_once()
+
+    def test_declining_first_enable_does_not_remember_or_enable_anything(self):
+        with patch.object(self.window, 'confirm_access', return_value=False), patch.object(self.window.desktop_monitor, 'enable') as enable:
+            self.window.desktop_action('context:toggle')
+            enable.assert_not_called()
+        self.assertFalse(self.window.access_preferences.get()['remember'])
+        self.assertFalse(self.window.access_preferences.approved('app_awareness'))
+
+    def test_previous_consent_respects_explicit_session_only_choice(self):
+        self.window.access_preferences.approve('app_awareness')
+        self.window.access_preferences.save(remember=False)
+        with patch.object(self.window, 'confirm_access') as consent, patch.object(self.window.desktop_monitor, 'enable'):
+            self.window.desktop_action('context:toggle')
+            consent.assert_not_called()
+        self.assertFalse(self.window.access_preferences.get()['remember'])
+
+    def test_startup_restoration_preflights_permissions_without_os_prompt(self):
+        self.window.access_preferences.save(remember=True, app_awareness=True, screen_vision=True)
+        from companion.ollama import OllamaProvider
+        self.window.service.provider = OllamaProvider()
+        with patch.object(self.window.desktop_monitor, 'enable') as enable, patch('companion.desktop.VisionPermission') as permission:
+            self.window.restore_access()
+            enable.assert_called_once_with(request_permission=False)
+            self.assertFalse(permission.call_args.kwargs['request_permission'])
+            permission.return_value.start.assert_called_once()
+        self.window.vision_permission = None
+
+    def test_visual_pointer_is_independent_click_through_and_respects_reduced_motion(self):
+        from PyQt6.QtGui import QCursor
+        pointer = self.window.pointer
+        geometry = self.window.mascot.screen().geometry()
+        before = QCursor.pos()
+        pointer.point_at(geometry, .2, .7, 'Example target', reduced_motion=True)
+        self.assertEqual(pointer.pos(), QPoint(geometry.x()+int(.2*geometry.width()), geometry.y()+int(.7*geometry.height())))
+        self.assertEqual(QCursor.pos(), before)
+        self.assertTrue(pointer.windowFlags() & Qt.WindowType.WindowTransparentForInput)
+        self.assertTrue(pointer.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus)
+        self.assertEqual(pointer.accessibleDescription(), 'Example target')
+        self.assertEqual(pointer.animation.state().name, 'Stopped')
+        self.window.clear_guidance()
+        self.assertFalse(pointer.isVisible())
+        self.assertIsNone(pointer.target_point)
+
+    def test_browser_request_runs_actual_workers_once_without_confirmation_or_false_failure(self):
+        from test_request_plan import StagedProvider
+        self.window.setup_dialog.reject()
+        provider = self.service.provider = StagedProvider('browser_search', 'Safari', 'youtube.com')
+        provider.interpret_request.return_value['browser_mode'] = 'window'
+        receipt = {'type': 'browse_url', 'requested_url': 'https://youtube.com',
+                   'native_result': {'submitted': True, 'tab_placement': 'window',
+                                     'browser_observation': {'url': 'https://youtube.com/'}}}
+        with patch.object(self.window.desktop_monitor, 'installed_apps', return_value=[{'name': 'Safari', 'bundle_id': 'com.apple.Safari'}]), patch('companion.desktop.ComputerUse.execute_confirmed', return_value=receipt) as execute:
+            self.window.input.setPlainText('open a new safari window and search for youtube.com')
+            self.window.ask(mode='assist', from_mascot=True)
+            deadline = time.monotonic()+3
+            while time.monotonic() < deadline:
+                self.qt.processEvents()
+                QTest.qWait(5)
+                if 'browser reports' in self.window.mascot.bubble.toPlainText() and not self.window.worker.isRunning():
+                    break
+            self.qt.processEvents()
+        execute.assert_called_once()
+        action = execute.call_args.args[0]
+        self.assertEqual(action['browser_mode'], 'window')
+        self.assertEqual(action['url'], 'https://youtube.com')
+        provider.interpret_request.assert_called_once()
+        provider.complete_structured.assert_not_called()
+        self.assertIsNone(self.window.pending_desktop_action)
+        self.assertIn('requested window', self.window.mascot.bubble.toPlainText())
+        self.assertTrue(self.window.mascot.isVisible())
+
+    def test_computer_task_reobserves_after_each_action_and_pauses_before_enter(self):
+        import base64
+        from copy import deepcopy
+        from unittest.mock import Mock
+        from PyQt6.QtCore import QByteArray, QBuffer, QIODevice
+        from PyQt6.QtGui import QImage
+        from companion.desktop_context import DesktopContext
+        from test_desktop_context import FakeBridge
+        from test_computer_task import context
+        self.window.setup_dialog.reject()
+        bridge = FakeBridge()
+        bridge.value = context()
+        monitor = self.window.desktop_monitor = self.service.desktop_context = DesktopContext(bridge, clock=lambda: 100)
+        monitor.enabled = True
+        monitor.collect_once()
+        self.window.vision.set_enabled(True)
+        area = self.window.mascot.screen().geometry()
+        image = QImage(200, 120, QImage.Format.Format_RGB32)
+        image.fill(Qt.GlobalColor.blue)
+        png = QByteArray()
+        buffer = QBuffer(png)
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        image.save(buffer, 'PNG')
+        frame = {'image_data': 'data:image/png;base64,'+base64.b64encode(bytes(png)).decode(),
+                 'screen': {'x': area.x(), 'y': area.y(), 'width': area.width(), 'height': area.height()},
+                 'display_id': 7, 'captured_monotonic': time.monotonic(), 'windows': []}
+        actions = [{'type': 'click_point', 'x': .3, 'y': .4, 'label': 'Search'},
+                   {'type': 'type_text', 'text': 'accessibility'},
+                   {'type': 'scroll', 'direction': 'down'},
+                   {'type': 'press_key', 'key': 'enter'}]
+        outputs = [{'status': 'action', 'message': 'Next step on fresh screen.', 'risk': 'navigation', 'action': action} for action in actions]
+        outputs.append({'status': 'done', 'message': 'The requested result is visible.', 'risk': 'navigation', 'action': None})
+        class Provider:
+            complete_structured = Mock(side_effect=outputs)
+        self.service.provider = Provider()
+        def submitted(proposal):
+            return {'type': proposal['type'], 'label': proposal['label'], 'status': 'submitted'}
+        with patch.object(self.window.vision, 'capture', side_effect=lambda *args, **kwargs: deepcopy(frame)) as capture, patch('companion.desktop.ComputerUse.execute_confirmed', side_effect=submitted) as execute:
+            self.window.offer_computer_task('Find accessibility help')
+            deadline = time.monotonic()+6
+            while time.monotonic() < deadline:
+                self.qt.processEvents()
+                QTest.qWait(5)
+                if (self.window.pending_desktop_action or {}).get('key') == 'enter' and not self.window.worker.isRunning():
+                    break
+            self.assertEqual(execute.call_count, 3)
+            self.assertEqual(capture.call_count, 4)
+            self.assertEqual(self.window.pending_desktop_action['key'], 'enter')
+            self.window.desktop_action('desktop:apply')
+            deadline = time.monotonic()+4
+            while time.monotonic() < deadline:
+                self.qt.processEvents()
+                QTest.qWait(5)
+                if self.window.computer_task.status == 'done' and not self.window.worker.isRunning():
+                    break
+            self.assertEqual(execute.call_count, 4)
+            self.assertEqual(capture.call_count, 5)
+            self.assertEqual(self.window.computer_task.status, 'done')
+            self.assertEqual(len(self.window.computer_task.receipts), 4)
+            self.assertIn('model reports completion', self.window.mascot.bubble.toPlainText())
+            for call in self.service.provider.complete_structured.call_args_list:
+                self.assertIn('Find accessibility help', call.args[1][0]['content'])
+                self.assertTrue(call.kwargs['image_data'])
+        self.assertIsNone(self.window.pending_desktop_action)
+
+    def test_stop_cancels_an_automatic_step_queued_for_execution(self):
+        from companion.computer_task import ComputerTask
+        task = self.window.computer_task = ComputerTask('Find help', automatic=True)
+        area = self.window.mascot.screen().geometry()
+        step = {'status': 'action', 'message': 'Focus the address bar.', 'review': False,
+                'action': {'type': 'press_key', 'key': 'cmd_l', 'label': 'Address bar'},
+                'visual_capture': {'screen': {'x': area.x(), 'y': area.y(), 'width': area.width(), 'height': area.height()}, 'captured_monotonic': time.monotonic()}}
+        with patch.object(self.window, 'execute_desktop_action') as execute:
+            self.window.receive_computer_step(task, step)
+            self.window.mascot_action('computer:stop')
+            self.qt.processEvents()
+            execute.assert_not_called()
+        self.assertTrue(task.cancelled.is_set())
+        self.assertIsNone(self.window.pending_desktop_action)
+
+    def test_task_refuses_automatic_click_when_capture_display_is_not_connected(self):
+        from companion.computer_task import ComputerTask
+        task = self.window.computer_task = ComputerTask('Find help', automatic=True)
+        action = {'type': 'click_point', 'x': .3, 'y': .4, 'label': 'Help', 'capture_guard': {'synthetic': True}}
+        task.pending = action
+        step = {'status': 'action', 'message': 'Click Help.', 'review': False, 'action': action,
+                'visual_capture': {'screen': {'x': 99999, 'y': 99999, 'width': 100, 'height': 100}, 'captured_monotonic': time.monotonic()}}
+        with patch.object(self.window, 'execute_desktop_action') as execute:
+            self.window.receive_computer_step(task, step)
+            self.qt.processEvents()
+            execute.assert_not_called()
+        self.assertEqual(task.status, 'blocked')
+        self.assertIsNone(self.window.pending_desktop_action)
+
+    def test_task_request_starts_automatically_without_mode_selection(self):
+        with patch.object(self.window, 'start_computer_task') as start:
+            self.window.offer_computer_task('Check my tasks in Teams')
+            choices = [self.window.mascot.choice_layout.itemAt(i).widget().property('companion_action') for i in range(self.window.mascot.choice_layout.count())]
+            self.assertEqual(choices, ['computer:stop'])
+            self.qt.processEvents()
+            start.assert_called_once_with(automatic=True)
+
+    def test_task_autostart_waits_for_request_worker_to_finish(self):
+        from PyQt6.QtCore import QObject, pyqtSignal
+        class Gate(QObject):
+            finished = pyqtSignal()
+            running = True
+            def isRunning(self):
+                return self.running
+        gate = Gate()
+        self.window.worker = gate
+        try:
+            with patch.object(self.window, 'start_computer_task') as start:
+                self.window.offer_computer_task('Check Teams')
+                self.qt.processEvents()
+                start.assert_not_called()
+                gate.running = False
+                gate.finished.emit()
+                self.qt.processEvents()
+                start.assert_called_once_with(automatic=True)
+        finally:
+            self.window.worker = None
+
+    def test_stopping_task_before_queued_start_prevents_it_from_starting(self):
+        with patch.object(self.window, 'start_computer_task') as start:
+            self.window.offer_computer_task('Check Teams')
+            self.window.stop_computer_task()
+            self.qt.processEvents()
+            start.assert_not_called()
+
+    def test_busy_prompt_and_stop_remain_visible_and_interactive(self):
+        from companion.computer_task import ComputerTask
+        task = self.window.computer_task = ComputerTask('Find help', automatic=True)
+        mascot = self.window.mascot
+        mascot.present('Observing…', [('Stop task', 'computer:stop')], compact=True)
+        self.window.set_busy(True)
+        self.qt.processEvents()
+        self.assertTrue(mascot.input.isVisible())
+        self.assertTrue(mascot.input.isEnabled())
+        stop = mascot.choice_layout.itemAt(0).widget()
+        self.assertTrue(stop.isEnabled())
+        QTest.mouseClick(stop, Qt.MouseButton.LeftButton)
+        self.assertTrue(task.cancelled.is_set())
+        self.window.set_busy(False)
+
+    def test_typing_interrupts_task_and_draft_survives_progress_updates(self):
+        from companion.computer_task import ComputerTask
+        task = self.window.computer_task = ComputerTask('Find help', automatic=True)
+        mascot = self.window.mascot
+        mascot.present('Working…', [('Stop task', 'computer:stop')], compact=True)
+        self.window.set_busy(True)
+        QTest.keyClicks(mascot.input, 'my next request')
+        self.assertTrue(task.cancelled.is_set())
+        mascot.present('A later update', placeholder='Ask anything…', compact=True)
+        self.assertEqual(mascot.input.text(), 'my next request')
+        self.assertFalse(mascot.send.isEnabled())
+        self.window.set_busy(False)
+        self.assertTrue(mascot.send.isEnabled())
+
+    def test_clicking_pill_padding_focuses_input_without_starting_a_drag(self):
+        mascot = self.window.mascot
+        mascot.present('Ready', placeholder='Ask anything…', compact=True)
+        self.qt.processEvents()
+        QTest.mouseClick(mascot.card, Qt.MouseButton.LeftButton, pos=QPoint(3, 3))
+        self.qt.processEvents()
+        self.assertTrue(mascot.input.hasFocus())
+        self.assertIsNone(mascot.drag_position)
+
+    def test_sent_text_is_cleared_but_the_emitted_request_is_preserved(self):
+        mascot = self.window.mascot
+        mascot.submitted.disconnect()
+        requests = []
+        mascot.submitted.connect(lambda value, action: requests.append((value, action)))
+        mascot.present('Ready', placeholder='Ask anything…', compact=True)
+        mascot.input.setText('Open Teams')
+        QTest.mouseClick(mascot.send, Qt.MouseButton.LeftButton)
+        self.assertEqual(requests, [('Open Teams', 'chat')])
+        self.assertEqual(mascot.input.text(), '')
+
+    def test_long_reply_still_scrolls_from_keyboard(self):
+        mascot = self.window.mascot
+        mascot.present('\n'.join('Step '+str(i) for i in range(100)), compact=True)
+        self.qt.processEvents()
+        scrollbar = mascot.bubble.verticalScrollBar()
+        self.assertGreater(scrollbar.maximum(), 0)
+        mascot.bubble.setFocus()
+        QTest.keyClick(mascot.bubble, Qt.Key.Key_PageDown)
+        self.assertGreater(scrollbar.value(), 0)
+
+    def test_restore_permission_worker_calls_check_instead_of_request(self):
+        from companion.desktop import VisionPermission
+        from unittest.mock import Mock
+        vision = Mock()
+        worker = VisionPermission(vision, request_permission=False)
+        worker.run()
+        vision.check_access.assert_called_once()
+        vision.request_access.assert_not_called()
 
     def test_first_launch_greets_from_mascot_with_panel_hidden(self):
         self.assertFalse(self.window.isVisible())

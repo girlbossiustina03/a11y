@@ -103,7 +103,10 @@ QPushButton#promptSettings:hover {background:#434349;}
 QPushButton#promptSettings[screenVision="true"] {background:#243d32;border:2px solid #65d794;}
 QPushButton#sendButton:focus,QPushButton#promptSettings:focus {border:2px solid #8bc2ff;}
 QScrollArea,QScrollArea > QWidget > QWidget {background:transparent;border:0;}
-QScrollBar:vertical {background:transparent;width:6px;margin:2px;}
-QScrollBar::handle:vertical {background:#63636b;border-radius:3px;min-height:20px;}
-QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical {height:0;}
+QScrollBar:vertical {background:transparent;width:5px;margin:3px 0;}
+QScrollBar::handle:vertical {background:rgba(180,180,190,85);border-radius:2px;min-height:24px;}
+QScrollBar::handle:vertical:hover {background:rgba(200,200,210,150);}
+QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical {height:0;width:0;border:0;background:transparent;}
+QScrollBar::up-arrow:vertical,QScrollBar::down-arrow:vertical {width:0;height:0;}
+QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical {background:transparent;}
 ''' + MENU_STYLE

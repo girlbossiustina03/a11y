@@ -37,16 +37,17 @@ pre {overflow:auto;max-height:300px;padding:16px;background:#edf2ec;border-radiu
 #documents {padding-left:24px;} #documents li {padding:8px;} #documents button {margin-left:12px;font-size:12px;}
 .a11y-widget {position:fixed;bottom:18px;right:22px;display:flex;align-items:center;gap:8px;z-index:2;pointer-events:none;}
 .a11y-bubble {max-width:250px;background:#193f3b;color:white;padding:12px 16px;border-radius:16px;font-size:13px;line-height:1.5;box-shadow:0 4px 18px #193f3b20;}
-.a11y-avatar {pointer-events:auto;width:96px;height:96px;min-height:96px;border:0;background:transparent;padding:0;}
-.a11y-avatar:hover {background:transparent;} .pixel-chameleon {width:96px;height:96px;display:block;}
-.state-idle .body-part {fill:#48bb78;} .state-idle .tail-part {stroke:#48bb78;}
-.state-idle .pixel-chameleon {animation:breathe 2.6s infinite ease-in-out;}
-.state-thinking .body-part {fill:#ecc94b;} .state-thinking .tail-part {stroke:#ecc94b;}
-.state-thinking .pixel-chameleon {animation:think .7s infinite alternate ease-in-out;}
-.state-celebrate .body-part {fill:#4299e1;} .state-celebrate .tail-part {stroke:#4299e1;}
-.state-celebrate .pixel-chameleon {animation:think .4s 4 alternate ease-in-out;}
-.state-listening .body-part {fill:#b193e3;} .state-speaking .body-part {fill:#6abfd0;}
-@keyframes breathe {50% {transform:scale(1.04);}} @keyframes think {to {transform:translateY(-6px);}}
+.a11y-avatar {pointer-events:auto;position:relative;width:128px;height:96px;min-height:96px;border:0;background:transparent;padding:0;}
+.a11y-avatar:hover {background:transparent;}
+/* Norișorul A11y: doar starea implicită (plutire + clipit) */
+.cloud-svg {width:128px;height:96px;display:block;overflow:visible;animation:cloud-float 4s ease-in-out infinite;}
+.cloud-shadow {position:absolute;left:35px;top:84px;width:59px;height:6px;border-radius:50%;background:rgba(0,0,0,.28);animation:cloud-shadow-pulse 4s ease-in-out infinite;}
+.cloud-shade {fill:#E2EAF4;} .cloud-body {fill:#FFFFFF;} .cloud-line {fill:none;stroke:#C9D6E6;stroke-width:2.5px;stroke-linejoin:round;}
+.ink {fill:#1E2838;} .shine {fill:#FFFFFF;} .stroke-ink {fill:none;stroke:#1E2838;stroke-width:4px;stroke-linecap:round;stroke-linejoin:round;}
+.blink {transform-box:fill-box;transform-origin:center;animation:cloud-blink 4.2s infinite;}
+@keyframes cloud-float {0%,100% {transform:translateY(0);} 50% {transform:translateY(-5px);}}
+@keyframes cloud-shadow-pulse {0%,100% {transform:scaleX(1);opacity:1;} 50% {transform:scaleX(.82);opacity:.6;}}
+@keyframes cloud-blink {0%,90%,100% {transform:scaleY(1);} 94% {transform:scaleY(.1);}}
 .reduced-motion *, .reduced-motion *::before, .reduced-motion *::after {animation:none!important;transition:none!important;scroll-behavior:auto!important;}
 @media (prefers-reduced-motion:reduce) {*,*::before,*::after {animation:none!important;transition:none!important;}}
 .skip-link {position:absolute;top:-100px;left:10px;background:white;padding:12px;z-index:10;}.skip-link:focus {top:10px;}

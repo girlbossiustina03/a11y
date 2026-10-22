@@ -301,3 +301,92 @@ exercise one harmless browser navigation and a confirmed click on a benign contr
 Guaranteed new tabs, page reading/DOM tools, typing, scrolling and unattended task
 loops remain unfinished. Preserve the one-action observation boundary while adding
 these capabilities.
+
+
+## Browser placement and companion visibility follow-up
+
+- [x] Preserve browser window/tab mode in intent and validated action contracts.
+- [x] Treat a complete domain as direct navigation rather than a search query.
+- [x] Use fixed Safari window/tab operations; report Automation denial without fallback.
+- [x] Open a blank Safari window without screen context; preserve Terminal's AX path.
+- [x] Keep the mascot visible on macOS app deactivation; raise it after actions.
+- [x] Use the original request to authorize opening/focusing/new windows, retaining
+  confirmation for clicks, closing and quitting.
+
+152 tests pass; DesktopBridge compiles. Safari Automation consent and actual new
+window/tab behavior still need live validation; tests use explicit bridge doubles.
+A companion-drawn pointer can visualize its target, but independent simultaneous
+macOS mouse input is not implemented.
+
+
+## Deeper action checks, pointer and persistent access
+
+- [x] Add opt-in, per-employee restoration for app awareness and screen vision; pause
+  also disables restoration. Do not request new OS grants automatically on startup.
+- [x] Add an independent, click-through A11y target pointer without moving QCursor,
+  respecting reduced motion, expiry, cancellation and own-window capture exclusion.
+- [x] Add launcher single-instance locking and visible build/session identification.
+- [x] Preserve native browser URL/window/tab observations; do not invent failure from
+  incomplete AX window inventory or describe private page content merely to verify.
+- [x] Exercise actual Qt request/action/verification workers with one mocked browser
+  execution, plus process-lock contention/release, restoration, pause and cursor checks.
+
+165 Python tests pass and both Swift helpers compile. The sixteen-case real-model
+evaluator cannot connect to Ollama from this sandbox; no live model score is claimed.
+Computer-use inspection of the running Python UI timed out as well. Quit pre-guard
+instances once, relaunch, verify the Settings build ID and run the evaluator locally.
+Next: validate Safari Automation on the actual Mac, visual target quality, and native
+click behavior on harmless controls. A second independent system input device and
+unattended action loops are not implemented.
+
+
+## Bounded general computer-use loop
+
+- [x] Preserve a whole goal across observe → validated action → execute → fresh frame.
+- [x] Offer review-each-step and explicit eight-action navigation runs with a Stop control.
+- [x] Add one-line Unicode typing, allowlisted keyboard commands, scroll and loading waits.
+- [x] Add image-bound left double clicks and right clicks; keep fresh-target rechecks.
+- [x] Stop on cancellation, paused access, invalid output, uncertainty, unchanged repeated
+  proposals or action limit. Review changes/submissions instead of inferring approval.
+- [x] Retain pending compound work; add Music player-state/library playback as one native
+  capability, without treating a running Music process as proof of playback.
+- [x] Add five-state synthetic real-model task evaluator and actual Qt controller tests.
+
+188 Python tests pass. DesktopBridge and ScreenBridge compile; Music's fixed playback
+script compiles against the installed Music dictionary (compile only, not playback).
+The new task evaluator cannot reach local Ollama here, so model-quality and native
+input end-to-end success remain unverified. Next highest priority: run the task fixture
+on-device, then test harmless real navigation with each-step review before automatic
+mode. Task-loop persistence/resumption, drag-and-drop, arbitrary key combinations,
+page DOM tools and shell execution are not implemented.
+
+
+## Recurring access and compound browser requests
+
+Identified actual saved preferences with remember=false and both enabled flags false.
+Per the employee's explicit request, saved persistent app-awareness/screen-vision
+choices for this account; restoration still preflights OS grants on the next launch.
+First Enable now remembers access with clear disclosure, and durable consent prevents
+repeating the app sheet after pause/re-enable. Explicit restoration opt-out and pause
+remain respected. Browser plans with remaining work now enter the task loop with the
+full goal, including the reported Teams new-window/new-tab cases.
+
+195 tests pass, covering consent/enable separation, no re-prompt after pause, declined
+grants, explicit session-only choices, and Teams multi-step routing. Native code did
+not change in this pass. OS permission persistence and live Teams inspection remain
+subject to actual macOS grants, authenticated page state and model targeting quality.
+
+
+## Direct task start and HTTP 400 handling
+
+Removed task start/mode-choice buttons; a request queues automatic navigation after
+the current request worker finishes. Stop/replacement cancels the queued start.
+Added sanitized Ollama error categories, bounded error reads and accurate HTTP 400
+messages. Removed large maxLength constraints only from the grammar sent to Ollama;
+local input bounds remain mandatory. Confirmed schema/grammar rejection retries one
+inference call in JSON mode with the schema in the prompt; other errors do not retry.
+
+201 tests pass, including the full Qt task loop through automatic startup, cancellation,
+worker handoff, schema-only fallback, cache behavior, private-error suppression and
+non-schema/second-error nonretry. The specific live HTTP 400 cause remains unconfirmed;
+local Ollama access is still blocked. Native helpers were unchanged in this pass.

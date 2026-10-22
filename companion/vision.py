@@ -55,6 +55,9 @@ class ScreenVision:
     def request_access(self):
         return self.call('--request-access')
 
+    def check_access(self):
+        return self.call('--check-access')
+
     def capture(self, provider, *, x=0, y=0, desktop=None):
         if not self.enabled:
             raise RuntimeError('Screen vision is paused. Enable it from the character’s right-click menu.')

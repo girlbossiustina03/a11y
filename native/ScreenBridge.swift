@@ -15,6 +15,9 @@ import Foundation
             emit(["error": "Screen vision requires macOS 14 or later."]); return
         }
         let args = CommandLine.arguments
+        if args.contains("--check-access") {
+            emit(["granted": CGPreflightScreenCaptureAccess()]); return
+        }
         if args.contains("--request-access") {
             let granted = CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess()
             emit(["granted": granted]); return

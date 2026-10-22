@@ -1,6 +1,7 @@
 """Version 1 contracts. Normalized targets are relative to ONE captured screen."""
 from dataclasses import asdict, dataclass
 import math
+from .input_actions import KEYS
 
 
 class ValidationError(ValueError):
@@ -84,7 +85,7 @@ def validate_response(value, allowed_sources, *, planning=False, has_screen=Fals
         # A provider can ask a clarification rather than invent a plan.
         pass
     request_kind = value.get('request_kind')
-    if request_kind is not None and request_kind not in ('move', 'move_object', 'move_geometry', 'highlight', 'answer', 'plan', 'act', 'press_control', 'launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'click_point', 'browser_search', 'browser_open'):
+    if request_kind is not None and request_kind not in ('move', 'move_object', 'move_geometry', 'highlight', 'answer', 'plan', 'act', 'press_control', 'launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'click_point', 'browser_search', 'browser_open', 'computer_task', 'inspect_media', 'play_media', 'type_text', 'press_key', 'scroll'):
         raise ValidationError('Invalid request kind.')
     if request_kind in ('move', 'move_object', 'move_geometry') and value['target'] is not None and value.get('desktop_action') is None:
         if not has_screen or desktop is None:
@@ -102,10 +103,20 @@ def validate_response(value, allowed_sources, *, planning=False, has_screen=Fals
         if desktop is None:
             raise ValidationError('Desktop actions require enabled native desktop context.')
         action = value['desktop_action']
-        if action == {'type': 'capture_once'}:
+        if isinstance(action, dict) and action.get('type') == 'start_task':
+            keys(action, ('type', 'goal'), ('type', 'goal'))
+            result['desktop_action'] = dict(action, goal=text(action['goal'], 'task goal', 2000), label='Start computer task')
+        elif isinstance(action, dict) and action.get('type') == 'wait':
+            keys(action, ('type', 'milliseconds'), ('type', 'milliseconds'))
+            if type(action['milliseconds']) is not int or action['milliseconds'] not in (250, 500, 1000):
+                raise ValidationError('Wait must be 250, 500 or 1000 milliseconds.')
+            result['desktop_action'] = dict(action, label='Wait for the interface to update')
+        elif action == {'type': 'capture_once'}:
             result['desktop_action'] = {'type': 'capture_once', 'label': 'Preview one screenshot'}
         elif isinstance(action, dict) and action.get('type') == 'click_point':
-            keys(action, ('type', 'x', 'y', 'label'), ('type', 'x', 'y', 'label'))
+            keys(action, ('type', 'x', 'y', 'label', 'button', 'click_count'), ('type', 'x', 'y', 'label'))
+            if action.get('button', 'left') not in ('left', 'right') or type(action.get('click_count', 1)) is not int or action.get('click_count', 1) not in (1, 2) or action.get('button') == 'right' and action.get('click_count', 1) != 1:
+                raise ValidationError('Use a left single/double click or a right single click.')
             if not has_screen:
                 raise ValidationError('Clicking a visual target requires a fresh screen image.')
             for coordinate in ('x', 'y'):
@@ -113,10 +124,12 @@ def validate_response(value, allowed_sources, *, planning=False, has_screen=Fals
                 if isinstance(number, bool) or not isinstance(number, (int, float)) or not math.isfinite(number) or not 0 <= number < 1:
                     raise ValidationError('Click coordinates must be finite image fractions from 0 up to 1.')
             result['desktop_action'] = dict(action, label=text(action['label'], 'click label', 240),
-                                            confirmation_label='Click “'+action['label']+'”')
+                                            confirmation_label=('Right-click' if action.get('button') == 'right' else 'Double-click' if action.get('click_count', 1) == 2 else 'Click')+' “'+action['label']+'”')
         elif isinstance(action, dict) and action.get('type') == 'browse_url':
             from urllib.parse import urlsplit
-            keys(action, ('type', 'bundle_id', 'url', 'label'), ('type', 'bundle_id', 'url', 'label'))
+            keys(action, ('type', 'bundle_id', 'url', 'label', 'browser_mode'), ('type', 'bundle_id', 'url', 'label'))
+            if action.get('browser_mode', 'default') not in ('default', 'window', 'tab'):
+                raise ValidationError('Invalid browser window mode.')
             url = urlsplit(action['url']) if isinstance(action['url'], str) else None
             if not url or url.scheme not in ('http', 'https') or not url.hostname or url.username or url.password or len(action['url']) > 4000:
                 raise ValidationError('Browser navigation needs a bounded HTTP(S) URL without credentials.')
@@ -172,7 +185,7 @@ RESPONSE_SCHEMA = {
     'type': 'object', 'additionalProperties': False,
     'required': ['request_kind', 'desktop_action', 'message', 'source_ids', 'workflow', 'target'],
     'properties': {
-        'request_kind': {'enum': ['move_object', 'move_geometry', 'highlight', 'answer', 'plan', 'press_control', 'launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'click_point', 'browser_search', 'browser_open']},
+        'request_kind': {'enum': ['move_object', 'move_geometry', 'highlight', 'answer', 'plan', 'press_control', 'launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'click_point', 'browser_search', 'browser_open', 'computer_task', 'inspect_media', 'play_media', 'type_text', 'press_key', 'scroll']},
         'message': _TEXT, 'source_ids': _IDS,
         'workflow': {'anyOf': [{'type': 'null'}, {'type': 'object', 'additionalProperties': False,
             'required': ['title', 'steps'], 'properties': {'title': _TEXT,
@@ -181,10 +194,14 @@ RESPONSE_SCHEMA = {
             'required': ['label', 'x', 'y', 'width', 'height'], 'properties': {'label': _TEXT,
             **{k: {'type': 'number', 'minimum': 0, 'maximum': 1} for k in ('x', 'y', 'width', 'height')}}}]},
         'desktop_action': {'anyOf': [{'type': 'null'},
+            {'type': 'object', 'additionalProperties': False, 'required': ['type', 'milliseconds'],
+             'properties': {'type': {'const': 'wait'}, 'milliseconds': {'enum': [250, 500, 1000]}}},
+            {'type': 'object', 'additionalProperties': False, 'required': ['type', 'goal'],
+             'properties': {'type': {'const': 'start_task'}, 'goal': _TEXT}},
             {'type': 'object', 'additionalProperties': False, 'required': ['type'],
              'properties': {'type': {'const': 'capture_once'}}},
             {'type': 'object', 'additionalProperties': False, 'required': ['type', 'bundle_id', 'url', 'label'],
-             'properties': {'type': {'const': 'browse_url'}, 'bundle_id': _TEXT, 'url': _TEXT, 'label': _TEXT}},
+             'properties': {'type': {'const': 'browse_url'}, 'bundle_id': _TEXT, 'url': _TEXT, 'label': _TEXT, 'browser_mode': {'enum': ['default', 'window', 'tab']}}},
             {'type': 'object', 'additionalProperties': False, 'required': ['type'],
              'properties': {'type': {'enum': ['request_screen', 'request_app_access']}}},
             {'type': 'object', 'additionalProperties': False, 'required': ['type', 'destination'],
@@ -197,9 +214,17 @@ RESPONSE_SCHEMA = {
             {'type': 'object', 'additionalProperties': False, 'required': ['type', 'bundle_id'],
              'properties': {'type': {'enum': ['focus_app', 'launch_app', 'quit_app', 'new_window']}, 'bundle_id': _TEXT}},
             {'type': 'object', 'additionalProperties': False, 'required': ['type', 'x', 'y', 'label'],
-             'properties': {'type': {'const': 'click_point'}, 'label': _TEXT,
+             'properties': {'type': {'const': 'click_point'}, 'label': _TEXT, 'button': {'enum': ['left', 'right']}, 'click_count': {'enum': [1, 2]},
                 'x': {'type': 'number', 'minimum': 0, 'exclusiveMaximum': 1},
                 'y': {'type': 'number', 'minimum': 0, 'exclusiveMaximum': 1}}},
+            {'type': 'object', 'additionalProperties': False, 'required': ['type', 'text'],
+             'properties': {'type': {'const': 'type_text'}, 'text': {'type': 'string', 'minLength': 1, 'maxLength': 2000}}},
+            {'type': 'object', 'additionalProperties': False, 'required': ['type', 'key'],
+             'properties': {'type': {'const': 'press_key'}, 'key': {'enum': list(KEYS)}}},
+            {'type': 'object', 'additionalProperties': False, 'required': ['type', 'direction'],
+             'properties': {'type': {'const': 'scroll'}, 'direction': {'enum': ['up', 'down']}}},
+            {'type': 'object', 'additionalProperties': False, 'required': ['type', 'query', 'artist'],
+             'properties': {'type': {'const': 'play_media'}, 'query': _TEXT, 'artist': _TEXT}},
             {'type': 'object', 'additionalProperties': False, 'required': ['type', 'window_id'],
              'properties': {'type': {'const': 'close_window'}, 'window_id': _TEXT}},
             {'type': 'object', 'additionalProperties': False, 'required': ['type', 'control_id'],
@@ -212,3 +237,23 @@ RESPONSE_SCHEMA['properties'] = {
     key: RESPONSE_SCHEMA['properties'][key]
     for key in ('request_kind', 'desktop_action', 'target', 'message', 'source_ids', 'workflow')
 }
+
+
+def cite_only(schema, allowed_sources):
+    """Copy of a response schema whose source_ids can only name the retrieved documents.
+
+    Constrained decoding then cannot invent a citation; validation still rejects any."""
+    allowed = sorted(allowed_sources)
+    ids = ({'type': 'array', 'items': {'enum': allowed}, 'maxItems': 12} if allowed
+           else {'type': 'array', 'maxItems': 0})
+
+    def visit(node):
+        if isinstance(node, list):
+            return [visit(item) for item in node]
+        if not isinstance(node, dict):
+            return node
+        result = {key: visit(value) for key, value in node.items()}
+        if isinstance(result.get('properties'), dict) and 'source_ids' in result['properties']:
+            result['properties'] = dict(result['properties'], source_ids=ids)
+        return result
+    return visit(schema)

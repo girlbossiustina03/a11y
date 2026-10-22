@@ -11,23 +11,31 @@ class ComputerUse:
         generation = self.desktop.generation
         before = self.desktop.context()
         kind = proposal.get('type')
-        if kind == 'click_point':
+        native_result = {}
+        if kind == 'wait':
+            import time
+            milliseconds = proposal.get('milliseconds')
+            if type(milliseconds) is not int or milliseconds not in (250, 500, 1000):
+                raise ValueError('Unsupported wait duration.')
+            time.sleep(milliseconds/1000)
+            self.desktop.collect_once()
+        elif kind == 'click_point':
             if self.vision is None:
                 raise ValueError('Screen vision must be enabled for a confirmed screen click.')
             self.vision.execute_click(self.provider, self.desktop, proposal)
         elif kind == 'press_control':
             self.desktop.press(proposal)
-        elif kind in ('launch_app', 'quit_app', 'new_window', 'close_window', 'browse_url'):
-            self.desktop.application_action(proposal)
+        elif kind in ('launch_app', 'quit_app', 'new_window', 'close_window', 'browse_url', 'play_media', 'type_text', 'press_key', 'scroll'):
+            native_result = self.desktop.application_action(proposal) or {}
         elif kind == 'focus_app':
             self.desktop.activate(proposal['bundle_id'])
             self.desktop.collect_once()
         else:
             raise ValueError('That desktop action is not supported by the confirmed executor.')
-        if (kind not in ('launch_app', 'browse_url', 'click_point') and not self.desktop.enabled) or self.desktop.generation != generation:
+        if (kind not in ('launch_app', 'browse_url', 'click_point', 'play_media') and not (kind == 'new_window' and proposal.get('bundle_id') == 'com.apple.Safari') and not self.desktop.enabled) or self.desktop.generation != generation:
             raise RuntimeError('The action may have been submitted, but app awareness was paused. Check the app before trying again.')
         after = self.desktop.context()
-        return {'type': kind, 'bundle_id': proposal.get('bundle_id'), 'label': proposal.get('label', ''), 'status': 'submitted',
+        return {'type': kind, 'native_result': native_result, 'remaining_request': proposal.get('remaining_request', ''), 'requested_url': proposal.get('url'), 'bundle_id': proposal.get('bundle_id'), 'label': proposal.get('label', ''), 'status': 'submitted',
                 'before': self.summary(before, proposal.get('bundle_id')), 'after': self.summary(after, proposal.get('bundle_id')),
                 'verification': 'Observe the result; API acceptance does not prove task completion.',
                 'application_state': self.desktop.app_state(proposal['bundle_id']) if proposal.get('bundle_id') else {},
