@@ -6,6 +6,24 @@ Finder, Safari/Chrome pages, Shortcuts) and does on-screen tasks (open apps, cli
 scroll). Python + PyQt6, with a Swift helper on macOS and native adapters on Windows.
 macOS first, Windows second: anything shared must keep working on both.
 
+## Current priority
+
+Make the **local** stack (Ollama, everything on this computer) capable, fast and
+*predictable*. Today it sometimes works well and sometimes doesn't: the same request can
+route differently, clicks miss, and steps stop early. Reduce that variance:
+- Measure with real tasks on this Mac (success rate and seconds per task), not only unit
+  tests.
+- Move what can be deterministic into code and native tools: the accessibility tree, OCR
+  targets, app adapters, AppleScript and EventKit.
+- Constrain what the model has to decide. Keep prompts small and stable, so Ollama's
+  prompt cache holds.
+The Claude provider is an optional extra for demos; nothing may depend on it, and nothing
+may call the cloud by default.
+
+You may use the Codex CLI (`codex exec "<task>"`) alongside you: for a second opinion on a
+diagnosis, a review of a diff, or a separate investigation. Treat its output like any
+other contributor's: verify it, test it, and keep the ground rules.
+
 ## Ground rules (from the owner, always)
 
 - Extend, don't rebuild. Preserve working features, access consent, privacy protections,
