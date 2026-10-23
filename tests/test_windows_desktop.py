@@ -1,3 +1,4 @@
+import itertools
 import os
 import unittest
 from unittest import mock
@@ -117,14 +118,14 @@ class WindowsDesktopBridgeTest(unittest.TestCase):
         self.assertIn({'bundle_id': 'startapp:'+teams['app_id'], 'name': 'Microsoft Teams'}, b.catalog())
         self.assertTrue(b.app_state('startapp:'+teams['app_id'])['running'])
         with mock.patch('os.startfile', create=True) as start, mock.patch('time.sleep'), \
-                mock.patch('companion.windows_desktop.time.monotonic', side_effect=[0, 0, 10]):
+                mock.patch('companion.windows_desktop.time.monotonic', side_effect=itertools.chain([0, 0], itertools.repeat(10))):
             b.application_action({'type': 'launch_app', 'bundle_id': 'startapp:'+teams['app_id']})
         start.assert_called_once_with('shell:AppsFolder\\'+teams['app_id'])
 
     def test_launch_only_catalog_apps(self):
         b = bridge({})
         with mock.patch('os.startfile', create=True) as start, mock.patch('time.sleep'), \
-                mock.patch('companion.windows_desktop.time.monotonic', side_effect=[0, 0, 10]):
+                mock.patch('companion.windows_desktop.time.monotonic', side_effect=itertools.chain([0, 0], itertools.repeat(10))):
             self.assertTrue(b.application_action({'type': 'launch_app', 'bundle_id': 'builtin:settings'})['submitted'])
         start.assert_called_once_with('ms-settings:')
         with self.assertRaises(RuntimeError):
