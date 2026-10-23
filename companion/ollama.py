@@ -225,11 +225,15 @@ class OllamaProvider:
                 models.append({'name': name, 'vision': 'vision' in capabilities})
         return models
 
-    def interpret_request(self, request, recent_users=()):
+    def interpret_request(self, request, recent_users=(), context=None):
         from .request_plan import INTENT_SCHEMA, INTENT_SYSTEM, validate_plan
         payload = {'recent_user_requests': list(recent_users)[-2:], 'current_request': request}
+        if context:
+            payload = dict(context, **payload)  # user_profile/preferences for direct replies
+        # The same small call routes the request and, for plain conversation, writes
+        # the reply: chat no longer needs a second, desktop-sized prompt.
         plan = validate_plan(self.complete(INTENT_SYSTEM, [{'role': 'user', 'content': json.dumps(payload)}],
-                                          response_schema=INTENT_SCHEMA, max_tokens=400, thinking=False))
+                                          response_schema=INTENT_SCHEMA, max_tokens=700, thinking=False))
         is_shortcut = plan['operation'] in ('browser_open', 'browser_search', 'new_window', 'launch_app', 'focus_app')
         if is_shortcut and not plan.get('remaining_request', '').strip():
             # Independently check goal coverage before the direct shortcut can

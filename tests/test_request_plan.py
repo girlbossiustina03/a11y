@@ -147,8 +147,8 @@ class IntentTransportTests(unittest.TestCase):
             plan = provider.interpret_request('open up stremio please', ['close Terminal'])
         body = request.call_args_list[0].args[1]
         self.assertFalse(body['think'])
-        self.assertEqual(body['options']['num_predict'], 400)
-        self.assertEqual(body['format']['required'], ['operation', 'app_name', 'target', 'browser_mode', 'remaining_request', 'goal_mode'])
+        self.assertEqual(body['options']['num_predict'], 700)  # room for a direct reply
+        self.assertEqual(body['format']['required'], ['operation', 'app_name', 'target', 'browser_mode', 'remaining_request', 'goal_mode', 'reply'])
         self.assertNotIn('images', body['messages'][-1])
         self.assertEqual(plan['app_name'], 'Stremio')
 

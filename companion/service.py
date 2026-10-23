@@ -267,7 +267,10 @@ class Companion:
         """Deterministic browse_url for an interpreted browser request, or None."""
         from .desktop_context import BROWSER_IDS
         catalog = self.desktop_context.installed_apps()
-        default = 'Safari' if any(app['bundle_id'] == 'com.apple.Safari' for app in catalog) else 'Microsoft Edge'
+        from .desktop_context import default_browser_id
+        preferred = default_browser_id()
+        default = next((app['name'] for app in catalog if preferred and app['bundle_id'].casefold() == preferred.casefold()), None)
+        default = default or ('Safari' if any(app['bundle_id'] == 'com.apple.Safari' for app in catalog) else 'Microsoft Edge')
         matches = [app for app in resolve_app(app_name or default, catalog) if app['bundle_id'] in BROWSER_IDS]
         target = target.strip()
         from .web_apps import WEB_APPS
@@ -322,7 +325,14 @@ class Companion:
             return self.last_request_plan
         users = [item['content'][:500] for item in self.history(limit=4) if item['role'] == 'user']
         users.extend(item['content'][:500] for item in self.desktop_session if item['role'] == 'user')
-        self.last_request_plan = preserve_desktop_goal(interpreter(request, users[-2:]), request)
+        context = {'user_profile': Introduction(self.store, self.identity).user_details(),
+                   'preferences': {key: value for key, value in self.adaptation.effective(self.identity).items()
+                                   if key in ('detail', 'pacing', 'tone', 'reading_level')}}
+        try:
+            interpreted = interpreter(request, users[-2:], context=context)
+        except TypeError:
+            interpreted = interpreter(request, users[-2:])  # providers without direct replies
+        self.last_request_plan = preserve_desktop_goal(interpreted, request)
         return self.last_request_plan
 
     def ask(self, request, *, mode='answer', workflow_id=None, image_data=None, visual_context=None, screen_geometry=None, request_plan=None):
@@ -422,6 +432,23 @@ class Companion:
         # Keep the actual instruction in natural language at the end, after bulky evidence.
         messages.append({'role': 'user', 'content': request})
         prebuilt = None
+        from . import web_lookup
+        if request_plan and web_lookup.enabled() and not sources and not image_data and mode in ('answer', 'assist'):
+            phrase = web_lookup.lookup_phrase(request) if request_plan['operation'] in ('browser_search', 'answer') else None
+            if phrase is None and request_plan['operation'] == 'answer' and not request_plan.get('reply', '').strip() \
+                    and web_lookup.plain_question(request):
+                phrase = request
+            found = web_lookup.summary(phrase) if phrase else None
+            if found:
+                # Answered in the background (opt-in) instead of opening a browser window.
+                prebuilt = {'request_kind': 'answer', 'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None,
+                            'message': found['extract']+'\n\nSource: Wikipedia — '+found['title']+' ('+found['url']+')'}
+        if prebuilt is None and (request_plan and request_plan['operation'] == 'answer' and request_plan.get('reply', '').strip()
+                and not sources and not workflow and not image_data and mode in ('answer', 'assist')):
+            # Plain conversation was already answered by the routing call; company
+            # questions (which retrieve sources) still use the full cited path.
+            prebuilt = {'request_kind': 'answer', 'message': request_plan['reply'].strip(), 'source_ids': [],
+                        'workflow': None, 'target': None, 'desktop_action': None}
         schema = response_schema(request_plan) if request_plan else None
         system = SYSTEM+DESKTOP_INSTRUCTIONS
         if request_plan:
@@ -477,7 +504,7 @@ class Companion:
                 else:
                     prebuilt = {'request_kind': 'answer', 'message': 'I could not identify one installed app named “'+request_plan['app_name']+'”. Please give its exact application name.',
                                 'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
-            elif operation in ('browser_search', 'browser_open'):
+            elif operation in ('browser_search', 'browser_open') and prebuilt is None:
                 action = self.browser_action(operation, request_plan['app_name'], request_plan['target'], request_plan.get('browser_mode', 'default'))
                 if action:
                     label = action['label']

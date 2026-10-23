@@ -15,6 +15,34 @@ BROWSER_IDS = {'com.apple.Safari', 'com.google.Chrome', 'org.mozilla.firefox', '
                'browser:edge', 'browser:chrome', 'browser:firefox'}
 
 
+def default_browser_id():
+    """The user's default web browser as a supported browser id, or None.
+
+    Read from system settings (no model): macOS LaunchServices preferences, or the
+    Windows https UserChoice. Unsupported browsers return None (Safari/Edge fallback)."""
+    try:
+        if sys.platform == 'darwin':
+            import plistlib
+            path = Path.home()/'Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist'
+            with open(path, 'rb') as handle:
+                handlers = plistlib.load(handle).get('LSHandlers', [])
+            for scheme in ('https', 'http'):
+                for handler in handlers:
+                    if isinstance(handler, dict) and handler.get('LSHandlerURLScheme') == scheme:
+                        bundle = str(handler.get('LSHandlerRoleAll', ''))
+                        return next((known for known in BROWSER_IDS if known.casefold() == bundle.casefold()), None)
+        elif sys.platform == 'win32':
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice') as key:
+                prog_id = str(winreg.QueryValueEx(key, 'ProgId')[0])
+            for prefix, browser in (('MSEdge', 'browser:edge'), ('ChromeHTML', 'browser:chrome'), ('Firefox', 'browser:firefox')):
+                if prog_id.startswith(prefix):
+                    return browser
+    except (OSError, ValueError, ImportError):
+        return None
+    return None
+
+
 class MacDesktopBridge:
     def __init__(self, directory):
         self.source = Path(__file__).resolve().parent.parent / 'native' / 'DesktopBridge.swift'

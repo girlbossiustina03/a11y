@@ -10,8 +10,8 @@ INTENT_SCHEMA = {'type': 'object', 'additionalProperties': False,
         'operation': {'enum': list(OPERATIONS)}, 'app_name': {'type': 'string'}, 'target': {'type': 'string'},
         'browser_mode': {'enum': ['window', 'tab', 'default']},
         'remaining_request': {'type': 'string'}, 'media_artist': {'type': 'string'},
-        'goal_mode': {'enum': ['inspect', 'draft', 'change']}}}
-INTENT_SCHEMA['required'].append('goal_mode')
+        'goal_mode': {'enum': ['inspect', 'draft', 'change']}, 'reply': {'type': 'string'}}}
+INTENT_SCHEMA['required'] += ['goal_mode', 'reply']
 INTENT_SYSTEM = '''Interpret ONLY the latest user request. Do not execute or answer it.
 Return operation, app_name (the actual requested app, empty if none), target, and
 browser_mode (default for non-browser requests), remaining_request (empty if the
@@ -73,6 +73,12 @@ searching, reading, checking information (including activity/tasks) or calculato
 arithmetic; draft means explicitly writing or composing local text without sending
 it; change means explicitly sending, posting, deleting, purchasing or changing
 settings. Use inspect unless the user explicitly requests drafting or a change.
+reply: for operation=answer (conversation, general knowledge, explanations, advice,
+arithmetic) write the actual answer to the user here: direct, friendly, in the user's
+language, at most 120 words, using user_profile/preferences when relevant. Leave
+reply empty for questions about the user's company, its policies, tools or
+procedures (the app looks those up in company documents with citations), and for
+every operation other than answer. Never claim to have done anything on the computer.
 Use earlier USER requests only to resolve explicit pronouns. No old assistant replies
 are supplied because they are not instructions. Never invent a multi-app workaround.'''
 VERIFY_SCHEMA = {'type': 'object', 'additionalProperties': False, 'required': ['message'],
@@ -100,7 +106,7 @@ def with_opening(plan, request):
 
 
 def validate_plan(value):
-    if not isinstance(value, dict) or not {'operation', 'app_name', 'target'} <= set(value) or set(value) - {'operation', 'app_name', 'target', 'browser_mode', 'remaining_request', 'media_artist', 'goal_mode', 'opening'}:
+    if not isinstance(value, dict) or not {'operation', 'app_name', 'target'} <= set(value) or set(value) - {'operation', 'app_name', 'target', 'browser_mode', 'remaining_request', 'media_artist', 'goal_mode', 'opening', 'reply'}:
         raise ValidationError('The request could not be interpreted reliably. Please name the action and target.')
     if value['operation'] not in OPERATIONS or any(not isinstance(value[key], str) or len(value[key]) > (2000 if key == 'target' else 500) for key in ('app_name', 'target')):
         raise ValidationError('The request planner returned an invalid operation.')
@@ -110,6 +116,8 @@ def validate_plan(value):
     if opening is not None and (not isinstance(opening, dict) or set(opening) != set(OPENING_FIELDS)
             or opening['operation'] not in OPENING_OPERATIONS or any(not isinstance(opening[key], str) or len(opening[key]) > 2000 for key in OPENING_FIELDS)):
         raise ValidationError('Invalid opening step.')
+    if not isinstance(value.get('reply', ''), str) or len(value.get('reply', '')) > 4000:
+        raise ValidationError('Invalid direct reply.')
     if value.get('goal_mode', 'inspect') not in ('inspect', 'draft', 'change'):
         raise ValidationError('Invalid goal scope.')
     for field in ('remaining_request', 'media_artist'):
@@ -216,6 +224,11 @@ def preserve_desktop_goal(plan, request):
         # Conversation and whole-goal operations cover the request; a model echoing
         # it as "remaining" produced "Still pending: yo wyd".
         plan = dict(plan, remaining_request='')
+    from .web_lookup import plain_question
+    if (plan['operation'] in ('browser_search', 'browser_open') and not plan.get('remaining_request', '').strip()
+            and plain_question(request)):
+        # "Where is China?" is a question to answer, not a browser search (seen live).
+        plan = dict(plan, operation='answer', app_name='', target='')
     if plan['operation'] in ACTIVATING_OPERATIONS and highlight_only(request):
         # A model may route "mark where the close button is" to clicking or
         # closing. Highlighting is the only operation such a request authorizes.
