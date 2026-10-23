@@ -1944,6 +1944,11 @@ class CompanionWindow(QMainWindow):
         self.claude_key.setPlaceholderText('Saved key in use · paste a new one to replace it' if saved_key()
                                            else 'Anthropic API key (saved on this computer only)')
         layout.addWidget(self.claude_key)
+        from .claude import saved_workspace
+        self.claude_workspace = QLineEdit(saved_workspace())
+        self.claude_workspace.setAccessibleName('Anthropic workspace ID (optional)')
+        self.claude_workspace.setPlaceholderText('Workspace ID, only for user keys (sk-ant-usr-…)')
+        layout.addWidget(self.claude_workspace)
         claude_row = QHBoxLayout()
         claude_row.addWidget(button('Use Claude', self.use_claude))
         claude_row.addWidget(button('Forget Claude key', self.forget_claude))
@@ -2031,7 +2036,7 @@ class CompanionWindow(QMainWindow):
             self.mascot_home('Connection settings are ready. What would you like to work on?')
 
     def use_claude(self):
-        from .claude import ClaudeProvider, save_key, saved_key
+        from .claude import ClaudeProvider, save_key, save_workspace, saved_key
         from .paths import save_ai_settings
         self.stop_computer_task(announce=False)
         if self.worker and self.worker.isRunning():
@@ -2053,7 +2058,9 @@ class CompanionWindow(QMainWindow):
             save_key(key)
             self.claude_key.clear()
             self.claude_key.setPlaceholderText('Saved key in use · paste a new one to replace it')
-        self.service.provider = ClaudeProvider(key=key)
+        workspace = self.claude_workspace.text().strip()
+        save_workspace(workspace)
+        self.service.provider = ClaudeProvider(key=key, workspace=workspace)
         save_ai_settings(provider='claude')
         note = ''
         self.vision.cloud_approved = self.access_preferences.approved('cloud_screen_vision')
@@ -2070,9 +2077,11 @@ class CompanionWindow(QMainWindow):
             self.mascot_home('Claude is ready. What can I help you with?'+note)
 
     def forget_claude(self):
-        from .claude import save_key
+        from .claude import save_key, save_workspace
         from .paths import save_ai_settings
         save_key('')
+        save_workspace('')
+        self.claude_workspace.clear()
         self.claude_key.clear()
         self.claude_key.setPlaceholderText('Anthropic API key (saved on this computer only)')
         if getattr(self.service.provider, 'cloud', False):

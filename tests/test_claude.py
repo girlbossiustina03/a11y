@@ -180,6 +180,18 @@ class ClaudeTransport(unittest.TestCase):
         self.assertIn('HTTP 400: messages.0.content: text must be non-empty', str(caught.exception))
         self.assertEqual(len(self.fake.requests), 3)
 
+    def test_a_user_key_without_workspace_gets_plain_advice_and_a_workspace_is_sent(self):
+        # Seen live with an sk-ant-usr- key: every request was rejected for a missing workspace.
+        self.fake.replies.append(error(400, 'invalid_request_error', 'This API key is not scoped to a workspace, so this request '
+                                       'must include the anthropic-workspace-id header with the ID of the workspace to use.'))
+        with self.assertRaisesRegex(ProviderError, 'sk-ant-api'):
+            self.provider.complete('S', [{'role': 'user', 'content': 'x'}])
+        self.assertEqual(len(self.fake.requests), 1)  # no pointless retries
+        provider = ClaudeProvider(AIConfig(base_url=self.fake.url, model=claude.MODEL, key='sk-test'), workspace='wrkspc_123')
+        self.fake.replies.append((200, sse('{"message": "ok"}')))
+        provider.complete('S', [{'role': 'user', 'content': 'x'}], response_schema={'type': 'object', 'properties': {'message': {'type': 'string'}}})
+        self.assertEqual(self.fake.requests[-1]['headers'].get('anthropic-workspace-id'), 'wrkspc_123')
+
     def test_stop_closes_a_slow_answer(self):
         cancel = threading.Event()
         release = threading.Event()

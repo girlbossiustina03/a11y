@@ -214,6 +214,8 @@ Anthropic API key, and choose **Use Claude**. **Forget Claude key** switches bac
 - **The key** is saved only on this computer, in A11y's data folder (`anthropic-key`, readable only
   by your user). `ANTHROPIC_API_KEY` in the environment takes precedence; `A11Y_AI_PROVIDER=claude`
   selects Claude without the settings window.
+- Use a normal API key (`sk-ant-api…`, console.anthropic.com → API keys). A user key (`sk-ant-usr-…`) has no
+  workspace; for one, also fill in the Workspace ID field (or `ANTHROPIC_WORKSPACE_ID`).
 - Routing and chat run at low effort for speed; screen steps run at medium. Override with
   `A11Y_CLAUDE_EFFORT=low|medium|high`. Refusals in some categories retry on another Claude model
   inside the same request (Anthropic's server-side fallback).

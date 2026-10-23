@@ -18,6 +18,7 @@ from .timing import timing
 MODEL = 'claude-sonnet-5-5'
 ENDPOINT = 'https://api.anthropic.com'
 KEY_FILE = 'anthropic-key'
+WORKSPACE_FILE = 'anthropic-workspace'  # needed by user keys (sk-ant-usr-…) that have no workspace
 # Refusals in some categories are retried on another Claude model inside the same call.
 FALLBACK_BETA = 'server-side-fallback-2026-07-01'
 # Structured outputs accept a subset of JSON Schema; bounds are enforced locally anyway
@@ -41,6 +42,35 @@ def saved_key():
         return key_path().read_text().strip()[:300]
     except OSError:
         return ''
+
+
+def saved_workspace():
+    workspace = os.getenv('ANTHROPIC_WORKSPACE_ID', '').strip()
+    if workspace:
+        return workspace
+    try:
+        from .paths import data_dir
+        return (data_dir()/WORKSPACE_FILE).read_text().strip()[:120]
+    except OSError:
+        return ''
+
+
+def save_workspace(workspace):
+    from .paths import data_dir
+    path = data_dir()/WORKSPACE_FILE
+    if not workspace:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(workspace.strip())
+
+
+WORKSPACE_HELP = ('This Anthropic key is a user key without a workspace. Create an API key in console.anthropic.com → '
+                  'API keys (it starts with sk-ant-api) and paste it in Settings → Advanced → AI model, or add your '
+                  'workspace ID there.')
 
 
 def save_key(key):
@@ -117,9 +147,10 @@ def claude_messages(messages, image_data=None):
 class ClaudeProvider(Planner):
     cloud = True  # screen images need their own consent (see vision.capture)
 
-    def __init__(self, config=None, *, key=None):
+    def __init__(self, config=None, *, key=None, workspace=None):
         self.config = config or AIConfig(base_url=ENDPOINT, model=os.getenv('A11Y_CLAUDE_MODEL', MODEL),
                                          key=key if key is not None else saved_key(), timeout=90)
+        self.workspace = workspace if workspace is not None else saved_workspace()
         self.json_fallbacks = set()
         self.use_fallback = True  # turned off for the session if the API rejects it
         self._client = None
@@ -141,8 +172,9 @@ class ClaudeProvider(Planner):
                 if error:
                     raise ProviderError(error)
                 import anthropic
+                headers = {'anthropic-workspace-id': self.workspace} if self.workspace else None
                 self._client = anthropic.Anthropic(api_key=self.config.key, base_url=self.config.base_url,
-                                                   timeout=self.config.timeout, max_retries=2)
+                                                   timeout=self.config.timeout, max_retries=2, default_headers=headers)
             return self._client
 
     def model_info(self, name):
@@ -185,6 +217,8 @@ class ClaudeProvider(Planner):
             except anthropic.BadRequestError as error:
                 detail = error_detail(error)
                 print('A11y Claude request rejected:', detail, '| request id:', getattr(error, 'request_id', ''), file=sys.stderr, flush=True)
+                if 'anthropic-workspace-id' in detail:
+                    raise ProviderError(WORKSPACE_HELP) from None  # the request is fine; the key needs a workspace
                 # Optional parts go one at a time, and the session remembers: first the refusal
                 # fallback (a beta), then the strict schema (the same JSON asked for in words).
                 if self.use_fallback:
