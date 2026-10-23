@@ -634,8 +634,8 @@ class ComputerTask:
                         stages['total_ms'] = round((time.monotonic()-step_started)*1000)
                         self.timings.append(stages)
                         return {'status': 'needs_user', 'action': None, 'message':
-                                'I already did “'+step['action'].get('label', step['action']['type'])+'” twice without visible progress, '
-                                'so I stopped instead of repeating it. ' + step['message'][:200]}
+                                'I clicked “'+step['action'].get('label', step['action']['type'])+'” twice and nothing changed, '
+                                'so I stopped rather than keep trying.'}
                     raise ValidationError('“'+step['action'].get('label', step['action']['type'])+'” already ran twice in a row and the goal '
                         'did not progress. Do not repeat it. If the current screen already shows the requested information, '
                         'report it with status=done and quote the evidence; otherwise choose a different target.')

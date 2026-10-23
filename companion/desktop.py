@@ -1666,7 +1666,8 @@ class CompanionWindow(QMainWindow):
             task.stop(step['status'])
             # The model's reading of the screen, not a verified result; kept to the point.
             # The answer itself, in plain words: no "Looks done. The goal … has been achieved."
-            self.say(brief(step['message']) if step['status'] == 'done' else 'I stopped: '+brief(step['message']), compact=True)
+            stopped = brief(step['message'])
+            self.say(stopped if step['status'] == 'done' or stopped.startswith('I ') else 'I stopped: '+stopped, compact=True)
             # A finished task ends the spoken exchange: after the result is read, A11y waits
             # for "Hey Ally" again instead of keeping the conversation open.
             self.voice_conversation = False
