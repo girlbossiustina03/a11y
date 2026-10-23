@@ -235,6 +235,7 @@ class NativeTests(unittest.TestCase):
         self.assertIn('requested window', self.window.mascot.bubble.toPlainText())
         self.assertTrue(self.window.mascot.isVisible())
 
+    @patch.dict('os.environ', {'A11Y_TEXT_PASS': '1'})  # the text pass is opt-in
     def test_fast_task_reobserves_after_each_action_and_pauses_before_enter(self):
         import base64
         from copy import deepcopy

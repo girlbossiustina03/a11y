@@ -104,7 +104,7 @@ def validate_response(value, allowed_sources, *, planning=False, has_screen=Fals
             raise ValidationError('Desktop actions require enabled native desktop context.')
         action = value['desktop_action']
         if isinstance(action, dict) and action.get('type') == 'start_task':
-            keys(action, ('type', 'goal', 'goal_mode'), ('type', 'goal'))
+            keys(action, ('type', 'goal', 'goal_mode', 'opening'), ('type', 'goal'))
             if action.get('goal_mode', 'inspect') not in ('inspect', 'draft', 'change'):
                 raise ValidationError('Invalid task scope.')
             result['desktop_action'] = dict(action, goal=text(action['goal'], 'task goal', 2000), label='Start computer task')

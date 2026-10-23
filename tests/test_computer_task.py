@@ -107,6 +107,7 @@ class TaskTests(unittest.TestCase):
                           {'text': 'Wi-Fi', 'x': .2, 'y': .45, 'width': .2, 'height': .1},
                           {'text': 'Bluetooth', 'x': .2, 'y': .6, 'width': .2, 'height': .1}])
 
+    @patch.dict('os.environ', {'A11Y_TEXT_PASS': '1'})  # the text pass is opt-in
     def test_ocr_step_uses_text_only_inference_but_keeps_a_screenshot_click_guard(self):
         self.enable_ocr()
         result = self.respond({'type': 'click_point', 'x': .25, 'y': .35, 'label': 'Battery'})
@@ -116,6 +117,7 @@ class TaskTests(unittest.TestCase):
         self.assertTrue(self.vision.capture.call_args.kwargs['fast_text'])
         self.vision.click_guard.assert_called_once()
 
+    @patch.dict('os.environ', {'A11Y_TEXT_PASS': '1'})  # the text pass is opt-in
     def test_ocr_missing_icon_falls_back_to_full_image_once(self):
         self.enable_ocr()
         self.provider.complete_structured.side_effect = [
@@ -129,6 +131,7 @@ class TaskTests(unittest.TestCase):
         self.assertEqual(result['action']['x'], .8)
         self.assertEqual(self.vision.capture.call_count, 1)
 
+    @patch.dict('os.environ', {'A11Y_TEXT_PASS': '1'})  # the text pass is opt-in
     def test_ocr_cannot_execute_an_ungrounded_point(self):
         self.enable_ocr()
         self.desktop.bridge.value['controls'] = []

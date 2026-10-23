@@ -175,6 +175,25 @@ Return ONLY a JSON object with these fields, including desktop_action (null when
 Do not include markdown code fences or additional action types.'''
 
 
+def geometric_destination(phrase):
+    """An unambiguous edge/corner/center named in a movement request, else None.
+
+    The interpreter already chose move_geometry; mapping "left" to left_edge needs
+    no second model call (a live log showed ~6 s for it)."""
+    words = set(re.findall(r'[a-z]+', phrase.casefold()))
+    vertical = {'top', 'upper'} & words and 'top' or {'bottom', 'lower'} & words and 'bottom'
+    horizontal = [side for side in ('left', 'right') if side in words]
+    if len(horizontal) > 1 or {'top', 'bottom'} <= words or {'upper', 'lower'} <= words:
+        return None
+    if vertical and horizontal:
+        return vertical+'_'+horizontal[0]
+    if horizontal and not vertical:
+        return horizontal[0]+'_edge'
+    if not vertical and words & {'center', 'centre', 'middle'}:
+        return 'center'
+    return None
+
+
 class Companion:
     def __init__(self, store, identity, provider=None):
         self.store, self.identity = store, identity
@@ -243,6 +262,43 @@ class Companion:
                        'provider': 'ollama' if isinstance(self.provider, OllamaProvider) else 'compatible',
                        'endpoint': config.base_url if config else 'test-provider',
                        'model': config.model if config else 'test-provider'}}
+
+    def browser_action(self, operation, app_name, target, browser_mode='default'):
+        """Deterministic browse_url for an interpreted browser request, or None."""
+        from .desktop_context import BROWSER_IDS
+        catalog = self.desktop_context.installed_apps()
+        default = 'Safari' if any(app['bundle_id'] == 'com.apple.Safari' for app in catalog) else 'Microsoft Edge'
+        matches = [app for app in resolve_app(app_name or default, catalog) if app['bundle_id'] in BROWSER_IDS]
+        target = target.strip()
+        # A complete domain is navigation even if intent called it search.
+        is_address = bool(re.fullmatch(r'(?:https?://)?(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}(?::[0-9]+)?(?:[/?#][^\s]*)?', target))
+        searching = operation == 'browser_search' and not is_address
+        url = 'https://duckduckgo.com/?'+urlencode({'q': target}) if searching else target
+        if not searching and '://' not in url:
+            url = 'https://'+url
+        parsed = urlsplit(url)
+        if len(matches) != 1 or not target or parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username or parsed.password:
+            return None
+        app = matches[0]
+        label = ('Search '+app['name']+' for “'+target+'”') if searching else ('Open '+target+' in '+app['name'])
+        return {'type': 'browse_url', 'bundle_id': app['bundle_id'], 'url': url, 'label': label, 'browser_mode': browser_mode}
+
+    def opening_action(self, opening):
+        """The first, predictable step of a compound goal, built without a model call."""
+        try:
+            if opening['operation'] == 'launch_app':
+                matches = resolve_app(opening['app_name'], self.desktop_context.installed_apps())
+                if len(matches) == 1:
+                    return self.desktop_context.authorize_action({'type': 'launch_app', 'bundle_id': matches[0]['bundle_id']})
+                return None
+            target = opening['target'].strip()
+            # Only a real address (with a dot) or a search; "teams" alone is left to the model.
+            if opening['operation'] == 'browser_open' and '.' not in target:
+                return None
+            action = self.browser_action(opening['operation'], opening['app_name'], target, opening.get('browser_mode', 'default'))
+            return self.desktop_context.authorize_browser(action) if action else None
+        except (ValueError, RuntimeError):
+            return None
 
     def prepare_request(self, request):
         interpreter = getattr(self.provider, 'interpret_request', None)
@@ -355,9 +411,11 @@ class Companion:
         if request_plan:
             operation = request_plan['operation']
             if operation == 'computer_task':
+                opening = self.opening_action(request_plan['opening']) if request_plan.get('opening') and self.desktop_context else None
                 prebuilt = {'request_kind': 'answer', 'message': 'Starting this goal using fresh screen observations.', 'source_ids': [], 'workflow': None, 'target': None,
                     'desktop_action': {'type': 'start_task', 'goal': request_plan['target'] or request,
-                                       **({'goal_mode': request_plan['goal_mode']} if request_plan.get('goal_mode') else {})}}
+                                       **({'goal_mode': request_plan['goal_mode']} if request_plan.get('goal_mode') else {}),
+                                       **({'opening': opening} if opening else {})}}
             elif operation == 'inspect_media':
                 message = describe_music(self.desktop_context.media_state())
                 prebuilt = {'request_kind': 'answer', 'message': message, 'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
@@ -378,6 +436,11 @@ class Companion:
                     action = {'type': operation, field: request_plan['target']}
                     message = 'Review the input destination and confirm.'
                 prebuilt = {'request_kind': operation, 'message': message, 'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': action}
+            elif operation == 'move_geometry' and geometric_destination(request_plan['target']+' '+request):
+                destination = geometric_destination(request_plan['target']+' '+request)
+                prebuilt = {'request_kind': 'move_geometry', 'message': 'Moving to the '+destination.replace('_', ' ')+'.',
+                            'source_ids': [], 'workflow': None, 'target': None,
+                            'desktop_action': {'type': 'move_companion', 'destination': destination}}
             elif operation == 'capture_once':
                 prebuilt = {'request_kind': 'answer', 'message': 'Ready to capture once. You will review the screenshot before anything is sent.',
                     'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': {'type': 'capture_once'}}
@@ -393,24 +456,11 @@ class Companion:
                     prebuilt = {'request_kind': 'answer', 'message': 'I could not identify one installed app named “'+request_plan['app_name']+'”. Please give its exact application name.',
                                 'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
             elif operation in ('browser_search', 'browser_open'):
-                from .desktop_context import BROWSER_IDS
-                catalog = self.desktop_context.installed_apps()
-                default = 'Safari' if any(app['bundle_id'] == 'com.apple.Safari' for app in catalog) else 'Microsoft Edge'
-                matches = [app for app in resolve_app(request_plan['app_name'] or default, catalog) if app['bundle_id'] in BROWSER_IDS]
-                target = request_plan['target'].strip()
-                # A complete domain is navigation even if intent called it search.
-                is_address = bool(re.fullmatch(r'(?:https?://)?(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}(?::[0-9]+)?(?:[/?#][^\s]*)?', target))
-                searching = operation == 'browser_search' and not is_address
-                url = 'https://duckduckgo.com/?'+urlencode({'q': target}) if searching else target
-                if not searching and '://' not in url:
-                    url = 'https://'+url
-                parsed = urlsplit(url)
-                if len(matches) == 1 and target and parsed.scheme in ('http', 'https') and parsed.hostname and not parsed.username and not parsed.password:
-                    app = matches[0]
-                    label = ('Search '+app['name']+' for “'+target+'”') if searching else ('Open '+target+' in '+app['name'])
+                action = self.browser_action(operation, request_plan['app_name'], request_plan['target'], request_plan.get('browser_mode', 'default'))
+                if action:
+                    label = action['label']
                     prebuilt = {'request_kind': 'answer', 'message': 'Ready to '+label[0].lower()+label[1:]+'.',
-                        'source_ids': [], 'workflow': None, 'target': None,
-                        'desktop_action': {'type': 'browse_url', 'bundle_id': app['bundle_id'], 'url': url, 'label': label, 'browser_mode': request_plan.get('browser_mode', 'default')}}
+                        'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': action}
                 else:
                     prebuilt = {'request_kind': 'answer', 'message': 'Please name an installed browser and a search query or HTTP(S) website address.',
                         'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}

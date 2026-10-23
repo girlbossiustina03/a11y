@@ -65,6 +65,14 @@ IMAGE_PASS = '''IMAGE PASS: the current screenshot is attached to this message. 
 pixels as visual evidence together with the metadata. Click the center of a visible
 target with fractional image coordinates when it has no accessibility control_id.'''
 OPENING_ACTIONS = {'launch_app', 'focus_app', 'browse_url', 'new_window', 'wait'}
+SETTLE_AFTER = {'launch_app', 'browse_url'}
+
+
+def text_pass_enabled():
+    # Off by default: in two live macOS runs the text-only pass produced no valid
+    # action on 19 of 19 steps, adding ~5.5 s each. A11Y_TEXT_PASS=1 re-enables it.
+    import os
+    return os.getenv('A11Y_TEXT_PASS', '0').strip().lower() in ('1', 'true', 'on')
 
 SYSTEM = '''You operate a desktop toward ONE user-approved goal. Observe the fresh
 metadata, OCR text and (in an image pass) screenshot, choose exactly ONE next action,
@@ -227,7 +235,7 @@ def accepts_cancel(provider):
 
 
 class ComputerTask:
-    def __init__(self, goal, *, automatic=False, max_steps=24, goal_mode=None):
+    def __init__(self, goal, *, automatic=False, max_steps=24, goal_mode=None, opening=None):
         self.goal = text(goal, 'computer task', 2000)
         self.automatic = bool(automatic)
         self.max_steps = max_steps
@@ -243,6 +251,9 @@ class ComputerTask:
         # the goal; only tasks started without that plan need a separate call.
         self.timings = []
         self._catalog = None
+        # An already-authorized first step (opening the app or site the user named),
+        # executed without a model call. See ComputerTask.take_opening.
+        self.opening = dict(opening) if isinstance(opening, dict) else None
         self.goal_mode = goal_mode if goal_mode in ('inspect', 'draft', 'change') else None
 
     def app_names(self, desktop, snapshot):
@@ -262,6 +273,15 @@ class ComputerTask:
         self.status = status
         self.pending = None
         self.cancelled.set()
+
+    def take_opening(self):
+        """The predetermined opening step, once, before any model-chosen step."""
+        if self.opening is None or self.receipts or self.cancelled.is_set():
+            return None
+        action, self.opening = self.opening, None
+        self.pending = action
+        return {'status': 'action', 'message': action.get('label', 'Opening')+'…', 'action': action,
+                'review': not self.automatic or action['type'] not in ('browse_url', 'launch_app'), 'visual_capture': None}
 
     def repeats(self, action):
         """How many of the latest receipts are this same click/press in a row."""
@@ -312,6 +332,25 @@ class ComputerTask:
         stages['capture_ms'] = round((time.monotonic()-capture_at)*1000)
         if isinstance(visual.get('ocr_ms'), int):
             stages['ocr_ms'] = visual['ocr_ms']
+        last = self.receipts[-1] if self.receipts else {}
+        if last.get('type') in SETTLE_AFTER and not last.get('settled'):
+            # Instead of spending a model step deciding to "wait", watch the screen:
+            # recapture until its text stops changing (bounded to about 3 s).
+            last['settled'] = True
+            settle_at = time.monotonic()
+            previous = tuple(region.get('text') for region in visual.get('text_regions') or [] if isinstance(region, dict))
+            for _ in range(4):
+                time.sleep(0.6)
+                if self.cancelled.is_set() or not desktop.enabled or not vision.enabled or desktop.generation != desktop_generation or vision.generation != vision_generation:
+                    raise ValueError('Computer task stopped or access was paused. No next action was submitted.')
+                desktop.collect_once()
+                snapshot = desktop.context()
+                visual = vision.capture(provider, x=geometry['x'], y=geometry['y'], desktop=snapshot, fast_text=True)
+                current = tuple(region.get('text') for region in visual.get('text_regions') or [] if isinstance(region, dict))
+                if current == previous and len(current) >= 3:
+                    break
+                previous = current
+            stages['settle_ms'] = round((time.monotonic()-settle_at)*1000)
         image_data = visual.pop('image_data')
         if self.cancelled.is_set() or not desktop.enabled or not vision.enabled or desktop.generation != desktop_generation or vision.generation != vision_generation:
             raise ValueError('Computer task stopped or access was paused. No next action was submitted.')
@@ -320,7 +359,7 @@ class ComputerTask:
         # needs_vision; skip straight to the image instead of paying twice.
         app_key = (snapshot.get('app') or {}).get('bundle_id', '')
         fast_available = ((len(regions) >= 3 or (isinstance(visual.get('text_regions'), list) and bool(snapshot.get('controls'))))
-                          and app_key not in self.text_pass_misses)
+                          and app_key not in self.text_pass_misses and text_pass_enabled())
         stages['text_regions'] = len(regions)
         stages['controls'] = len(snapshot.get('controls') or [])
         if progress:

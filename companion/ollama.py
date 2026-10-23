@@ -251,7 +251,8 @@ class OllamaProvider:
                     or type(coverage['requires_followup_actions']) is not bool):
                 raise ProviderError('Could not check whether opening the app or website covers your whole request. No action was sent.')
             if coverage['requires_followup_actions']:
-                plan = dict(plan, operation='computer_task', target=request, remaining_request='')
+                from .request_plan import with_opening
+                plan = with_opening(plan, request)
         return validate_plan(plan)
 
     def complete_structured(self, system, messages, *, schema, image_data=None, max_tokens=3000, thinking=None, cancel=None):

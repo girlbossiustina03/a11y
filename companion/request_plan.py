@@ -17,9 +17,15 @@ Return operation, app_name (the actual requested app, empty if none), target, an
 browser_mode (default for non-browser requests), remaining_request (empty if the
 operation covers the entire request). Preserve additional requested work in
 remaining_request; opening an app is not completing work inside it.
-For a multi-step desktop goal requiring several clicks/typing/scrolling, use
-computer_task with target the FULL user goal, not just opening the first app. Single
-simple requests retain their direct operations. "Open Music and play a song" uses
+When a multi-step goal STARTS by opening a website or app, return that opening as
+the operation (browser_open with the site's full https address, browser_search, or
+launch_app) and put ALL the remaining work in remaining_request: "open Teams in a new
+Safari window and check my tasks" is browser_open, target https://teams.microsoft.com,
+app_name Safari, browser_mode window, remaining_request "check my tasks". "Open
+Calculator and sum 2+2" is launch_app Calculator, remaining_request "sum 2+2". The app
+opens it directly, then continues the full goal. Other multi-step desktop goals use
+computer_task with target the FULL user goal. Single simple requests retain their
+direct operations. "Open Music and play a song" uses
 play_media. "Open Safari, find a video and play it" is computer_task.
 "What is playing?" is inspect_media, never infer playback from a visible app/window.
 "Open Music and play Last Christmas" is play_media, app_name Music, target Last
@@ -36,8 +42,6 @@ execute Enter. A request with unresolved additional work is only partially handl
 For taking a screenshot once or pressing A11y’s own Capture screen once button,
 use capture_once. The app invokes its own capture UI; it need not locate that button
 in an image because companion windows are deliberately excluded from screen vision.
-The multi-step rule takes precedence over the following browser shortcuts: "open
-Teams and check if I have tasks" is computer_task with the FULL goal, not browser_open.
 For a browser request involving only search (including "new Safari tab and search for
 YouTube"), use browser_search with app_name Safari and target the search query only.
 For opening a website/address in a browser, use browser_open with target its HTTP(S)
@@ -80,13 +84,32 @@ metadata establishes and what is unknown. App process running establishes app la
 not a new window. Submission never proves task completion. Keep the report short.'''
 
 
+OPENING_OPERATIONS = ('browser_open', 'browser_search', 'launch_app')
+OPENING_FIELDS = ('operation', 'app_name', 'target', 'browser_mode')
+
+
+def with_opening(plan, request):
+    """Turn an app/browser shortcut with follow-up work into a task whose first
+    step (the opening) is executed without asking the model."""
+    from .models import text
+    opening = {key: plan.get(key, 'default' if key == 'browser_mode' else '') for key in OPENING_FIELDS} if plan['operation'] in OPENING_OPERATIONS else None
+    result = dict(plan, operation='computer_task', target=text(request, 'computer task', 2000), remaining_request='')
+    if opening:
+        result['opening'] = opening
+    return result
+
+
 def validate_plan(value):
-    if not isinstance(value, dict) or not {'operation', 'app_name', 'target'} <= set(value) or set(value) - {'operation', 'app_name', 'target', 'browser_mode', 'remaining_request', 'media_artist', 'goal_mode'}:
+    if not isinstance(value, dict) or not {'operation', 'app_name', 'target'} <= set(value) or set(value) - {'operation', 'app_name', 'target', 'browser_mode', 'remaining_request', 'media_artist', 'goal_mode', 'opening'}:
         raise ValidationError('The request could not be interpreted reliably. Please name the action and target.')
     if value['operation'] not in OPERATIONS or any(not isinstance(value[key], str) or len(value[key]) > (2000 if key == 'target' else 500) for key in ('app_name', 'target')):
         raise ValidationError('The request planner returned an invalid operation.')
     if value.get('browser_mode', 'default') not in ('window', 'tab', 'default'):
         raise ValidationError('Invalid browser window mode.')
+    opening = value.get('opening')
+    if opening is not None and (not isinstance(opening, dict) or set(opening) != set(OPENING_FIELDS)
+            or opening['operation'] not in OPENING_OPERATIONS or any(not isinstance(opening[key], str) or len(opening[key]) > 2000 for key in OPENING_FIELDS)):
+        raise ValidationError('Invalid opening step.')
     if value.get('goal_mode', 'inspect') not in ('inspect', 'draft', 'change'):
         raise ValidationError('Invalid goal scope.')
     for field in ('remaining_request', 'media_artist'):
@@ -200,8 +223,7 @@ def preserve_desktop_goal(plan, request):
     is_shortcut = plan['operation'] in ('browser_open', 'browser_search', 'new_window',
         'launch_app', 'focus_app', 'type_text', 'press_key', 'scroll', 'click_point', 'press_control')
     if plan['operation'] in ('click_point', 'press_control') or is_shortcut and plan.get('remaining_request', '').strip():
-        from .models import text
-        return dict(plan, operation='computer_task', target=text(request, 'computer task', 2000), remaining_request='')
+        return with_opening(plan, request)
     return plan
 
 

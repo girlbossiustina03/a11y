@@ -6,7 +6,7 @@ live model makes the right choice on a real desktop."""
 from copy import deepcopy
 import time
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from companion.computer_task import ComputerTask, SYSTEM, TEXT_PASS, IMAGE_PASS
 from companion.desktop_context import DesktopContext
 from companion.request_plan import preserve_desktop_goal, highlight_only
@@ -117,6 +117,7 @@ class TeamsInspectionTests(Harness):
         self.assertEqual((step['action']['x'], step['action']['y']), (.05, .21))
         self.assertIn('inspection-only', self.provider.complete_structured.call_args.args[1][-1]['content'])
 
+    @patch.dict('os.environ', {'A11Y_TEXT_PASS': '1'})  # the text pass is opt-in
     def test_text_and_image_passes_share_the_cacheable_prefix(self):
         task = ComputerTask('Open Teams and check whether I have tasks', automatic=True, goal_mode='inspect')
         self.provider.complete_structured.side_effect = [
@@ -150,6 +151,7 @@ class TeamsInspectionTests(Harness):
         legacy.propose(self.desktop, self.vision, Provider(), {'x': 0, 'y': 0})
         self.assertEqual(Provider.classified, 1)
 
+    @patch.dict('os.environ', {'A11Y_TEXT_PASS': '1'})  # the text pass is opt-in
     def test_step_timing_is_recorded_without_screen_content(self):
         task = ComputerTask('check tasks', goal_mode='inspect')
         task.receipts.append({'type': 'press_control'})
@@ -201,6 +203,7 @@ class LiveTeamsLogTests(Harness):
         super().setUp()
         self.desktop.bridge.value['controls'] = []
 
+    @patch.dict('os.environ', {'A11Y_TEXT_PASS': '1'})  # the text pass is opt-in
     def test_text_pass_is_skipped_for_an_app_after_it_failed_once(self):
         task = ComputerTask('Open Teams and check tasks', automatic=True, goal_mode='inspect')
         need = {'status': 'needs_vision', 'message': 'Need pixels.', 'risk': 'navigation', 'action': None}

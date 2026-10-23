@@ -1225,7 +1225,8 @@ class CompanionWindow(QMainWindow):
             self.say('Enable app awareness and local screen vision in Settings, then try this task again.',
                      [('Settings', 'settings'), ('Try again', 'computer:start:auto' if automatic else 'computer:start:review'), ('Cancel', 'computer:stop')], compact=True)
             return
-        self.computer_task = ComputerTask(proposal['goal'], automatic=automatic, goal_mode=proposal.get('goal_mode'))
+        self.computer_task = ComputerTask(proposal['goal'], automatic=automatic, goal_mode=proposal.get('goal_mode'),
+                                          opening=proposal.get('opening'))
         self.pending_desktop_action = None
         self.next_computer_step()
 
@@ -1242,6 +1243,11 @@ class CompanionWindow(QMainWindow):
         if not task or task.cancelled.is_set() or task.pending is not None:
             return
         if self.worker and self.worker.isRunning():
+            return
+        opening = task.take_opening()
+        if opening is not None:
+            # The user named the app/site; opening it needs no model call.
+            self.receive_computer_step(task, opening)
             return
         self.pending_desktop_action = None
         self.clear_guidance()

@@ -204,6 +204,24 @@ path. Logs emit `A11y timing` records without screen/prompt/model content.
    models with the same fixtures and latency measurements. Do not claim a larger
    model or another runtime is faster without measuring it on the target machine.
 
+## Code-first steps (from live macOS timings, Oct 23)
+
+Live logs (two Teams runs, qwen3-vl:8b-instruct) measured ~16 s per step: a text
+pass that produced no valid action on 19/19 steps (~5.5 s), an image pass (~10 s,
+~6,800 prompt tokens) and 2.8 s model reloads after idle. Now:
+
+- Compound goals that start with a named site/app (`browser_open`/`browser_search`/
+  `launch_app` + remaining work) carry an `opening` on `start_task`; the first step
+  runs without a model call (`ComputerTask.take_opening`). Bare names such as
+  "teams" are not turned into guessed addresses; the model handles those.
+- After `browse_url`/`launch_app` the loop recaptures every 0.6 s (≤4 times) until
+  OCR text is stable instead of spending a model step on `wait`.
+- The text-only pass is opt-in (`A11Y_TEXT_PASS=1`); OCR text still goes in the
+  image-pass prompt. The model gets a 768-px image copy (`A11Y_MODEL_IMAGE_WIDTH`).
+- `move_geometry` requests naming an edge/corner/center move without a second call.
+- Text-only calls use `A11Y_AI_MODEL` and image calls `A11Y_VISION_MODEL`, so a
+  small fast text model can handle routing/chat while the VL model does vision.
+
 ## Performance/reliability pass (after `0ce04dd`)
 
 - Model calls per task start: intent + (shortcut coverage check) + per-step calls.
