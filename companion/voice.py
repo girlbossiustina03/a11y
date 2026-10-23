@@ -7,8 +7,11 @@ through exactly the same path as typed text.
 """
 from concurrent.futures import ThreadPoolExecutor
 import re
+import subprocess
+import sys
 import threading
 import time
+from . import paths
 
 SAMPLE_RATE = 16000
 FRAME = 480                      # 30 ms
@@ -176,6 +179,7 @@ class VoiceListener(QObject):
         self.busy = False
         self.generation = 0
         self.source = self.device = None
+        self.heard_signal = False
         self.last_speech = time.monotonic()
         self.idle_timer = QTimer(self)
         self.idle_timer.timeout.connect(self.check_idle)
@@ -199,9 +203,48 @@ class VoiceListener(QObject):
             return
         self.ready.emit()
 
+    def microphone_permission(self):
+        """'granted', 'denied' or 'asking'. macOS only answers apps that ask first: without the
+        request it hands an unapproved app silence instead of an error. Elsewhere Qt reports granted."""
+        from PyQt6.QtCore import QCoreApplication, QMicrophonePermission, Qt
+        app = QCoreApplication.instance()
+        if app is None or sys.platform != 'darwin':
+            return 'granted'
+        permission = QMicrophonePermission()
+        state = app.checkPermission(permission)
+        if state == Qt.PermissionStatus.Granted:
+            return 'granted'
+        if state == Qt.PermissionStatus.Undetermined:
+            app.requestPermission(permission, self, self.permission_answered)
+            self.status.emit('Allow microphone access so I can hear you.')
+            return 'asking'
+        # Running from source, Python has no usage description, so Qt says denied without asking;
+        # macOS then attributes the microphone to the terminal app, which asks on its own.
+        return 'denied' if paths.frozen() else 'granted'
+
+    def permission_answered(self, permission):
+        from PyQt6.QtCore import Qt
+        if permission.status() == Qt.PermissionStatus.Granted:
+            self.open_microphone()
+        else:
+            self.microphone_denied()
+
+    def microphone_denied(self):
+        self.mode = 'off'
+        self.failed.emit('Microphone access is off for A11y. Turn it on in System Settings → Privacy & Security → '
+                         'Microphone, then turn voice on again.')
+        if sys.platform == 'darwin':
+            subprocess.Popen(['open', 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone'])
+
     def open_microphone(self):
         """Called on the GUI thread once the models are ready."""
         from PyQt6.QtMultimedia import QAudioFormat, QAudioSource, QMediaDevices
+        permission = self.microphone_permission()
+        if permission == 'asking':
+            return True
+        if permission == 'denied':
+            self.microphone_denied()
+            return False
         device = QMediaDevices.defaultAudioInput()
         audio_format = QAudioFormat()
         audio_format.setSampleRate(SAMPLE_RATE)
@@ -212,6 +255,7 @@ class VoiceListener(QObject):
             self.failed.emit('No usable microphone was found. Check that one is connected and enabled.')
             return False
         self.source = QAudioSource(device, audio_format, self)
+        self.heard_signal = False
         self.device = self.source.start()
         self.device.readyRead.connect(self.read_audio)
         self.idle_timer.start(1000)
@@ -221,10 +265,14 @@ class VoiceListener(QObject):
 
     def check_microphone(self):
         from PyQt6.QtMultimedia import QAudio
-        if self.source is not None and self.source.error() != QAudio.Error.NoError:
+        if self.source is None:
+            return
+        # A blocked microphone shows up as an error on Windows and as pure digital silence on macOS.
+        if self.source.error() != QAudio.Error.NoError or not self.heard_signal:
             self.stop()
             self.failed.emit('The microphone is blocked. On Windows allow it in Settings → Privacy & security → '
-                             'Microphone → "Let desktop apps access your microphone". On macOS allow microphone access.')
+                             'Microphone → "Let desktop apps access your microphone". On macOS turn on A11y in '
+                             'System Settings → Privacy & Security → Microphone.')
 
     def stop(self):
         self.generation += 1
@@ -268,6 +316,8 @@ class VoiceListener(QObject):
         if self.device is None:
             return
         data = bytes(self.device.readAll())
+        if data and not self.heard_signal and data.strip(b'\x00'):
+            self.heard_signal = True
         if not self.capturing or self.busy or not data:
             return
         samples = np.frombuffer(data[:len(data)//2*2], dtype=np.int16)

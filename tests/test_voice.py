@@ -280,3 +280,44 @@ class NaturalVoiceTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+@unittest.skipUnless(importlib.util.find_spec('PyQt6'), 'PyQt6 missing')
+class MicrophonePermissionTests(unittest.TestCase):
+    def setUp(self):
+        from unittest import mock
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import QApplication
+        from companion import voice
+        self.mock, self.Qt, self.voice = mock, Qt, voice
+        self.app = QApplication.instance() or QApplication([])
+        self.listener = voice.VoiceListener(transcriber=object())
+        self.errors = []
+        self.listener.failed.connect(self.errors.append)
+
+    def permission(self, state, frozen=True):
+        app = self.mock.Mock()
+        app.checkPermission.return_value = state
+        with self.mock.patch.object(self.voice.sys, 'platform', 'darwin'), \
+                self.mock.patch('PyQt6.QtCore.QCoreApplication.instance', return_value=app), \
+                self.mock.patch.object(self.voice.paths, 'frozen', return_value=frozen):
+            return self.listener.microphone_permission(), app
+
+    def test_mac_app_asks_before_first_listen(self):
+        answer, app = self.permission(self.Qt.PermissionStatus.Undetermined)
+        self.assertEqual(answer, 'asking')
+        app.requestPermission.assert_called_once()
+
+    def test_mac_app_reports_denied_instead_of_recording_silence(self):
+        self.assertEqual(self.permission(self.Qt.PermissionStatus.Denied)[0], 'denied')
+        self.assertEqual(self.permission(self.Qt.PermissionStatus.Granted)[0], 'granted')
+        # From source the terminal owns the microphone prompt, so recording is still attempted.
+        self.assertEqual(self.permission(self.Qt.PermissionStatus.Denied, frozen=False)[0], 'granted')
+
+    def test_digital_silence_is_reported_as_blocked(self):
+        source = self.mock.Mock()
+        source.error.return_value = __import__('PyQt6.QtMultimedia', fromlist=['QAudio']).QAudio.Error.NoError
+        self.listener.source, self.listener.heard_signal = source, False
+        self.listener.check_microphone()
+        self.assertIn('Microphone', self.errors[-1])
+        self.assertIsNone(self.listener.source)
