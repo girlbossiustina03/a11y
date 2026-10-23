@@ -786,8 +786,11 @@ class NativeTests(unittest.TestCase):
                 self.qt.processEvents()
                 QTest.qWait(5)
             self.qt.processEvents()
-        self.assertTrue(self.provider.calls, 'no model call; the companion showed: '+repr(self.window.mascot.bubble.toPlainText()[:300])
-                        +' worker running: '+str(bool(self.window.worker and self.window.worker.isRunning())))
+        if not self.provider.calls:
+            import sys, traceback
+            stacks = '\n'.join(''.join(traceback.format_stack(frame)) for frame in sys._current_frames().values())
+            self.fail('no model call; the companion showed: '+repr(self.window.mascot.bubble.toPlainText()[:300])
+                      +' worker running: '+str(bool(self.window.worker and self.window.worker.isRunning()))+'\nThreads:\n'+stacks[-6000:])
         self.assertEqual(self.provider.calls[-1][2], 'data:image/png;base64,ACTUAL_FRAME_TEST')
         self.assertEqual(self.provider.contexts[-1]['mode'], 'assist')
         self.assertTrue(self.window.mascot.compact)
