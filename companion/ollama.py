@@ -373,10 +373,13 @@ class OllamaProvider:
             json_mode()
             result = infer()
             self.json_fallbacks.add(schema_key)
+        if result.get('done_reason') == 'length' and body['options']['num_predict'] < 4000:
+            # A small model sometimes rambles past a tight limit; give it one longer try.
+            body['options']['num_predict'] = min(4000, body['options']['num_predict']*3)
+            result = infer()
         try:
             if result.get('done_reason') == 'length':
-                raise ProviderError('The local model reached its output-token limit before finishing a valid response. '
-                                    'No next action was sent. For faster desktop steps, use A11Y_OLLAMA_THINKING=false.')
+                raise ProviderError('I got lost in a long answer and stopped. Nothing was done; please ask again, a bit more specifically.')
             if result.get('done') is not True or result.get('done_reason') not in (None, 'stop'):
                 raise ProviderError('Ollama response was incomplete. Try a shorter request.')
             content = result['message']['content']

@@ -139,9 +139,19 @@ class OllamaTests(unittest.TestCase):
         provider = self.provider()
         provider.metadata['local-model'] = {'capabilities': ['completion']}
         with patch.object(provider, 'request', return_value={'done': True, 'done_reason': 'length', 'message': {'content': '{"action":'}}) as request:
-            with self.assertRaisesRegex(ProviderError, 'output-token limit'):
-                provider.complete('system', [{'role': 'user', 'content': 'Screen'}])
-        request.assert_called_once()
+            with self.assertRaisesRegex(ProviderError, 'long answer'):
+                provider.complete('system', [{'role': 'user', 'content': 'Screen'}], max_tokens=700)
+        # One longer retry, then a plain-language error (no action is ever sent).
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(request.call_args.args[1]['options']['num_predict'], 2100)
+
+    def test_truncated_answer_gets_one_longer_try(self):
+        provider = self.provider()
+        provider.metadata['local-model'] = {'capabilities': ['completion']}
+        replies = [{'done': True, 'done_reason': 'length', 'message': {'content': '{"a":'}},
+                   {'done': True, 'done_reason': 'stop', 'message': {'content': '{"a": 1}'}}]
+        with patch.object(provider, 'request', side_effect=replies):
+            self.assertEqual(provider.complete('system', [{'role': 'user', 'content': 'x'}], max_tokens=700), {'a': 1})
 
     def test_timing_logs_backend_costs_without_private_content(self):
         provider = self.provider()

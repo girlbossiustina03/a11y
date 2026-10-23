@@ -102,5 +102,13 @@ class QuickOpenServiceTests(CompanionFixture, unittest.TestCase):
         self.assertNotIn('computed', self.app.prepare_request('what does the handbook say about leave'))
 
 
+    def test_refusals_cancel_quietly_in_code(self):
+        for request in ('No, no, no, no, no, no, no, no.', 'cancel', 'never mind'):
+            self.assertEqual(self.app.ask(request)['message'], 'Okay.')
+        from companion.service import NEVER_MIND
+        self.assertIsNone(NEVER_MIND.match('no, open teams instead'))  # a correction is a real request
+        self.app.provider.complete_structured.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()

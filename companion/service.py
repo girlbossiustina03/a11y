@@ -92,6 +92,7 @@ For a concrete next step, provide one clear action and a target if it is reliabl
 visible. A highlight can move the companion beside it after the user's confirmation.
 """
 
+NEVER_MIND = re.compile(r'^\W*(?:(?:no|nope|nah|cancel|stop|never ?mind|forget it|not that)\b\W*)+$', re.I)
 BARE_VERB = re.compile(r'^\W*(?:please\s+)?(open|launch|start|close|quit|click|search|play|find)(?:\s+(?:on|for|up))?\W*$', re.I)
 MAIL_SITES = re.compile(r'^https://(?:mail\.google\.com|outlook\.(?:office|live)\.com)', re.I)
 MAIL_CLIENTS = ('com.apple.mail', 'com.microsoft.Outlook', 'com.readdle.smartemail-Mac', 'com.microsoft.olk')
@@ -361,6 +362,10 @@ class Companion:
             # "5 + 5?" is answered in code: no model call, no app, no computer task.
             self.last_request_plan = {'operation': 'answer', 'app_name': '', 'target': '', 'reply': computed, 'computed': True}
             return self.last_request_plan
+        if NEVER_MIND.match(request):
+            # "No, no, no." / "cancel": drop whatever was proposed, no model call.
+            self.last_request_plan = {'operation': 'answer', 'app_name': '', 'target': '', 'reply': 'Okay.', 'computed': True}
+            return self.last_request_plan
         bare = BARE_VERB.match(request)
         if bare:
             # "Open." / "Click." with nothing named: ask instead of letting a model guess a target.
@@ -474,12 +479,14 @@ class Companion:
             observed = native.get('browser_observation', {})
             destination = observed.get('url', '')
             requested = receipt.get('requested_url')
-            if destination and destination.rstrip('/') == (requested or '').rstrip('/'):
-                message = 'The browser reports '+destination+' in the requested '+native.get('tab_placement', 'browser')+'. Page contents have not been verified.'
+            if destination and native.get('reused_tab'):
+                message = 'Switched to the tab that already had it open: '+destination+'.'
+            elif destination and destination.rstrip('/') == (requested or '').rstrip('/'):
+                message = 'Opened '+destination+'.'
             elif destination:
-                message = 'The browser accepted navigation and currently reports '+destination+'. The requested page may still be loading; completion is not confirmed.'
+                message = 'Opening '+(requested or destination)+'; the browser still shows '+destination+'.'
             else:
-                message = 'The browser accepted the address. Page loading and contents have not been verified.'
+                message = 'Sent the address to the browser.'
             return {'desktop_action': None, 'target': None, 'workflow': None, 'sources': [], 'message': message,
                     'effective': self.adaptation.effective(self.identity)}
         if mode == 'verify' and hasattr(self.provider, 'complete_structured'):
@@ -563,9 +570,10 @@ class Companion:
                             break
                 if opening and opening.get('type') == 'browse_url' and MAIL_SITES.search(opening.get('url', '')) and self.mail_app_running():
                     opening = None  # "my email" while Mail/Outlook is open means that app, not Gmail on the web
-                # Without an opening step the user's own words are the goal: the interpreter's
-                # target can drop the verb ("open up the second last image" → "the second last image").
-                goal = (request_plan['target'] or request) if opening else request
+                # The user's own words are the goal. The interpreter's target dropped verbs ("open up
+                # the second last image" → "the second last image") and carried an earlier request
+                # into a new one ("what is in my notes" → "read the last email").
+                goal = request
                 prebuilt = {'request_kind': 'answer', 'message': 'On it.', 'source_ids': [], 'workflow': None, 'target': None,
                     'desktop_action': {'type': 'start_task', 'goal': goal,
                                        **({'goal_mode': request_plan['goal_mode']} if request_plan.get('goal_mode') else {}),

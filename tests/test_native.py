@@ -249,7 +249,7 @@ class NativeTests(unittest.TestCase):
         provider.interpret_request.assert_called_once()
         provider.complete_structured.assert_not_called()
         self.assertIsNone(self.window.pending_desktop_action)
-        self.assertIn('requested window', self.window.mascot.bubble.toPlainText())
+        self.assertIn('Opened https://youtube.com', self.window.mascot.bubble.toPlainText())
         self.assertTrue(self.window.mascot.isVisible())
 
     @patch.dict('os.environ', {'A11Y_TEXT_PASS': '1'})  # the text pass is opt-in
@@ -313,7 +313,7 @@ class NativeTests(unittest.TestCase):
             self.assertEqual(capture.call_count, 5)
             self.assertEqual(self.window.computer_task.status, 'done')
             self.assertEqual(len(self.window.computer_task.receipts), 4)
-            self.assertIn('Looks done', self.window.mascot.bubble.toPlainText())
+            self.assertEqual('The requested result is visible.', self.window.mascot.bubble.toPlainText())
             for call in self.service.provider.complete_structured.call_args_list:
                 self.assertIn('Find accessibility help', call.args[1][0]['content'])
                 self.assertIsNone(call.kwargs['image_data'])

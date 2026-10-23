@@ -358,3 +358,22 @@ class ClickGroundingTests(unittest.TestCase):
                               'action': {'type': 'click_point', 'x': 480, 'y': 62, 'label': 'Activity'}},
                              desktop, {'controls': []}, goal_mode='inspect', text_regions=self.REGIONS)
         self.assertEqual((step['action']['x'], step['action']['y']), (.325, .11))
+
+
+class NotificationViewTests(unittest.TestCase):
+    """Reported: 'any new notifications on Teams?' read the current feed instead of opening Activity."""
+    REGIONS = [{'text': 'Post in channel', 'x': .40, 'y': .90, 'width': .1, 'height': .02},
+               {'text': 'Activity', 'x': .30, 'y': .10, 'width': .05, 'height': .02},
+               {'text': 'Activity', 'x': .010, 'y': .200, 'width': .030, 'height': .015}]
+
+    def test_notification_goal_opens_the_rail_activity_view_first_in_code(self):
+        vision = Mock()
+        vision.click_guard.return_value = {'guard': True}
+        desktop = DesktopContext(FakeBridge())
+        task = ComputerTask('are there any new notifications on the teams page', automatic=True, goal_mode='inspect')
+        step = task.view_step(desktop, {'controls': []}, self.REGIONS, {'screen': {'x': 0, 'y': 0, 'width': 1000, 'height': 1000}}, 'img', vision)
+        self.assertEqual(step['action']['type'], 'click_point')
+        self.assertEqual((step['action']['x'], step['action']['y']), (.025, .2075))  # the left rail, not the page header
+        self.assertIsNone(task.view_step(desktop, {'controls': []}, self.REGIONS, {}, 'img', vision))  # only once
+        other = ComputerTask('read my last email', automatic=True, goal_mode='inspect')
+        self.assertIsNone(other.view_step(desktop, {'controls': []}, self.REGIONS, {}, 'img', vision))

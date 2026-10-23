@@ -278,14 +278,38 @@ if let index = args.firstIndex(of: "--browse"), index+2 < args.count {
     guard ["default", "window", "tab"].contains(mode) else {
         emit(["error": "Invalid browser placement."]); exit(1)
     }
+    // Reuse an already-open tab for the same site instead of opening another window: the
+    // same host for a plain site address, the exact address when it carries a query (a search).
+    // Fixed application commands only; addresses are quoted data literals.
+    func quoted(_ value: String) -> String {
+        return "\"" + value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+    }
+    let exact = url.query != nil
+    let sitePrefix = (url.scheme ?? "https") + "://" + (url.host ?? "")
+    let chromium = ["com.google.Chrome", "com.microsoft.edgemac"]
+    if (bundleID == "com.apple.Safari" || chromium.contains(bundleID)),
+       !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty {
+        let test = exact ? "u is " + quoted(url.absoluteString) : "u starts with " + quoted(sitePrefix)
+        let select = bundleID == "com.apple.Safari" ? "set current tab of w to t" : "set active tab index of w to i"
+        let source = "with timeout of 10 seconds\ntell application id \"" + bundleID + "\"\nrepeat with w in windows\nset i to 0\nrepeat with t in tabs of w\nset i to i + 1\nset u to \"\"\ntry\nset u to URL of t\nend try\nif u is missing value then set u to \"\"\nif " + test + " then\n" + select + "\nset index of w to 1\nactivate\nreturn {u, count of windows, count of tabs of w}\nend if\nend repeat\nend repeat\nend tell\nreturn {\"\", 0, 0}\nend timeout"
+        var failure: NSDictionary?
+        if let script = NSAppleScript(source: source) {
+            let found = script.executeAndReturnError(&failure)
+            if failure == nil, let existing = found.atIndex(1)?.stringValue, !existing.isEmpty {
+                emit(["submitted": true, "verification_required": true, "tab_placement": "existing_tab", "reused_tab": true,
+                      "browser_observation": ["url": existing, "window_count": found.atIndex(2)?.int32Value ?? 0,
+                                              "tab_count": found.atIndex(3)?.int32Value ?? 0]]); exit(0)
+            }
+        }
+    }
     if bundleID == "com.apple.Safari" {
         // Fixed application commands only. The destination is a quoted data literal,
         // never an LLM-supplied script. No System Events or simulated keystrokes.
-        let literal = "\"" + url.absoluteString.replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"") + "\""
-        let commands = mode == "tab"
-            ? "if (count of windows) is 0 then make new document\nset current tab of front window to (make new tab at end of tabs of front window with properties {URL:" + literal + "})"
-            : "make new document with properties {URL:" + literal + "}"
+        let literal = quoted(url.absoluteString)
+        // A new window only when asked for (or none is open); otherwise a tab in the front window.
+        let commands = mode == "window"
+            ? "make new document with properties {URL:" + literal + "}"
+            : "if (count of windows) is 0 then\nmake new document with properties {URL:" + literal + "}\nelse\nset current tab of front window to (make new tab at end of tabs of front window with properties {URL:" + literal + "})\nend if"
         let source = "with timeout of 30 seconds\ntell application id \"com.apple.Safari\"\n" + commands + "\nactivate\nreturn {URL of current tab of front window, count of windows, count of tabs of front window}\nend tell\nend timeout"
         var failure: NSDictionary?
         guard let script = NSAppleScript(source: source) else {

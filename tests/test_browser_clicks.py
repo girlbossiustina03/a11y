@@ -123,12 +123,12 @@ class BrowserServiceTests(CompanionFixture, unittest.TestCase):
             'native_result': {'submitted': True, 'tab_placement': 'window',
                               'browser_observation': {'url': 'https://youtube.com/', 'window_count': 2}}}
         result = self.app.ask('go to youtube.com', mode='verify')
-        self.assertIn('requested window', result['message'])
+        self.assertIn('Opened https://youtube.com', result['message'])
         self.assertNotIn('not completed', result['message'])
         provider.complete_structured.assert_not_called()
         self.app.last_action_result['native_result'] = {'submitted': True}
         result = self.app.ask('go to youtube.com', mode='verify')
-        self.assertIn('not been verified', result['message'])
+        self.assertEqual('Sent the address to the browser.', result['message'])  # no claim that it loaded
         self.assertNotIn('failed', result['message'])
         self.assertIsNone(result['desktop_action'])
 

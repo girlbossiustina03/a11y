@@ -408,3 +408,18 @@ class HearingTests(unittest.TestCase):
         self.assertGreaterEqual(listener.segmenter.end_frames*FRAME/SAMPLE_RATE, 1.5)
         listener.vocabulary = ['Microsoft Teams', 'Mail']
         self.assertIn('Microsoft Teams', listener.prompt())
+
+
+@unittest.skipUnless(importlib.util.find_spec('PyQt6'), 'PyQt6 missing')
+class ReplyStyleTests(unittest.TestCase):
+    """Reported: 'Looks done. The goal to read the last email has been achieved.' sounds robotic."""
+    def test_goal_status_filler_is_removed_and_the_answer_kept(self):
+        from companion.desktop import brief
+        self.assertEqual(brief('The goal to read the last email has been achieved. The email from Rockstar Games '
+                               'with verification code 368229 is visible in the Mail app.'),
+                         'The email from Rockstar Games with verification code 368229 is visible in the Mail app.')
+        self.assertEqual(brief('The email from Rockstar Games is visible in the Mail app, and the goal is confirmed as completed.'),
+                         'The email from Rockstar Games is visible in the Mail app.')
+        self.assertEqual(brief('I set a timer for 5 minutes. The task is complete.'), 'I set a timer for 5 minutes.')
+        self.assertEqual(brief('Goal achieved.'), 'Done.')
+        self.assertEqual(brief('Your last email is from Rockstar Games: code 368229.'), 'Your last email is from Rockstar Games: code 368229.')

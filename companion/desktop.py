@@ -179,16 +179,26 @@ def progress_message(message):
     return bool(PROGRESS.match(message.strip()))
 
 
+ROBOTIC = re.compile(r'\b(?:the )?(?:goal|task|request)\b.*\b(?:achieved|met|complete[d]?|fulfil+ed|accomplished|confirmed)\b|'
+                     r'\b(?:has been|is) (?:successfully )?(?:achieved|completed|fulfil+ed)\b', re.I)
+
+
 def brief(message, sentences=2, words=40):
-    """Keep replies short: the first sentences, at most `words` words, minus 'goal achieved' filler."""
+    """Keep replies short and human: the first sentences, at most `words` words, without
+    sentences that only report 'the goal has been achieved'."""
     text = FILLER.sub('', ' '.join(message.split()))
-    text = re.sub(r'\s*(?:The )?goal (?:is )?(?:fully )?(?:achieved|met)[^.]*\.?$', '', text, flags=re.I).strip() or text
-    parts = re.split(r'(?<=[.!?])\s+', text)
+    # Drop trailing clauses like ", and the goal is confirmed as completed" first, then any
+    # sentence that is only such a report.
+    text = re.sub(r',?\s*(?:and|so|which means)?\s*(?:the )?(?:goal|task|request)\b[^.!?]*\b(?:achieved|met|completed?|confirmed|fulfil+ed)\b[^.!?]*(?=[.!?]|$)',
+                  '', text, flags=re.I)
+    text = re.sub(r'\s+([.!?,])', r'\1', re.sub(r'([.!?])[.!?]+', r'\1', text))
+    parts = [part for part in re.split(r'(?<=[.!?])\s+', text) if part.strip(' .!?')]
+    parts = [part for part in parts if not ROBOTIC.search(part)] or ['Done.']
     text = ' '.join(parts[:sentences])
     tokens = text.split()
     if len(tokens) > words:
         text = ' '.join(tokens[:words]).rstrip(',;:')+'…'
-    return text[:1].upper()+text[1:] if text else message
+    return text[:1].upper()+text[1:] if text else 'Done.'
 
 
 def label(value):
@@ -1616,8 +1626,8 @@ class CompanionWindow(QMainWindow):
         if step['status'] != 'action':
             task.stop(step['status'])
             # The model's reading of the screen, not a verified result; kept to the point.
-            prefix = 'Looks done. ' if step['status'] == 'done' else 'Paused. '
-            self.say(prefix+brief(step['message']), compact=True)
+            # The answer itself, in plain words: no "Looks done. The goal … has been achieved."
+            self.say(brief(step['message']) if step['status'] == 'done' else 'I stopped: '+brief(step['message']), compact=True)
             # A finished task ends the spoken exchange: after the result is read, A11y waits
             # for "Hey Ally" again instead of keeping the conversation open.
             self.voice_conversation = False
