@@ -114,7 +114,19 @@ class TeamsInspectionTests(Harness):
             {'status': 'action', 'message': 'Open Activity.', 'risk': 'navigation',
              'action': {'type': 'click_point', 'x': .05, 'y': .21, 'label': 'Activity'}}]
         step = self.propose(task)
-        self.assertEqual((step['action']['x'], step['action']['y']), (.05, .21))
+        # The click now snaps onto the OCR text "Activity" instead of being rejected and retried.
+        self.assertEqual((step['action']['x'], step['action']['y']), (.06, .215))
+        self.assertEqual(self.provider.complete_structured.call_count, 1)
+
+    def test_a_point_on_post_in_channel_without_a_matching_label_is_still_rejected(self):
+        self.desktop.bridge.value['controls'] = []
+        task = ComputerTask('Open Teams and check whether I have tasks', automatic=True, goal_mode='inspect')
+        self.provider.complete_structured.side_effect = [
+            {'status': 'action', 'message': 'Check the feed.', 'risk': 'navigation',
+             'action': {'type': 'click_point', 'x': .55, 'y': .91, 'label': 'Feed'}},
+            {'status': 'action', 'message': 'Open Activity.', 'risk': 'navigation',
+             'action': {'type': 'click_point', 'x': .05, 'y': .21, 'label': 'Activity'}}]
+        self.propose(task)
         self.assertIn('inspection-only', self.provider.complete_structured.call_args.args[1][-1]['content'])
 
     @patch.dict('os.environ', {'A11Y_TEXT_PASS': '1'})  # the text pass is opt-in
@@ -303,3 +315,46 @@ class HighlightOnlyTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ClickGroundingTests(unittest.TestCase):
+    """Teams 'click Activity' missed twice, then failed on a 0–1000 coordinate."""
+    REGIONS = [{'text': 'Activity', 'x': .010, 'y': .200, 'width': .030, 'height': .015},
+               {'text': 'Chat', 'x': .015, 'y': .260, 'width': .020, 'height': .015},
+               {'text': 'Turn on desktop notifications', 'x': .40, 'y': .05, 'width': .20, 'height': .02},
+               {'text': 'Activity', 'x': .30, 'y': .10, 'width': .05, 'height': .02}]
+
+    def test_click_snaps_to_the_named_ocr_text_nearest_the_models_guess(self):
+        from companion.computer_task import snap_click
+        snapped = snap_click({'type': 'click_point', 'x': .05, 'y': .23, 'label': 'Activity icon'}, self.REGIONS)
+        self.assertEqual((snapped['x'], snapped['y']), (.025, .2075))
+        header = snap_click({'type': 'click_point', 'x': .33, 'y': .12, 'label': 'Activity'}, self.REGIONS)
+        self.assertEqual((header['x'], header['y']), (.325, .11))
+
+    def test_unmatched_label_keeps_the_models_point(self):
+        from companion.computer_task import snap_click
+        action = {'type': 'click_point', 'x': .5, 'y': .5, 'label': 'Calendar icon'}
+        self.assertEqual(snap_click(action, self.REGIONS), action)
+
+    def test_accessible_control_bounds_are_used_too(self):
+        from companion.computer_task import snap_click
+        snapped = snap_click({'type': 'click_point', 'x': .5, 'y': .5, 'label': 'Calls button'}, [],
+                             [{'label': 'Calls', 'bounds': {'x': 100, 'y': 300, 'width': 40, 'height': 40}}],
+                             {'x': 0, 'y': 0, 'width': 1000, 'height': 1000})
+        self.assertEqual((snapped['x'], snapped['y']), (.12, .32))
+
+    def test_qwen_grid_coordinates_are_accepted(self):
+        from companion.computer_task import normalize_click
+        self.assertEqual(normalize_click({'x': 25, 'y': 207.5})['x'], .025)
+        self.assertEqual(normalize_click({'x': .5, 'y': 1.0}), {'x': .5, 'y': .999})
+        self.assertEqual(normalize_click({'x': .5, 'y': .4}), {'x': .5, 'y': .4})
+        self.assertEqual(normalize_click({'x': 2000, 'y': 5})['x'], 2000)  # still rejected later
+        self.assertEqual(normalize_click({'x': 500, 'y': .3})['x'], 500)
+
+    def test_inspect_goal_can_click_activity_next_to_a_notifications_banner(self):
+        from companion.computer_task import validate_step
+        desktop = DesktopContext(FakeBridge())
+        step = validate_step({'status': 'action', 'message': 'Opening Activity.', 'risk': 'navigation',
+                              'action': {'type': 'click_point', 'x': 480, 'y': 62, 'label': 'Activity'}},
+                             desktop, {'controls': []}, goal_mode='inspect', text_regions=self.REGIONS)
+        self.assertEqual((step['action']['x'], step['action']['y']), (.325, .11))

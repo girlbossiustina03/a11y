@@ -1,6 +1,7 @@
 """Bounded observe/act/re-observe sessions; screenshots never enter persistent history."""
 from copy import deepcopy
 import json
+import math
 import threading
 import time
 from .models import RESPONSE_SCHEMA, ValidationError, validate_response, text
@@ -103,8 +104,8 @@ Prefer press_control with a control_id from the CURRENT metadata for named butto
 menu items or links. It uses the native accessibility API, with no coordinate guessing
 or movement of the user's mouse. Calculator arithmetic can press its observed digit,
 operator and equals controls one at a time. Inspect the final display before done.
-Use click_point with fractional image x,y (0 <= value < 1) and label for an exact visible
-control. If a visible target has no accessibility control_id, use click_point directly:
+Use click_point with fractional image x,y (0 <= value < 1) and label set to the target's
+exact visible text (A11y aligns the click onto that text). If a visible target has no accessibility control_id, use click_point directly:
 missing control names are NOT missing screen access. The supplied screenshot is your
 visual evidence. Click the center of the target, then inspect the NEW screenshot
 after execution. This works across apps, not only the apps named in examples.
@@ -230,6 +231,64 @@ def browser_launch_as_navigation(action, goal, catalog):
             'browser_mode': browser_mode(goal)}
 
 
+LABEL_FILLER = frozenset('icon tab button link the a menu item left right top bottom sidebar rail bar on in at of '
+                         'click app navigation nav section option panel pane label text or'.split())
+
+
+def label_words(label):
+    import re
+    return tuple(word for word in re.findall(r"[\w']+", label.casefold()) if word not in LABEL_FILLER)
+
+
+def normalize_click(action):
+    """Accept the 0–1000 grid Qwen-VL models are trained on as well as fractions; anything else stays invalid."""
+    numbers = [action.get(key) for key in ('x', 'y')]
+    if all(isinstance(n, (int, float)) and not isinstance(n, bool) and math.isfinite(n) for n in numbers) \
+            and all(0 <= n < 1000 for n in numbers):
+        if all(n > 1 or n == 0 for n in numbers):  # a mix of a fraction and a grid value stays invalid
+            return dict(action, x=numbers[0]/1000, y=numbers[1]/1000)
+        if any(n == 1 for n in numbers):  # the far edge written as 1.0
+            return dict(action, x=min(numbers[0], 0.999), y=min(numbers[1], 0.999))
+    return action
+
+
+def snap_click(action, text_regions, controls=(), screen=None):
+    """Move a click onto the visible text or accessible control its label names.
+
+    The model decides what to click; OCR (Apple Vision / Windows.Media.Ocr) and the
+    accessibility tree, which measure the real screen, decide where. With several
+    matches the one nearest the model's point wins; with none the point is kept."""
+    want = label_words(action.get('label', ''))
+    if not want or not all(isinstance(action.get(key), (int, float)) for key in ('x', 'y')):
+        return action
+    candidates = []
+    for region in text_regions:
+        if isinstance(region, dict) and all(isinstance(region.get(key), (int, float)) for key in ('x', 'y', 'width', 'height')):
+            candidates.append((region.get('text', ''), region['x']+region['width']/2, region['y']+region['height']/2))
+    if screen and screen.get('width') and screen.get('height'):
+        for control in controls:
+            bounds = (control.get('bounds') or {}) if isinstance(control, dict) else {}
+            if all(isinstance(bounds.get(key), (int, float)) for key in ('x', 'y', 'width', 'height')) and bounds['width'] > 0:
+                x = (bounds['x']+bounds['width']/2-screen.get('x', 0))/screen['width']
+                y = (bounds['y']+bounds['height']/2-screen.get('y', 0))/screen['height']
+                if 0 <= x < 1 and 0 <= y < 1:
+                    candidates.append((control.get('label', ''), x, y))
+    exact, partial = [], []
+    for text, x, y in candidates:
+        words = label_words(text)
+        if not words:
+            continue
+        if words == want:
+            exact.append((x, y))
+        elif len(''.join(words)) >= 4 and set(words) <= set(want) and len(words)*2 >= len(want):
+            partial.append((x, y))
+    found = exact or partial
+    if not found:
+        return action
+    x, y = min(found, key=lambda point: (point[0]-action['x'])**2+(point[1]-action['y'])**2)
+    return dict(action, x=round(x, 4), y=round(y, 4))
+
+
 def validate_step(raw, desktop, snapshot, *, goal_mode=None, screen=None, text_regions=(), catalog=(), goal=None):
     if not isinstance(raw, dict) or set(raw) != {'status', 'message', 'risk', 'action'} or raw['status'] not in ('action', 'done', 'needs_user') or raw['risk'] not in ('navigation', 'change'):
         raise ValidationError('The task model returned an invalid step. No action was sent.')
@@ -259,6 +318,8 @@ def validate_step(raw, desktop, snapshot, *, goal_mode=None, screen=None, text_r
             if len(matches) != 1:
                 raise ValidationError('launch_app must name exactly one app from installed_apps.')
             action = dict(action, bundle_id=matches[0]['bundle_id'])
+    if action['type'] == 'click_point':
+        action = snap_click(normalize_click(action), text_regions, snapshot.get('controls', []) if isinstance(snapshot, dict) else (), screen)
     validated = validate_response({'request_kind': 'answer', 'message': message, 'desktop_action': action,
         'target': None, 'source_ids': [], 'workflow': None}, set(), has_screen=True, desktop=desktop, desktop_snapshot=snapshot)
     action = validated['desktop_action']

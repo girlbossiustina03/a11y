@@ -268,7 +268,8 @@ class TaskTests(unittest.TestCase):
 
     def test_unsupported_shell_and_invalid_coordinates_never_reach_executor(self):
         for action in ({'type': 'shell', 'command': 'anything'},
-                       {'type': 'click_point', 'x': 500, 'y': .3, 'label': 'bad'}):
+                       {'type': 'click_point', 'x': 500, 'y': .3, 'label': 'bad'},
+                       {'type': 'click_point', 'x': 1500, 'y': 300, 'label': 'bad'}):
             with self.assertRaises(ValidationError):
                 self.respond(action)
 
