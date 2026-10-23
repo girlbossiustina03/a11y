@@ -230,5 +230,51 @@ class VoiceConversationTests(unittest.TestCase):
             access.set_voice('yes')
 
 
+
+@unittest.skipUnless(HAS_QT, 'Install requirements.txt to run native Qt checks')
+class NaturalVoiceTests(unittest.TestCase):
+    def test_reply_is_split_into_short_sentences(self):
+        from companion.neural_voice import split_sentences
+        self.assertEqual(split_sentences('Hi! I opened Teams.\nYou have two messages?'),
+                         ['Hi!', 'I opened Teams.', 'You have two messages?'])
+        long = 'one, '*100
+        self.assertTrue(all(len(chunk) <= 280 for chunk in split_sentences(long)))
+        self.assertEqual(split_sentences('  '), [])
+
+    def test_missing_model_keeps_the_system_voice(self):
+        import tempfile
+        from unittest import mock
+        from companion.neural_voice import neural_voice_available
+        with tempfile.TemporaryDirectory() as directory, mock.patch.dict('sys.modules', {'kokoro_onnx': mock.Mock()}):
+            self.assertFalse(neural_voice_available(directory))
+
+    @unittest.skipUnless(importlib.util.find_spec('numpy'), 'voice extras (requirements-voice.txt) not installed')
+    def test_states_stay_busy_until_the_last_sentence_played(self):
+        import tempfile
+        from unittest import mock
+        from PyQt6.QtWidgets import QApplication
+        QApplication.instance() or QApplication([])
+        from companion.neural_voice import NeuralVoice
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(NeuralVoice, '_engine'), \
+                mock.patch.object(NeuralVoice, '_play_next', autospec=True,
+                                  side_effect=lambda self: self._set_state('Speaking' if self.queue else ('Synthesizing' if self.pending else 'Ready'))):
+            voice = NeuralVoice(directory)
+            voice.executor.submit = lambda *args: None      # generation is driven by hand below
+            states = []
+            voice.stateChanged.connect(lambda state: states.append(state.name))
+            voice.enqueue('First sentence. Second sentence.')
+            self.assertEqual(voice.pending, 2)
+            voice._queue_audio(voice.generation, b'\0\0')
+            voice.queue.clear(); voice._play_next()
+            self.assertEqual(states[-1], 'Synthesizing')       # one sentence still being generated
+            voice._queue_audio(voice.generation, b'\0\0')
+            voice.queue.clear(); voice._play_next()
+            self.assertEqual(states[-1], 'Ready')
+            voice.enqueue('Old reply.')
+            voice.stop()
+            voice._queue_audio(voice.generation-1, b'\0\0')   # audio from a stopped reply is dropped
+            self.assertEqual(voice.queue, [])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -30,7 +30,7 @@ if not exist "%VENV%\Scripts\python.exe" (
 )
 
 rem Optional voice support ("Hey Ally"); the app still works if this step fails.
-"%VENV%\Scripts\python.exe" -c "import faster_whisper" >nul 2>&1 || (
+"%VENV%\Scripts\python.exe" -c "import faster_whisper, kokoro_onnx" >nul 2>&1 || (
     echo Installing voice support...
     "%VENV%\Scripts\python.exe" -m pip install -r requirements-voice.txt
 )

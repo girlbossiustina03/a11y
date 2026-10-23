@@ -28,6 +28,7 @@ from .instance import build_id
 from .computer_task import ComputerTask
 from .models import text
 from .voice import VoiceListener, is_farewell, is_no, is_yes, match_choice, speakable
+from .neural_voice import download_models, neural_voice_available
 
 
 class RequestWorker(QThread):
@@ -183,6 +184,8 @@ def button(value, action):
 
 
 class CompanionWindow(QMainWindow):
+    natural_voice_ready = pyqtSignal(str)
+
     def __init__(self, service):
         super().__init__()
         apply_theme(QApplication.instance())
@@ -242,6 +245,9 @@ class CompanionWindow(QMainWindow):
         self.voice = None
         self.voice_conversation = False
         self.voice_announce = False
+        self.natural_voice_ready.connect(self.natural_voice_downloaded)
+        if self.tts and neural_voice_available(service.store.directory):
+            self.use_natural_voice()
         QShortcut(QKeySequence('Ctrl+Shift+Space'), self.mascot).activated.connect(lambda: self.voice_woke(''))
         self.read_btn.setEnabled(False)
         self.stop_btn.setEnabled(False)
@@ -930,6 +936,41 @@ class CompanionWindow(QMainWindow):
             self.tts.setLocale(locales[0])
         return None
 
+    def use_natural_voice(self):
+        """Replace the system voice with the local natural voice (Kokoro) for everything spoken."""
+        from .neural_voice import NeuralVoice
+        if self.tts is not None and type(self.tts).__name__ == 'NeuralVoice':
+            return
+        if self.tts is not None:
+            self.tts.stop()
+        self.tts = NeuralVoice(self.service.store.directory, self)
+        self.tts.stateChanged.connect(self.speech_state)
+        self.read_btn.setToolTip('Read aloud with the natural local voice.')
+
+    def fetch_natural_voice(self):
+        """Download the natural voice once, in the background, after the user turned voice on."""
+        try:
+            import kokoro_onnx  # noqa: F401
+        except ImportError:
+            return  # voice extras not installed: keep the system voice
+        if neural_voice_available(self.service.store.directory) or getattr(self, 'voice_download', None):
+            return
+        import threading
+
+        def work():
+            try:
+                download_models(self.service.store.directory)
+                self.natural_voice_ready.emit('')
+            except Exception as error:
+                self.natural_voice_ready.emit(str(error)[:200])
+        self.voice_download = threading.Thread(target=work, daemon=True)
+        self.voice_download.start()
+
+    def natural_voice_downloaded(self, error):
+        self.voice_download = None
+        if not error and neural_voice_available(self.service.store.directory) and not self.tts_speaking():
+            self.use_natural_voice()
+
     def tts_speaking(self):
         return bool(self.tts) and self.tts.state().name in ('Speaking', 'Synthesizing')
 
@@ -961,6 +1002,7 @@ class CompanionWindow(QMainWindow):
             self.voice.timed_out.connect(self.voice_timeout)
         self.mascot.voice_on = True
         self.voice.start()
+        self.fetch_natural_voice()
 
     def stop_voice(self):
         self.voice_conversation = False
