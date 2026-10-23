@@ -71,7 +71,7 @@ if sys.platform == 'darwin':
     app = BUNDLE(collected, name='A11y.app', icon=str(ICONS/'A11y.icns'), bundle_identifier='com.a11y.companion',
                  info_plist={
                      'CFBundleName': 'A11y', 'CFBundleDisplayName': 'A11y',
-                     'CFBundleShortVersionString': '0.9.4', 'CFBundleVersion': '0.9.4',
+                     'CFBundleShortVersionString': '0.9.5', 'CFBundleVersion': '0.9.5',
                      'LSMinimumSystemVersion': '14.0', 'NSHighResolutionCapable': True,
                      'NSMicrophoneUsageDescription': 'A11y listens for “Hey Ally” and your spoken requests when you turn voice on. Audio is processed on this Mac and never saved.',
                      'NSAppleEventsUsageDescription': 'A11y controls Music and Safari only when you ask it to play a song or open a page.',
