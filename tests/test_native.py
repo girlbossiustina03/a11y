@@ -779,7 +779,10 @@ class NativeTests(unittest.TestCase):
         frame = {'image_data': 'data:image/png;base64,ACTUAL_FRAME_TEST',
                  'screen': {'x': 0, 'y': 0, 'width': 800, 'height': 800},
                  'windows': [{'app': 'Xcode', 'title': 'Project'}], 'captured_monotonic': time.monotonic()}
-        with patch.object(self.window.vision, 'capture', return_value=frame), patch.object(provider, 'interpret_request', return_value={'operation': 'inspect_screen', 'app_name': '', 'target': ''}), patch.object(provider, 'complete_structured', side_effect=lambda system, messages, schema, image_data=None: self.provider.complete(system, messages, image_data=image_data)):
+        # Hermetic: from source on macOS the installed-app lookup first compiles the Swift
+        # desktop helper (up to a minute on CI); this test is about vision, not the app catalog.
+        with patch.object(self.service.desktop_context, 'installed_apps', return_value=[]), \
+                patch.object(self.window.vision, 'capture', return_value=frame), patch.object(provider, 'interpret_request', return_value={'operation': 'inspect_screen', 'app_name': '', 'target': ''}), patch.object(provider, 'complete_structured', side_effect=lambda system, messages, schema, image_data=None: self.provider.complete(system, messages, image_data=image_data)):
             self.window.mascot_submit('What is on my screen?', 'chat')
             deadline = time.monotonic()+15  # slow CI runners
             while self.window.worker.isRunning() and time.monotonic() < deadline:
