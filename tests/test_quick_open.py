@@ -49,6 +49,11 @@ class QuickOpenServiceTests(CompanionFixture, unittest.TestCase):
         bridge.app_state = Mock(return_value={'running': True})
         self.app.desktop_context = DesktopContext(bridge, clock=lambda: 100)
         self.app.provider = Mock()
+        # On a Mac, email questions go to the real Mail reader; these tests cover routing only.
+        from unittest.mock import patch
+        mail = patch('companion.mail_reader.available', return_value=False)
+        mail.start()
+        self.addCleanup(mail.stop)
 
     def test_open_requests_route_without_any_model_call(self):
         action = self.app.ask('open stremio')['desktop_action']

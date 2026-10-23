@@ -91,8 +91,9 @@ class ComputerServiceTests(CompanionFixture, unittest.TestCase):
 
     def test_failed_correction_never_saves_or_executes_action(self):
         with patch.object(self.provider, 'complete', return_value=response()) as model:
-            with self.assertRaisesRegex(ValidationError, 'could not produce a valid action'):
-                self.app.ask('move to the clock')
+            result = self.app.ask('move to the clock')
+        self.assertIsNone(result['desktop_action'])
+        self.assertIsNone(result['target'])
         self.assertEqual(model.call_count, 2)
         self.assertEqual(list(self.app.desktop_session), [])
         self.assertEqual(self.store.workflows(self.employee), [])

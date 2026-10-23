@@ -785,7 +785,8 @@ class CompanionWindow(QMainWindow):
         self.mascot.set_state('idle')
         if 'Accessibility permission' in message and sys.platform == 'darwin':
             self.ask_for_accessibility()
-            self.mascot_home('I need Accessibility access to click. Turn on A11y in the settings I opened, then ask again.')
+            self.mascot_home('macOS is still blocking clicks for this version of A11y. I cleared its old entry: '
+                             'switch A11y on in the list I opened, then ask again.')
             return
         self.mascot_home('I couldn’t do that. '+message)
 
@@ -795,9 +796,16 @@ class CompanionWindow(QMainWindow):
         Each new unsigned build counts as a new app, so an older A11y entry there must be re-enabled."""
         import subprocess
         import threading
+        from .paths import frozen
         bridge = self.desktop_monitor.bridge
         def request():
             try:
+                if frozen():
+                    # An unsigned build is a new app to macOS, so the switch the user turned on
+                    # belongs to an older A11y. Clear A11y's entries (only ever called while access
+                    # is missing, so nothing working is lost); the prompt then adds this build.
+                    subprocess.run(['tccutil', 'reset', 'Accessibility', 'com.a11y.companion'],
+                                   capture_output=True, timeout=10)
                 bridge.request_access()
             except Exception as error:  # the pane below still lets the user grant it
                 print('Accessibility request failed:', error, file=sys.stderr, flush=True)

@@ -31,6 +31,9 @@ class NativeTests(unittest.TestCase):
         # From source on macOS the installed-app lookup first compiles the Swift desktop helper
         # (up to a minute on CI), which stalled request workers past the tests' waits. Widget
         # tests never need the real catalog.
+        mail = patch('companion.mail_reader.available', return_value=False)  # never drive the real Mail app
+        mail.start()
+        self.addCleanup(mail.stop)
         for name, kwargs in (('catalog', {'return_value': []}),
                              ('prepare', {'side_effect': RuntimeError('The desktop helper is not built in widget tests.')})):
             patcher = patch('companion.desktop_context.MacDesktopBridge.'+name, **kwargs)

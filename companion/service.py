@@ -718,7 +718,17 @@ class Companion:
                 break
             except ValidationError as error:
                 if attempt:
-                    raise ValidationError('I could not produce a valid action for that request. '+str(error)) from error
+                    said = raw.get('message') if isinstance(raw, dict) else None
+                    if sources or not isinstance(said, str) or not said.strip():
+                        raise ValidationError('I could not produce a valid action for that request. '+str(error)) from error
+                    # Twice-invalid action: keep what the model said, run nothing. The user gets an
+                    # answer (e.g. a screen description) instead of an internal contract error.
+                    if isinstance(raw.get('desktop_action'), dict):
+                        # Its words would promise an action that is not going to run.
+                        said = 'I couldn’t work out how to do that safely, so I did nothing. Try naming the app, button or place another way.'
+                    response = {'request_kind': 'answer', 'message': said.strip()[:2000], 'source_ids': [],
+                                'workflow': None, 'target': None, 'desktop_action': None, 'fallback': True}
+                    break
                 correction = ('Correct the invalid response: '+str(error)+
                     ' Match the requested operation: launch_app opens an app, new_window opens a NEW Terminal window, '
                     'close_window closes one observed window, quit_app quits an app. For movement use fractional '
@@ -746,11 +756,12 @@ class Companion:
         full_text = bool(request_plan and request_plan.get('full_text'))
         # Images, screen-derived answers and email contents are ephemeral, never stored in
         # conversation history (an email read aloud stays out of the database).
-        if not image_data and not desktop.get('enabled') and not full_text:
+        fallback = response.get('fallback', False)  # never keep a reply that failed validation
+        if not image_data and not desktop.get('enabled') and not full_text and not fallback:
             self.store.add_exchange(self.identity, request, response['message'],
                                     source_documents={s['document_id'] for s in sources})
             self.adaptation.observe(self.identity, request)
-        elif not full_text and (image_data or (desktop.get('enabled') and self.desktop_context.enabled
+        elif not full_text and not fallback and (image_data or (desktop.get('enabled') and self.desktop_context.enabled
               and desktop_generation == self.desktop_context.generation)):
             documents = [s['document_id'] for s in sources]
             for role, content in [('user', request), ('assistant', response['message'])]:

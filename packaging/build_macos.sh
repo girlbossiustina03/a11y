@@ -22,6 +22,9 @@ xcrun swiftc -parse-as-library -O -module-cache-path build/swift-cache native/Sc
 IDENTITY="${MACOS_SIGN_IDENTITY:--}"
 if [ "$IDENTITY" = "-" ]; then
   codesign --force --deep --sign - dist/A11y.app
+elif [ -n "${MACOS_SELF_SIGNED:-}" ]; then
+  # Stable private certificate (not Apple-issued): same identity every build, no notarization.
+  codesign --force --deep --sign "$IDENTITY" dist/A11y.app
 else
   codesign --force --deep --options runtime --timestamp --entitlements packaging/entitlements.plist --sign "$IDENTITY" dist/A11y.app
 fi

@@ -160,9 +160,11 @@ class CoreTests(CompanionFixture, unittest.TestCase):
         self.app.ask('I think I finished all of it', workflow_id=w['id'])
         self.assertEqual(self.store.workflow(self.employee, w['id'])['current_step'], 0)
         self.provider.invalid = {'message': 'Done', 'source_ids': [], 'workflow': {'title': 'Overwrite', 'steps': []}, 'target': None}
-        with self.assertRaises(ValidationError):
-            self.app.ask('Continue')
+        # An invalid workflow is never saved: at most the words are shown, with nothing attached.
+        result = self.app.ask('Continue')
+        self.assertIsNone(result['workflow'])
         self.assertEqual(len(self.store.workflows(self.employee)), 1)
+        self.assertEqual(self.store.workflow(self.employee, w['id'])['current_step'], 0)
 
     def test_fabricated_source_rejects_whole_response(self):
         self.provider.invalid = {'message': 'Claim', 'source_ids': ['made-up-source'], 'workflow': None, 'target': None}
@@ -197,8 +199,9 @@ class CoreTests(CompanionFixture, unittest.TestCase):
     def test_target_requires_image(self):
         self.provider.invalid = {'message': 'Click', 'source_ids': [], 'workflow': None,
             'target': {'label': 'Button', 'x': .1, 'y': .2, 'width': .3, 'height': .1}}
-        with self.assertRaises(ValidationError):
-            self.app.ask('Help')
+        result = self.app.ask('Help')  # no screen image: the target is dropped, never shown
+        self.assertIsNone(result['target'])
+        self.assertIsNone(result['desktop_action'])
 
     def test_profile_only_changes_with_approval(self):
         a = self.app.adaptation

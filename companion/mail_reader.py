@@ -41,8 +41,8 @@ end run'''
 def position(request):
     """1 for 'last/latest email', 2 for 'second last', … or None when the request is not about that."""
     match = REQUEST.search(request)
-    if not match:
-        return None
+    if not match or re.match(r'\s*(?:from|about|regarding|with|in|on|that)\b', request[match.end():], re.I):
+        return None  # "latest email from Ana" asks for a specific one, not just the newest
     words = match.group('position').casefold()
     return next((value for word, value in ORDINALS.items() if words.startswith(word) and word not in ('last', 'latest', 'newest', 'most recent', 'recent')), 1)
 

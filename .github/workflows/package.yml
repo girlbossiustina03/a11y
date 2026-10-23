@@ -29,9 +29,31 @@ jobs:
         run: |
           python -m pip install -r requirements.txt
           python -m unittest discover -s tests -q
+      - name: Use the stable signing certificate (optional)
+        # With the MACOS_SIGNING_P12 / MACOS_SIGNING_PASSWORD secrets (see
+        # packaging/make_signing_certificate.sh) every build has the same identity, so macOS
+        # keeps the Accessibility, Screen Recording and Automation switches across updates.
+        env:
+          MACOS_SIGNING_P12: ${{ secrets.MACOS_SIGNING_P12 }}
+          MACOS_SIGNING_PASSWORD: ${{ secrets.MACOS_SIGNING_PASSWORD }}
+        run: |
+          if [ -z "$MACOS_SIGNING_P12" ]; then echo "No signing secret: ad-hoc signature (permissions reset on update)."; exit 0; fi
+          keychain="$RUNNER_TEMP/a11y-signing.keychain-db"
+          security create-keychain -p "" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "" "$keychain"
+          echo "$MACOS_SIGNING_P12" | base64 --decode > "$RUNNER_TEMP/a11y-signing.p12"
+          security import "$RUNNER_TEMP/a11y-signing.p12" -k "$keychain" -P "$MACOS_SIGNING_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/a11y-signing.p12"
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          security set-key-partition-list -S apple-tool:,apple: -s -k "" "$keychain" > /dev/null
+          hash=$(security find-certificate -c "A11y Local Signing" -Z "$keychain" | awk '/SHA-1/{print $NF}')
+          test -n "$hash"
+          echo "MACOS_SIGN_IDENTITY=$hash" >> "$GITHUB_ENV"
+          echo "MACOS_SELF_SIGNED=1" >> "$GITHUB_ENV"
       - name: Build A11y.app and dmg
         env:
-          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          MACOS_SIGN_IDENTITY: ${{ env.MACOS_SIGN_IDENTITY || secrets.MACOS_SIGN_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}

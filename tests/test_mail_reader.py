@@ -14,7 +14,8 @@ class PositionTests(unittest.TestCase):
                            ('who sent my most recent email', 1), ('read my second to last email', 2),
                            ('what does my third latest email say', 3)):
             self.assertEqual(mail_reader.position(request), n, request)
-        for request in ('open the mail broski', 'what do you see on screen', 'send an email to Ana', 'what is in my notes'):
+        for request in ('open the mail broski', 'what do you see on screen', 'send an email to Ana', 'what is in my notes',
+                        "what's my latest email from Ana", 'read my last email about the invoice'):
             self.assertIsNone(mail_reader.position(request), request)
 
 
