@@ -8,7 +8,7 @@ Resolution order for X:
 Anything after "and"/"then" stays for the computer task. Requests this parser
 does not clearly understand return None and go to the model as before."""
 import re
-from .app_names import resolve_app
+from .app_names import ALIASES, normalized, resolve_app
 from .web_apps import BROWSER_WORDS, WEB_APPS
 
 VERB = r'(?:please\s+)?(?:can you\s+|could you\s+)?(?:open(?:\s+up)?|launch|start|go to|bring up)'
@@ -72,3 +72,28 @@ def plan(request, catalog):
     if LOCAL_THINGS & {word.casefold() for word in name.split()}:
         return None  # "open downloads folder", "open last email": not a web search.
     return dict(base, operation='browser_search', target=name)
+
+
+VENDORS = ('microsoft ', 'google ', 'adobe ', 'apple ')
+LEAD_IN = re.compile(r"^\W*(?:(?:um+|uh+|ok(?:ay)?|so|please|hey|ally)\b\W*)*", re.I)
+
+
+def bare_name(request, catalog):
+    """'Microsoft Teams.' said or typed on its own names an app: open it. Only an exact name
+    (or the name without its vendor, "Teams" for Microsoft Teams) counts, then a known web
+    app; "Activity" never becomes Activity Monitor. Anything else returns None for the model."""
+    name = LEAD_IN.sub('', request.strip()).rstrip(' .!?…').strip(' "\'“”')
+    words = name.split()
+    if not words or len(words) > 4 or not re.fullmatch(r"[\w .&+'’-]+", name):
+        return None
+    wanted = normalized(name)
+    def matches(app):
+        full = app['name'].casefold()
+        short = next((full[len(vendor):] for vendor in VENDORS if full.startswith(vendor)), full)
+        return wanted in (normalized(full), normalized(short))
+    apps = [app for app in catalog if matches(app)] or (resolve_app(name, catalog) if wanted in ALIASES else [])
+    if len(apps) == 1:
+        return {'operation': 'launch_app', 'app_name': apps[0]['name'], 'target': '', 'browser_mode': 'default', 'remaining_request': ''}
+    if not apps and name.casefold() in WEB_APPS:
+        return {'operation': 'browser_open', 'app_name': '', 'target': WEB_APPS[name.casefold()], 'browser_mode': 'default', 'remaining_request': ''}
+    return None

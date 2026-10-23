@@ -27,8 +27,11 @@ class AccessPreferences:
         return self.get()
 
 
+    # Consent for local screen vision never covers sending screen images or requests to a cloud model.
+    FEATURES = ('app_awareness', 'screen_vision', 'cloud_screen_vision', 'cloud_ai')
+
     def approved(self, feature):
-        if feature not in ('app_awareness', 'screen_vision'):
+        if feature not in self.FEATURES:
             raise ValueError('Unknown access feature.')
         import json
         with self.store.employee() as db:
@@ -38,7 +41,7 @@ class AccessPreferences:
 
     def approve(self, feature):
         """Record explicit app consent separately from OS grants and enabled state."""
-        if feature not in ('app_awareness', 'screen_vision'):
+        if feature not in self.FEATURES:
             raise ValueError('Unknown access feature.')
         import json
         with self.store.employee() as db:

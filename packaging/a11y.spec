@@ -2,7 +2,7 @@
 # Build with packaging/build_macos.sh or packaging/build_windows.ps1.
 import sys
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, copy_metadata
 
 ROOT = Path(SPECPATH).parent
 ICONS = ROOT/'packaging'/'icons'
@@ -55,6 +55,14 @@ for package in ['faster_whisper', 'ctranslate2', 'espeakng_loader', 'sounddevice
 cert_datas, cert_binaries, cert_imports = collect_all('certifi')
 datas += cert_datas
 hiddenimports += cert_imports+['certifi']
+# Claude provider: the SDK imports opentelemetry, which finds its runtime context through
+# package entry points, so their metadata must ship too (the self-test sends a request).
+for package in ('anthropic', 'opentelemetry-api'):
+    try:
+        datas += copy_metadata(package)
+    except Exception:
+        pass
+hiddenimports += ['anthropic', 'companion.claude']
 if sys.platform == 'win32':
     hiddenimports += ['comtypes', 'comtypes.client', 'winrt.windows.media.ocr', 'winrt.windows.graphics.imaging',
                       'winrt.windows.storage.streams', 'winrt.windows.foundation']
@@ -71,7 +79,7 @@ if sys.platform == 'darwin':
     app = BUNDLE(collected, name='A11y.app', icon=str(ICONS/'A11y.icns'), bundle_identifier='com.a11y.companion',
                  info_plist={
                      'CFBundleName': 'A11y', 'CFBundleDisplayName': 'A11y',
-                     'CFBundleShortVersionString': '0.9.10', 'CFBundleVersion': '0.9.10',
+                     'CFBundleShortVersionString': '0.9.11', 'CFBundleVersion': '0.9.11',
                      'LSMinimumSystemVersion': '14.0', 'NSHighResolutionCapable': True,
                      'NSMicrophoneUsageDescription': 'A11y listens for “Hey Ally” and your spoken requests when you turn voice on. Audio is processed on this Mac and never saved.',
                      'NSAppleEventsUsageDescription': 'A11y reads or changes Mail, Notes, Contacts, Music and your browser only when you ask it to, for example to read your last email or open a page.',
@@ -82,5 +90,5 @@ if sys.platform == 'darwin':
                      'NSDownloadsFolderUsageDescription': 'A11y lists your newest downloads when you ask for them.',
                      'NSDesktopFolderUsageDescription': 'A11y lists recent files on your Desktop when you ask for them.',
                      'NSDocumentsFolderUsageDescription': 'A11y lists recent documents when you ask for them.',
-                     'NSScreenCaptureUsageDescription': 'A11y looks at your screen only when you ask for help with what is on it. Images stay on this Mac.',
+                     'NSScreenCaptureUsageDescription': 'A11y looks at your screen only when you ask for help with what is on it. Images go only to the AI you chose: the local model, or Claude if you allowed screen vision for it.',
                  })

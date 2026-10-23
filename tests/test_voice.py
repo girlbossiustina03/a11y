@@ -166,17 +166,41 @@ class VoiceConversationTests(unittest.TestCase):
         for _ in range(5):
             self.qt.processEvents()
 
+    def settle(self):
+        """Let the pause after speaking pass (the mic must not hear A11y's own voice)."""
+        import time
+        from companion.desktop import LISTEN_AFTER_SPEAKING_MS
+        deadline = time.monotonic()+LISTEN_AFTER_SPEAKING_MS/1000+0.2
+        while time.monotonic() < deadline:
+            self.qt.processEvents()
+            time.sleep(0.01)
+
     def test_wake_then_request_uses_text_path_and_listens_again(self):
         self.window.voice_woke('')
         self.assertTrue(self.window.voice_conversation)
         self.assertEqual(self.tts.spoken[-1], 'Yes?')
+        self.assertEqual(self.voice.calls[-1], 'pause')  # not yet: the speakers are still finishing
+        self.settle()
         self.assertEqual(self.voice.calls[-1], 'listen')
         self.window.voice_heard('How do I start onboarding?')
         self.wait_for_worker()
         self.assertEqual(self.provider.contexts[-1]['request'], 'How do I start onboarding?')
         self.assertIn('Follow the company onboarding instructions.', self.tts.spoken[-1])
         self.assertIn('pause', self.voice.calls)
+        self.settle()
         self.assertEqual(self.voice.calls[-1], 'listen')
+
+    def test_recognition_names_are_common_work_apps_and_running_ones(self):
+        from unittest.mock import patch
+        from companion.desktop import VOICE_NAMES
+        running = {'available_apps': [{'name': 'Figma', 'bundle_id': 'com.figma'}, {'name': 'A11y', 'bundle_id': 'a11y'},
+                                      {'name': 'Safari', 'bundle_id': 'com.apple.Safari'}]}
+        with patch.object(self.window.desktop_monitor, 'context', return_value=running):
+            self.window.load_voice_vocabulary()
+        self.assertEqual(self.voice.vocabulary[:len(VOICE_NAMES)], VOICE_NAMES)
+        self.assertIn('Figma', self.voice.vocabulary)
+        self.assertNotIn('A11y', self.voice.vocabulary)
+        self.assertEqual(self.voice.vocabulary.count('Safari'), 1)
 
     def test_request_spoken_with_wake_phrase_is_submitted(self):
         self.window.voice_woke('how do I start onboarding')
@@ -187,6 +211,7 @@ class VoiceConversationTests(unittest.TestCase):
         self.window.voice_woke('')
         self.window.voice_heard('Thanks, that is all')
         self.assertFalse(self.window.voice_conversation)
+        self.settle()
         self.assertEqual(self.voice.calls[-1], 'wake')
         self.assertIn('Hey Ally', self.tts.spoken[-1])
 
@@ -436,6 +461,29 @@ class HearingTests(unittest.TestCase):
         self.assertGreaterEqual(listener.segmenter.end_frames*FRAME/SAMPLE_RATE, 1.5)
         listener.vocabulary = ['Microsoft Teams', 'Mail']
         self.assertIn('Microsoft Teams', listener.prompt())
+        # Reported: recognition "all over the place". The prompt had up to 60 installed apps led by
+        # "Open", which made Whisper hear names and commands that were never said.
+        listener.vocabulary = ['App %d' % number for number in range(60)]
+        prompt = listener.prompt()
+        self.assertEqual(prompt.count(','), 11)
+        self.assertFalse(prompt.startswith('Open'))
+        self.assertTrue(listener.prompt('Hey Ally.').startswith('Hey Ally. App 0, '))
+
+    @unittest.skipUnless(importlib.util.find_spec('PyQt6'), 'PyQt6 missing')
+    def test_natural_voice_queues_half_a_second_of_audio(self):
+        # Reported: speech stuttered. Qt's default sink buffer ran dry whenever the app was busy.
+        import tempfile
+        from unittest.mock import patch
+        from PyQt6.QtWidgets import QApplication
+        from companion import neural_voice
+        QApplication.instance() or QApplication([])
+        # Test machines have no audio device (Qt then ignores the size), so check the request itself.
+        with tempfile.TemporaryDirectory() as folder, patch.object(neural_voice.NeuralVoice, '_engine'), \
+                patch('PyQt6.QtMultimedia.QAudioSink') as sink:
+            voice = neural_voice.NeuralVoice(folder)
+            voice._ensure_sink()
+            sink.return_value.setBufferSize.assert_called_once_with(neural_voice.SAMPLE_RATE)
+            voice.executor.shutdown(wait=True)
 
 
 @unittest.skipUnless(importlib.util.find_spec('PyQt6'), 'PyQt6 missing')

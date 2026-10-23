@@ -1,6 +1,8 @@
 PyQt6>=6.7,<7
 # Mozilla's CA list: the packaged app's bundled Python has no access to the system certificates.
 certifi>=2024.2
+# Optional Claude Sonnet provider (chosen in Settings; local Ollama stays the default).
+anthropic>=2.1,<3
 # Windows adapters: UI Automation controls/focus and the built-in Windows OCR engine.
 # Each is optional at runtime; without them tasks fall back to screenshot analysis.
 comtypes>=1.4,<2; sys_platform == "win32"

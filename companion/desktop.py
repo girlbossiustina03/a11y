@@ -189,6 +189,10 @@ class OllamaDiscovery(QThread):
             self.failed.emit(str(e))
 
 
+# Names that help speech recognition most (see load_voice_vocabulary).
+VOICE_NAMES = ['Teams', 'Outlook', 'Safari', 'Mail', 'YouTube', 'Notes']
+LISTEN_AFTER_SPEAKING_MS = 700
+
 PROGRESS = re.compile(r'^(Thinking…|On it\.|Step \d+ · .*|Sent: .*|.*…)$', re.S)
 FILLER = re.compile(r'^(?:(?:the )?goal (?:is )?(?:fully )?(?:achieved|met|complete)[.:,]?\s*|goal achieved[.:,]?\s*|success(?:fully)?[.:,]?\s*)', re.I)
 
@@ -356,6 +360,10 @@ class CompanionWindow(QMainWindow):
         """Save and use the models the setup window installed."""
         from .paths import save_ai_settings
         save_ai_settings(model=text, vision_model=vision)
+        if getattr(self.service.provider, 'cloud', False):
+            self.refresh()
+            self.mascot_home('Local models and voice are ready. Claude stays in use; switch in Settings → AI model.')
+            return
         config = self.service.provider.config if isinstance(self.service.provider, OllamaProvider) else AIConfig()
         self.service.provider = OllamaProvider(AIConfig(base_url=config.base_url if config.base_url.startswith('http://127.') else 'http://127.0.0.1:11434',
                                                         model=text, vision_model=vision, timeout=120))
@@ -370,7 +378,9 @@ class CompanionWindow(QMainWindow):
             return
         if choice['app_awareness']:
             self.desktop_monitor.enable(request_permission=False)
-        if choice['screen_vision'] and isinstance(self.service.provider, OllamaProvider):
+        self.vision.cloud_approved = self.access_preferences.approved('cloud_screen_vision')
+        cloud = getattr(self.service.provider, 'cloud', False)
+        if choice['screen_vision'] and (isinstance(self.service.provider, OllamaProvider) or (cloud and self.vision.cloud_approved)):
             self.vision_permission = VisionPermission(self.vision, self, request_permission=False)
             self.vision_permission.result.connect(lambda result: self.screen_permission_result(result, quiet=True))
             self.vision_permission.failed.connect(lambda message: self.screen_permission_failed(message, quiet=True))
@@ -643,9 +653,13 @@ class CompanionWindow(QMainWindow):
         if hasattr(self, 'essentials_identity'):
             details = self.introduction.user_details()
             self.essentials_identity.setText(' · '.join(details.values()) or 'Your name, role and preferred way to work.')
-            self.essentials_ai.setText(state['ai']['model'] or 'Choose a model to get started')
+            self.essentials_ai.setText(self.model_label(state) or 'Choose a model to get started')
         if hasattr(self, 'connection_summary'):
-            self.connection_summary.setText(state['ai']['model'] or 'No model selected')
+            self.connection_summary.setText(self.model_label(state) or 'No model selected')
+
+    @staticmethod
+    def model_label(state):
+        return 'Claude Sonnet 5.5 · Anthropic cloud' if state['ai']['provider'] == 'claude' else state['ai']['model']
 
     def render_workflow(self):
         self.clear_guidance()
@@ -1038,7 +1052,9 @@ class CompanionWindow(QMainWindow):
         self.stop_btn.setEnabled(speaking)
         self.mascot.set_state('speaking' if speaking else 'idle')
         if state.name == 'Ready':
-            self.voice_resume()
+            # The speakers are still playing the last fraction of a second (and the room echoes
+            # it); listening right away made A11y transcribe its own voice.
+            QTimer.singleShot(LISTEN_AFTER_SPEAKING_MS, self.voice_resume)
 
     def choose_female_voice(self):
         """Prefer a female English voice (e.g. Microsoft Zira, Samantha) for everything A11y says."""
@@ -1124,18 +1140,13 @@ class CompanionWindow(QMainWindow):
         self.load_voice_vocabulary()
 
     def load_voice_vocabulary(self):
-        """Give speech recognition the app and site names the user is likely to say."""
-        import threading
-        from .web_apps import WEB_APPS
-        voice, monitor = self.voice, self.desktop_monitor
-        def work():
-            try:
-                apps = [app.get('name', '') for app in monitor.installed_apps() if isinstance(app, dict)]
-            except Exception:
-                apps = []
-            names = list(dict.fromkeys(name for name in apps+[name.title() for name in WEB_APPS] if name and len(name) < 40))
-            voice.vocabulary = names
-        threading.Thread(target=work, daemon=True).start()
+        """Give speech recognition a few names the user is likely to say: common work apps and
+        the apps that are running now (refreshed with the desktop context)."""
+        if not self.voice:
+            return
+        running = [app.get('name', '') for app in self.desktop_monitor.context().get('available_apps', []) if isinstance(app, dict)]
+        names = [name for name in VOICE_NAMES+running if name and len(name) < 30 and name != 'A11y']
+        self.voice.vocabulary = list(dict.fromkeys(names))
 
     def stop_voice(self):
         self.voice_conversation = False
@@ -1446,8 +1457,22 @@ class CompanionWindow(QMainWindow):
             return
         if self.vision_permission and self.vision_permission.isRunning():
             return
-        if not isinstance(self.service.provider, OllamaProvider):
-            self.mascot_home('Automatic screen vision needs local Ollama. Connect it under Settings → Advanced → AI model.')
+        if getattr(self.service.provider, 'cloud', False):
+            if not self.access_preferences.approved('cloud_screen_vision') and not self.confirm_access(
+                    'Let Claude see your screen',
+                    'Each message includes a fresh screen image, sent to Anthropic’s Claude API with your request.',
+                    ['Anthropic uses the image to answer. A11y keeps nothing on disk.',
+                     'Password fields and protected apps are never captured.',
+                     'Close confidential windows first. Pause vision whenever you like.',
+                     'macOS will ask for Screen Recording access.' if sys.platform == 'darwin'
+                     else 'A11y excludes its windows from each capture.'], 'Allow for Claude'):
+                self.retry_after_vision = False
+                return
+            self.access_preferences.approve('cloud_screen_vision')
+            self.vision.cloud_approved = True
+            consented = True
+        elif not isinstance(self.service.provider, OllamaProvider):
+            self.mascot_home('Automatic screen vision needs local Ollama or Claude. Choose one under Settings → Advanced → AI model.')
             return
         approved = self.access_preferences.approved('screen_vision')
         if not approved and not consented and not self.confirm_access('See what you’re working on',
@@ -1540,6 +1565,9 @@ class CompanionWindow(QMainWindow):
 
     def refresh_desktop_context(self):
         self.mascot.set_screen_vision_indicator(self.vision.enabled)
+        voice = getattr(self, 'voice', None)  # also runs while the window is being built
+        if voice and voice.mode != 'off':
+            self.load_voice_vocabulary()
         context = self.desktop_monitor.context()
         enabled = context.get('enabled', False)
         app = context.get('app', {}).get('name', '')
@@ -1869,7 +1897,7 @@ class CompanionWindow(QMainWindow):
         heading = label('AI model')
         heading.setObjectName('settingsPageTitle')
         layout.addWidget(heading)
-        layout.addWidget(label('Choose an installed Ollama model. Use a vision model for screen tasks.'))
+        layout.addWidget(label('Choose an installed Ollama model (stays on this computer). Use a vision model for screen tasks.'))
         config = getattr(self.service.provider, 'config', AIConfig())
         self.connection_summary = label(config.model or 'No model selected')
         layout.addWidget(self.connection_summary)
@@ -1907,6 +1935,19 @@ class CompanionWindow(QMainWindow):
             self.connect_provider()
         self.connect_btn = button('Use model', apply_model)
         layout.addWidget(self.connect_btn)
+        from .claude import saved_key
+        layout.addWidget(label('Or use Claude Sonnet in Anthropic’s cloud: sharper and quicker on screen tasks, '
+                               'but your requests are sent to Anthropic.'))
+        self.claude_key = QLineEdit()
+        self.claude_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.claude_key.setAccessibleName('Anthropic API key')
+        self.claude_key.setPlaceholderText('Saved key in use · paste a new one to replace it' if saved_key()
+                                           else 'Anthropic API key (saved on this computer only)')
+        layout.addWidget(self.claude_key)
+        claude_row = QHBoxLayout()
+        claude_row.addWidget(button('Use Claude', self.use_claude))
+        claude_row.addWidget(button('Forget Claude key', self.forget_claude))
+        layout.addLayout(claude_row)
         self.connection_status = label('Changes apply to this session.')
         layout.addWidget(self.connection_status)
         details.addWidget(label('API keys stay in memory. Applying settings does not test the connection.'))
@@ -1983,11 +2024,69 @@ class CompanionWindow(QMainWindow):
         self.connection_fields['key'].clear()
         if self.provider_choice.currentData() == 'ollama':
             from .paths import save_ai_settings
-            save_ai_settings(model=config.model, vision_model=config.vision_model)
+            save_ai_settings(model=config.model, vision_model=config.vision_model, provider='ollama')
         self.connection_status.setText('Model saved. Ask me a question to test it.')
         self.refresh()
         if not self.setup_active:
             self.mascot_home('Connection settings are ready. What would you like to work on?')
+
+    def use_claude(self):
+        from .claude import ClaudeProvider, save_key, saved_key
+        from .paths import save_ai_settings
+        self.stop_computer_task(announce=False)
+        if self.worker and self.worker.isRunning():
+            self.connection_status.setText('Wait for the current request to finish before changing provider.')
+            return
+        key = self.claude_key.text().strip() or saved_key()
+        if not key:
+            self.connection_status.setText('Paste your Anthropic API key first (console.anthropic.com → API keys).')
+            return
+        if not self.access_preferences.approved('cloud_ai') and not self.confirm_access('Use Claude in the cloud?',
+                'Claude Sonnet runs on Anthropic’s servers, so what you ask A11y is sent there.',
+                ['Sent: your requests, recent conversation, app and window names, and company excerpts a question uses.',
+                 'Screen images only if you also allow screen vision for Claude.',
+                 'Mail, Calendar, Reminders, Notes and Contacts are read on this computer and shown directly.',
+                 'Your key is saved only on this computer. Switch back to the local model any time.'], 'Use Claude'):
+            return
+        self.access_preferences.approve('cloud_ai')
+        if self.claude_key.text().strip():
+            save_key(key)
+            self.claude_key.clear()
+            self.claude_key.setPlaceholderText('Saved key in use · paste a new one to replace it')
+        self.service.provider = ClaudeProvider(key=key)
+        save_ai_settings(provider='claude')
+        note = ''
+        self.vision.cloud_approved = self.access_preferences.approved('cloud_screen_vision')
+        if self.vision.enabled and not self.vision.cloud_approved:
+            # Local screen-vision consent does not cover sending images to Anthropic.
+            self.vision.set_enabled(False)
+            self.access_preferences.save(screen_vision=False)
+            self.mascot.vision_button.setText('Screen off')
+            self.mascot.set_screen_vision_indicator(False)
+            note = ' Screen vision is paused: turn it on again to allow screen images for Claude.'
+        self.connection_status.setText('Using Claude Sonnet 5.5.'+note)
+        self.refresh()
+        if not self.setup_active:
+            self.mascot_home('Claude is ready. What can I help you with?'+note)
+
+    def forget_claude(self):
+        from .claude import save_key
+        from .paths import save_ai_settings
+        save_key('')
+        self.claude_key.clear()
+        self.claude_key.setPlaceholderText('Anthropic API key (saved on this computer only)')
+        if getattr(self.service.provider, 'cloud', False):
+            self.stop_computer_task(announce=False)
+            self.vision.cloud_approved = False
+            if self.vision.enabled:
+                self.vision.set_enabled(False)
+                self.mascot.vision_button.setText('Screen off')
+                self.mascot.set_screen_vision_indicator(False)
+            self.service.provider = OllamaProvider()
+            save_ai_settings(provider='ollama')
+            QTimer.singleShot(0, self.scan_ollama)
+        self.connection_status.setText('Claude key removed. Using the local model.')
+        self.refresh()
 
     def record_companion_message(self, message):
         if progress_message(message):
@@ -2109,7 +2208,8 @@ class CompanionWindow(QMainWindow):
                 if isinstance(self.service.provider, OllamaProvider):
                     self.check_readiness(always=True)
                 else:
-                    self.mascot_home('Local setup applies to Ollama. A compatible cloud provider is configured instead.')
+                    self.mascot_home('Local setup applies to Ollama. '+('Claude' if getattr(self.service.provider, 'cloud', False)
+                                     else 'A compatible cloud provider')+' is in use instead.')
             elif action in ('settings', 'history'):
                 self.tabs.setCurrentIndex(0 if action == 'history' else self.essentials_tab)
                 self.reveal()

@@ -153,6 +153,15 @@ class OllamaTests(unittest.TestCase):
         with patch.object(provider, 'request', side_effect=replies):
             self.assertEqual(provider.complete('system', [{'role': 'user', 'content': 'x'}], max_tokens=700), {'a': 1})
 
+    def test_warm_up_sends_one_request_per_prompt(self):
+        # A user's Ollama log showed every warm-up prompt sent twice: the one-token reply was
+        # retried as if the model had rambled.
+        provider = self.provider()
+        provider.metadata['local-model'] = {'capabilities': ['completion']}
+        with patch.object(provider, 'request', return_value={'done': True, 'done_reason': 'length', 'message': {'content': '{'}}) as request:
+            provider.warm_up(['first system', 'second system'])
+        self.assertEqual(request.call_count, 2)
+
     def test_timing_logs_backend_costs_without_private_content(self):
         provider = self.provider()
         provider.metadata['local-model'] = {'capabilities': ['completion', 'vision']}

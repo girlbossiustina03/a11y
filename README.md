@@ -66,7 +66,7 @@ Instead of unbounded autonomous execution or rigid scripted workflows, A11y oper
 - **Enterprise onboarding & cited retrieval** — Import internal Markdown or text handbooks (e.g. `examples/onboarding.md`). Generated onboarding steps must cite an exact chunk from the imported material; uncited claims are rejected by the validation pipeline.
 - **Adaptive accessibility profiling** — A11y adapts to how you work. Repeatedly asking for shorter answers triggers a suggestion in **Settings → Preferences** to permanently adopt a concise style. Explicit preferences always take precedence over learned ones.
 - **Prompt-only bar & speech balloon** — Normal conversation takes place in a minimalist 240px wide input bar. Replies appear in an auto-sizing speech balloon overhead with text-to-speech support and accessible contrast.
-- **Hands-free voice ("Hey Ally")** — Right-click the companion → **Turn on voice**. Say "Hey Ally" (or "Hey Ally, open Teams"), then talk naturally: every spoken request takes exactly the same path as typed text, replies are read aloud in a natural local voice (Kokoro “Heart”, open weights, downloaded once when voice is turned on; `A11Y_VOICE` selects another Kokoro voice) or the system voice when it is unavailable, and confirmations accept "yes" / "no". After a reply A11y listens again for 8 s; "goodbye", silence or a finished task returns to waiting for "Hey Ally". `Ctrl+Shift+Space` starts a conversation from the keyboard. Speech is recognized locally with faster-whisper (`tiny.en` for the wake phrase, `small.en` for requests); audio is never saved or sent anywhere, and the microphone pauses while A11y speaks or works.
+- **Hands-free voice ("Hey Ally")** — Right-click the companion → **Turn on voice**. Say "Hey Ally" (or "Hey Ally, open Teams"), then talk naturally: every spoken request takes exactly the same path as typed text, replies are read aloud in a natural local voice (Kokoro “Heart”, open weights, downloaded once when voice is turned on; `A11Y_VOICE` selects another Kokoro voice) or the system voice when it is unavailable, and confirmations accept "yes" / "no". After a reply A11y listens again for 8 s; "goodbye", silence or a finished task returns to waiting for "Hey Ally". `Ctrl+Shift+Space` starts a conversation from the keyboard. Speech is recognized locally with faster-whisper (`tiny.en` for the wake phrase, `small.en` for requests); audio is never saved or sent anywhere (only the recognized text, like typed text, goes to the AI you chose), and the microphone pauses while A11y speaks or works and for a moment after it stops talking.
 - **Built-in Mac apps, done in code** — Ask in your own words: “read out my last email”, “what's on my calendar tomorrow”, “what do I have to do today”, “read my trip note”, “what's Ana's number”, “what did I download last”, “summarize this page”, “run my morning shortcut”. The local model only works out what you want; A11y then reads the exact data from Mail, Calendar and Reminders (EventKit, recurring events included), Notes, Contacts, your Downloads/Desktop/Documents folders, the browser's current tab and Shortcuts. Nothing is screenshotted, and emails are not sent to a model or saved in History. Changes (adding an event, reminder or note, ticking off a reminder, running a shortcut) are shown as a button and happen only when you press it or say “yes”.
 - **Multi-instance locking** — A process-lifetime lock in `%LOCALAPPDATA%\A11y` or `.data/` guarantees only one instance touches the SQLite stores at a time, displaying the active PID and git build ID if a collision occurs.
 
@@ -100,7 +100,7 @@ log live in `~/Library/Application Support/A11y` (`%LOCALAPPDATA%\A11y` on Windo
 **Build it yourself:** `packaging/build_macos.sh` on a Mac (needs Xcode Command Line Tools for the
 Swift helpers) or `packaging/build_windows.ps1` on Windows; output goes to `dist/`. To use your own
 icon artwork, save it as `packaging/icon-source.png` before building. The `Package apps` workflow
-builds both on every push to `main` and runs each packaged app's `--self-test` (HTTPS, voice,
+builds both on every push to `main` and runs each packaged app's `--self-test` (HTTPS, voice, the Claude SDK,
 helpers, permissions strings) before anything is published. To publish a release, run the workflow
 from **Actions → Package apps → Run workflow** with a version such as `v1.0.0` (or push a `v*` tag). Optional secrets
 `MACOS_SIGN_IDENTITY`, `APPLE_ID`, `APPLE_TEAM_ID` and `APPLE_APP_PASSWORD` enable Developer ID
@@ -180,7 +180,7 @@ Navigate to `http://127.0.0.1:8765`. Includes full document management, conversa
 
 ## AI Configuration
 
-A11y supports local Ollama inference out of the box with zero cloud leakage, as well as OpenAI-compatible API providers.
+A11y supports local Ollama inference out of the box with zero cloud leakage, Claude Sonnet through the Anthropic API as an opt-in, and OpenAI-compatible API providers.
 
 ### Local Ollama (Default)
 
@@ -198,6 +198,26 @@ A11y supports local Ollama inference out of the box with zero cloud leakage, as 
    ```
 3. A11y scans installed models automatically in **Settings → AI connection → Find local Ollama models**.
 
+### Claude Sonnet (opt-in, cloud)
+
+For sharper routing and more reliable on-screen tasks, use Claude Sonnet 5.5
+(`claude-sonnet-5-5`) instead of the local model: **Settings → Advanced → AI model**, paste an
+Anthropic API key, and choose **Use Claude**. **Forget Claude key** switches back to the local model.
+
+- **What is sent to Anthropic:** your requests, recent conversation, app and window names, and the
+  company excerpts a question uses. A11y asks once before the first switch.
+- **Screen images** are sent only after you allow screen vision *for Claude*; allowing it for the
+  local model does not count. Password fields and protected apps are never captured.
+- **Stays on your computer:** Mail, Calendar, Reminders, Notes and Contacts are read in code and
+  shown directly, without the model. Every action still goes through the same local validation,
+  access checks and confirmations as with Ollama.
+- **The key** is saved only on this computer, in A11y's data folder (`anthropic-key`, readable only
+  by your user). `ANTHROPIC_API_KEY` in the environment takes precedence; `A11Y_AI_PROVIDER=claude`
+  selects Claude without the settings window.
+- Routing and chat run at low effort for speed; screen steps run at medium. Override with
+  `A11Y_CLAUDE_EFFORT=low|medium|high`. Refusals in some categories retry on another Claude model
+  inside the same request (Anthropic's server-side fallback).
+
 ### OpenAI-Compatible API
 
 To route inference through an API or remote gateway:
@@ -209,7 +229,7 @@ export A11Y_AI_MODEL="meta-llama/Llama-3.3-70B-Instruct-Turbo"
 export A11Y_AI_KEY="your-api-key"
 ```
 
-*API keys entered via the settings UI remain strictly in memory and are never persisted to disk.*
+*API keys for OpenAI-compatible providers entered via the settings UI remain strictly in memory and are never persisted to disk. The Claude key is the exception, saved locally as described above.*
 
 ---
 
@@ -236,10 +256,12 @@ export A11Y_AI_KEY="your-api-key"
 ├── company.sqlite3            # Imported company knowledge, chunk index, document metadata
 ├── employee.sqlite3           # User profile, adaptive preferences, saved workflow tasks
 ├── desktop-instance.lock      # Process lock holding active PID and build hash
+├── ai.json                    # Chosen provider and local models
+├── anthropic-key              # Only if you use Claude (owner read/write only)
 └── swift-cache/               # Cached compilation artifacts for DesktopBridge.swift
 ```
 
-- **Transient In-Memory Data**: Screenshot buffers, ScreenCaptureKit frames, window hierarchy snapshots, and API keys are kept strictly in volatile memory and are cleared on task completion or pause.
+- **Transient In-Memory Data**: Screenshot buffers, ScreenCaptureKit frames, window hierarchy snapshots, and API keys (except the Claude key you chose to save) are kept strictly in volatile memory and are cleared on task completion or pause.
 - **Repository Data**: When running in development mode, databases default to `.data/` unless overridden via `A11Y_DATA_DIR`.
 
 ---

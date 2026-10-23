@@ -17,6 +17,7 @@ class ScreenVision:
         self.binary = self.prebuilt or self.directory/'screen-bridge'
         self.source = Path(__file__).resolve().parent.parent/'native'/'ScreenBridge.swift'
         self.enabled = False
+        self.cloud_approved = False  # set only after consent to send screen images to Claude
         self.generation = 0
         self.lock = threading.Lock()
 
@@ -79,11 +80,16 @@ class ScreenVision:
     def capture(self, provider, *, x=0, y=0, desktop=None, fast_text=False):
         if not self.enabled:
             raise RuntimeError('Screen vision is paused. Enable it from the character’s right-click menu.')
-        if not isinstance(provider, OllamaProvider):
-            raise RuntimeError('Automatic screen vision is restricted to local Ollama. Use previewed capture for other providers.')
-        model = provider.config.vision_model or provider.config.model
-        if 'vision' not in provider.model_info(model).get('capabilities', []):
-            raise RuntimeError('Choose an installed image-capable Ollama model to use screen vision.')
+        if getattr(provider, 'cloud', False):
+            # Screen images leave this computer only with consent given for that cloud model.
+            if not self.cloud_approved:
+                raise RuntimeError('Screen images go to Claude only after you allow it. Turn screen vision off and on again to review.')
+        elif not isinstance(provider, OllamaProvider):
+            raise RuntimeError('Automatic screen vision is restricted to local Ollama and Claude. Use previewed capture for other providers.')
+        else:
+            model = provider.config.vision_model or provider.config.model
+            if 'vision' not in provider.model_info(model).get('capabilities', []):
+                raise RuntimeError('Choose an installed image-capable Ollama model to use screen vision.')
         if desktop and (desktop.get('status') == 'private_app' or desktop.get('focused_role') == 'secure_input'):
             raise RuntimeError('Screen vision paused for a protected app or password field.')
         generation = self.generation

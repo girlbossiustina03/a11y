@@ -166,6 +166,9 @@ class NeuralVoice(QObject):
             audio_format.setChannelCount(1)
             audio_format.setSampleFormat(QAudioFormat.SampleFormat.Int16)
             self.sink = QAudioSink(QMediaDevices.defaultAudioOutput(), audio_format, self)
+            # Half a second of audio queued ahead: Qt's default of a few tens of milliseconds ran dry
+            # (choppy speech) whenever transcription or synthesis kept the app busy for a moment.
+            self.sink.setBufferSize(SAMPLE_RATE)  # bytes: 0.5 s of 16-bit mono
             self.sink.stateChanged.connect(self._sink_state)
 
     def _queue_audio(self, generation, pcm):

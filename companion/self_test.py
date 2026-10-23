@@ -91,8 +91,52 @@ def check_bundle():
     return ', '.join(found)
 
 
+def check_claude():
+    """One structured request through the bundled Anthropic SDK to a local stand-in server."""
+    import os
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from .claude import MODEL, ClaudeProvider
+    from .provider import AIConfig
+    events = [('message_start', {'type': 'message_start', 'message': {'id': 'msg_test', 'type': 'message', 'role': 'assistant',
+                  'model': MODEL, 'content': [], 'stop_reason': None, 'stop_sequence': None,
+                  'usage': {'input_tokens': 1, 'output_tokens': 1}}}),
+              ('content_block_start', {'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}}),
+              ('content_block_delta', {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': '{"message": "ok"}'}}),
+              ('content_block_stop', {'type': 'content_block_stop', 'index': 0}),
+              ('message_delta', {'type': 'message_delta', 'delta': {'stop_reason': 'end_turn', 'stop_sequence': None}, 'usage': {'output_tokens': 3}}),
+              ('message_stop', {'type': 'message_stop'})]
+    payload = ''.join(f'event: {name}\ndata: {json.dumps(data)}\n\n' for name, data in events).encode()
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers['Content-Length']))
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/event-stream')
+            self.send_header('Content-Length', str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    os.environ['NO_PROXY'] = ','.join(filter(None, [os.environ.get('NO_PROXY'), '127.0.0.1']))
+    try:
+        provider = ClaudeProvider(AIConfig(base_url=f'http://127.0.0.1:{server.server_address[1]}', model=MODEL, key='self-test', timeout=20))
+        schema = {'type': 'object', 'additionalProperties': False, 'required': ['message'], 'properties': {'message': {'type': 'string'}}}
+        result = provider.complete('Self-test.', [{'role': 'user', 'content': 'ping'}], response_schema=schema)
+    finally:
+        server.shutdown()
+        server.server_close()
+    if result != {'message': 'ok'}:
+        raise RuntimeError('unexpected reply: '+repr(result)[:200])
+    import anthropic
+    return 'anthropic '+anthropic.__version__+' streamed a structured reply'
+
+
 CHECKS = [('bundle', check_bundle), ('https', check_https), ('qt', check_qt),
-          ('speech', check_speech), ('natural_voice', check_natural_voice)]
+          ('speech', check_speech), ('natural_voice', check_natural_voice), ('claude', check_claude)]
 
 
 def run(output):

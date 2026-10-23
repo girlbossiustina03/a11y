@@ -2,7 +2,7 @@
 import unittest
 from unittest.mock import Mock
 from companion.desktop_context import DesktopContext
-from companion.quick_open import plan
+from companion.quick_open import bare_name, plan
 from test_core import CompanionFixture
 from test_desktop_context import FakeBridge
 
@@ -41,6 +41,16 @@ class QuickOpenTests(unittest.TestCase):
         self.assertIsNone(plan('open microsoft', catalog))
 
 
+    def test_a_bare_app_name_opens_it_but_only_an_exact_name(self):
+        # Reported: "Microsoft Teams." alone got a made-up chat answer instead of opening Teams.
+        catalog = CATALOG+[{'name': 'Activity Monitor', 'bundle_id': 'com.apple.ActivityMonitor'},
+                           {'name': 'ChatGPT', 'bundle_id': 'com.openai.chat'}]
+        for request in ('Microsoft Teams.', 'teams', 'Um, Teams!'):
+            self.assertEqual(bare_name(request, catalog)['app_name'], 'Microsoft Teams', request)
+        self.assertEqual(bare_name('Outlook.', catalog)['target'], 'https://outlook.office.com/mail')
+        for request in ('Activity.', 'Chat.', 'hello', 'Thank you.', 'how are you', 'what time is it', 'Monitor'):
+            self.assertIsNone(bare_name(request, catalog), request)
+
 class QuickOpenServiceTests(CompanionFixture, unittest.TestCase):
     def setUp(self):
         super().setUp()
@@ -67,6 +77,26 @@ class QuickOpenServiceTests(CompanionFixture, unittest.TestCase):
         self.app.provider.interpret_request.assert_not_called()
         self.app.provider.complete_structured.assert_not_called()
 
+
+    def test_bare_app_name_and_click_requests_route_in_code(self):
+        action = self.app.ask('Microsoft Teams.')['desktop_action']
+        self.assertEqual((action['type'], action['bundle_id']), ('launch_app', 'com.microsoft.teams2'))
+        # "Click on Chat." is always a screen task with the user's own words, never a chat answer.
+        for request in ('Click on Chat.', 'tap Activity', 'double-click the report'):
+            response = self.app.ask(request)
+            self.assertEqual(response['desktop_action']['type'], 'start_task', request)
+            self.assertEqual(response['desktop_action']['goal'], request)
+        self.app.provider.interpret_request.assert_not_called()
+
+    def test_new_window_result_is_reported_by_code(self):
+        def verify(after, before=1):
+            self.app.last_action_result = {'type': 'new_window', 'label': 'Open a new Safari window', 'remaining_request': '',
+                                           'before': {'window_count': before}, 'after': {'window_count': after}}
+            return self.app.ask('open a new safari window', mode='verify')['message']
+        self.assertEqual(verify(2), 'Opened a new Safari window.')
+        self.assertEqual(verify(1), 'Safari is open, but I could not see a new window yet.')
+        self.assertEqual(verify(0, 0), 'Asked Safari for a new window.')
+        self.app.provider.complete_structured.assert_not_called()
 
     def test_bare_verbs_ask_what_instead_of_guessing(self):
         # Reported: a bare "Open." opened google.com.

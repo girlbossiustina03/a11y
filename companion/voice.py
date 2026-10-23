@@ -16,6 +16,7 @@ from . import paths
 SAMPLE_RATE = 16000
 FRAME = 480                      # 30 ms
 WAKE_MODEL, SPEECH_MODEL = 'tiny.en', 'small.en'
+VOCABULARY_SIZE = 12               # names in the Whisper prompt
 CONVERSATION_TIMEOUT = 8         # seconds without speech before waiting for "Hey Ally" again
 # Whisper invents fluent text from noise; these are its usual inventions, never real requests.
 HALLUCINATIONS = re.compile(r'^\W*(?:thank you|thanks|thanks for watching|thank you for watching|you|bye|'
@@ -334,10 +335,11 @@ class VoiceListener(QObject):
         self.status.emit('Say “Hey Ally” to talk to me.')
 
     def prompt(self, lead=''):
-        """Whisper prompt with the names the user is likely to say (installed apps, sites), so
-        'Teams' is not heard as 'things'."""
-        names = ', '.join(self.vocabulary[:60])
-        return ' '.join(part for part in (lead, 'Open '+names+'.' if names else '') if part) or None
+        """Whisper prompt with a few names the user is likely to say, so 'Teams' is not heard
+        as 'things'. Kept short and neutral: a long list (it was up to 60 installed apps, led
+        by "Open") made Whisper hear names and commands that were never said."""
+        names = ', '.join(self.vocabulary[:VOCABULARY_SIZE])
+        return ' '.join(part for part in (lead, names+'.' if names else '') if part) or None
 
     def listen(self):
         """Take the next conversation turn."""

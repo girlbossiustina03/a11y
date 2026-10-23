@@ -39,7 +39,7 @@ def bundled_helper(name):
     return path if path.is_file() and os.access(path, os.X_OK) else None
 
 
-SETTINGS = ('model', 'vision_model')
+SETTINGS = ('model', 'vision_model', 'provider')  # provider: ollama (default) or claude
 
 
 def saved_ai_settings():

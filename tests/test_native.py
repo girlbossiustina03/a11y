@@ -187,6 +187,68 @@ class NativeTests(unittest.TestCase):
             permission.return_value.start.assert_called_once()
         self.window.vision_permission = None
 
+    def test_claude_needs_a_key_and_one_time_cloud_consent(self):
+        from companion.claude import ClaudeProvider
+        with patch.dict(os.environ, {'A11Y_DATA_DIR': self.temp.name}), patch('companion.claude.saved_key', return_value=''):
+            os.environ.pop('ANTHROPIC_API_KEY', None)
+            with patch.object(self.window, 'confirm_access') as consent:
+                self.window.use_claude()
+                consent.assert_not_called()
+            self.assertIn('API key', self.window.connection_status.text())
+            self.window.claude_key.setText('sk-test')
+            with patch.object(self.window, 'confirm_access', return_value=False):
+                self.window.use_claude()
+            self.assertNotIsInstance(self.window.service.provider, ClaudeProvider)
+            with patch.object(self.window, 'confirm_access', return_value=True) as consent:
+                self.window.use_claude()
+                consent.assert_called_once()
+                self.assertIn('Anthropic', consent.call_args.args[1])
+            self.assertIsInstance(self.window.service.provider, ClaudeProvider)
+            self.assertEqual(self.window.service.provider.config.key, 'sk-test')
+            self.assertEqual(self.window.claude_key.text(), '')
+            from companion.paths import saved_ai_settings
+            self.assertEqual(saved_ai_settings()['provider'], 'claude')
+            self.assertEqual(self.window.service.state()['ai']['provider'], 'claude')
+            self.assertIn('Claude Sonnet', self.window.connection_summary.text())
+            with patch.object(self.window, 'confirm_access') as consent:
+                self.window.use_claude()  # already agreed: no second prompt
+                consent.assert_not_called()
+            self.window.forget_claude()
+            self.assertNotIsInstance(self.window.service.provider, ClaudeProvider)
+            self.assertEqual(saved_ai_settings()['provider'], 'ollama')
+
+    def test_local_screen_consent_never_covers_claude(self):
+        from companion.claude import ClaudeProvider
+        from companion.provider import AIConfig
+        self.window.access_preferences.approve('screen_vision')
+        self.window.access_preferences.approve('cloud_ai')
+        self.window.vision.set_enabled(True)
+        self.window.claude_key.setText('sk-test')
+        with patch.dict(os.environ, {'A11Y_DATA_DIR': self.temp.name}):
+            self.window.use_claude()
+        # Switching pauses vision that was allowed for the local model only.
+        self.assertFalse(self.window.vision.enabled)
+        self.assertFalse(self.window.vision.cloud_approved)
+        with self.assertRaisesRegex(RuntimeError, 'only after you allow'):
+            self.window.vision.enabled = True
+            self.window.vision.capture(self.window.service.provider)
+        self.window.vision.enabled = False
+        # The setup window's local consent (consented=True) still asks about Claude.
+        with patch.object(self.window, 'confirm_access', return_value=False) as consent, \
+                patch('companion.desktop.VisionPermission') as permission:
+            self.window.toggle_screen_vision(consented=True)
+            consent.assert_called_once()
+            self.assertIn('Anthropic', consent.call_args.args[1])
+            permission.assert_not_called()
+        with patch.object(self.window, 'confirm_access', return_value=True), \
+                patch('companion.desktop.VisionPermission') as permission:
+            self.window.toggle_screen_vision()
+            permission.return_value.start.assert_called_once()
+        self.assertTrue(self.window.vision.cloud_approved)
+        self.assertTrue(self.window.access_preferences.approved('cloud_screen_vision'))
+        self.window.vision_permission = None
+        self.assertIsInstance(self.window.service.provider, ClaudeProvider)
+
     def test_startup_is_mascot_only_and_restoration_does_not_open_the_prompt(self):
         self.window.start_companion()
         self.qt.processEvents()

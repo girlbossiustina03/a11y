@@ -102,6 +102,8 @@ MOVE_SELF = re.compile(r'\b(?:move|go|scoot|slide|hop|jump|get|head|fly)\s+(?:(?
                        r'(?:(?:top|bottom|upper|lower)[\s-]*(?:left|right)?|left|right|center|centre|middle)'
                        r'(?:\s+(?:side|edge|corner|part|of|the|screen))*\W*$', re.I)
 NEVER_MIND = re.compile(r'^\W*(?:(?:no|nope|nah|cancel|stop|never ?mind|forget it|not that)\b\W*)+$', re.I)
+# "Click on Chat", "tap Activity", "double-click the file": something on screen to find and click.
+CLICK_REQUEST = re.compile(r'^\W*(?:(?:please|ok(?:ay)?|can you|could you)\W+)*(?:click|tap|double[- ]?click|right[- ]?click)\s+\S', re.I)
 BARE_VERB = re.compile(r'^\W*(?:please\s+)?(open|launch|start|close|quit|click|search|play|find)(?:\s+(?:on|for|up))?\W*$', re.I)
 MAIL_SITES = re.compile(r'^https://(?:mail\.google\.com|outlook\.(?:office|live)\.com)', re.I)
 MAIL_CLIENTS = ('com.apple.mail', 'com.microsoft.Outlook', 'com.readdle.smartemail-Mac', 'com.microsoft.olk')
@@ -292,6 +294,9 @@ class Companion:
                     local_url(config.base_url)
                     if not config.model:
                         raise RuntimeError('Choose a local model in AI connection → Find local Ollama models.')
+                elif getattr(self.provider, 'cloud', False):
+                    if self.provider.ready_error():
+                        raise RuntimeError(self.provider.ready_error())
                 else:
                     config.validate()
             except RuntimeError as e:
@@ -307,7 +312,8 @@ class Companion:
                 'documents': self.knowledge.list_documents(self.identity),
                 'admin': 'admin' in self.identity.roles,
                 'ai': {'ready': not error, 'message': error,
-                       'provider': 'ollama' if isinstance(self.provider, OllamaProvider) else 'compatible',
+                       'provider': 'ollama' if isinstance(self.provider, OllamaProvider) else
+                                   'claude' if getattr(self.provider, 'cloud', False) else 'compatible',
                        'endpoint': config.base_url if config else 'test-provider',
                        'model': config.model if config else 'test-provider'}}
 
@@ -461,6 +467,11 @@ class Companion:
         interpreter = getattr(self.provider, 'interpret_request', None)
         if interpreter is None or self.desktop_context is None:
             return None
+        if CLICK_REQUEST.match(request):
+            # Always a screen task (find it, then click it), never chat: a model once answered
+            # "Click on Chat." with an earlier email.
+            self.last_request_plan = {'operation': 'computer_task', 'app_name': '', 'target': request, 'computed': True}
+            return self.last_request_plan
         fast = simple_app_command(request)
         if fast is not None and fast['operation'] != 'launch_app':
             observed = self.desktop_context.context()
@@ -476,9 +487,16 @@ class Companion:
             quick = quick_plan(request, self.desktop_context.installed_apps())
         except (RuntimeError, ValueError, OSError):
             quick = None
+        if quick is None:
+            from .quick_open import bare_name
+            try:
+                catalog = self.desktop_context.installed_apps()
+            except (RuntimeError, ValueError, OSError):
+                catalog = []  # app list unavailable: a known web app ("Teams") still opens
+            quick = bare_name(request, catalog)
         if quick is not None:
-            # "Open X": installed app first, then a known web app/address, then a
-            # web search. Resolved in code, so no model call is needed to route it.
+            # "Open X" (or just "Microsoft Teams."): installed app first, then a known web
+            # app/address, then a web search. Resolved in code, so no model call is needed.
             self.last_request_plan = preserve_desktop_goal(quick, request)
             return self.last_request_plan
         users = [item['content'][:500] for item in self.history(limit=4) if item['role'] == 'user']
@@ -575,6 +593,20 @@ class Companion:
             else:
                 message = ('Closed '+name+'.' if after.get('window_count', 0) < receipt.get('before', {}).get('window_count', 1)
                            else name+'’s window is still open. It may be asking you to save something first.')
+            return {'desktop_action': None, 'target': None, 'workflow': None, 'sources': [], 'message': message,
+                    'effective': self.adaptation.effective(self.identity)}
+        if mode == 'verify' and (self.last_action_result or {}).get('type') == 'new_window':
+            receipt = self.last_action_result
+            label = receipt.get('label', '')
+            name = (label.removeprefix('Open a new window in ') if label.startswith('Open a new window in ')
+                    else label.removeprefix('Open a new ').removesuffix(' window')) or 'the app'
+            before = receipt.get('before', {}).get('window_count', 0)
+            after = receipt.get('after', {}).get('window_count', 0)
+            message = ('Opened a new '+name+' window.' if after > before else
+                       'Asked '+name+' for a new window.' if not after else
+                       name+' is open, but I could not see a new window yet.')
+            if receipt.get('remaining_request'):
+                message += ' Still pending: '+receipt['remaining_request']+'; it has not been executed.'
             return {'desktop_action': None, 'target': None, 'workflow': None, 'sources': [], 'message': message,
                     'effective': self.adaptation.effective(self.identity)}
         if mode == 'verify' and (self.last_action_result or {}).get('type') == 'browse_url':
