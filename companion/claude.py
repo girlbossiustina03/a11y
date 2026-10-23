@@ -7,6 +7,7 @@ this computer and shown directly. The model only proposes; every action goes thr
 same local validation, access checks and confirmations as with Ollama."""
 import json
 import os
+import sys
 import threading
 import time
 from .models import RESPONSE_SCHEMA
@@ -120,6 +121,7 @@ class ClaudeProvider(Planner):
         self.config = config or AIConfig(base_url=ENDPOINT, model=os.getenv('A11Y_CLAUDE_MODEL', MODEL),
                                          key=key if key is not None else saved_key(), timeout=90)
         self.json_fallbacks = set()
+        self.use_fallback = True  # turned off for the session if the API rejects it
         self._client = None
         self._client_lock = threading.Lock()
 
@@ -166,27 +168,31 @@ class ClaudeProvider(Planner):
         schema, unwrap = wrapped(response_schema if response_schema is not None else RESPONSE_SCHEMA)
         wire = wire_schema(schema)
         schema_key = json.dumps(wire, sort_keys=True)
-        request = {'model': self.config.model, 'max_tokens': 16000,  # thinking shares this limit
-                   'system': [{'type': 'text', 'text': system, 'cache_control': {'type': 'ephemeral'}}],
-                   'messages': claude_messages(messages, image_data),
-                   'output_config': {'effort': self.effort(image_data),
-                                     'format': {'type': 'json_schema', 'schema': wire}},
-                   'betas': [FALLBACK_BETA], 'fallbacks': 'default'}
-        if schema_key in self.json_fallbacks:
-            self.json_mode(request, system, wire)
         import anthropic
-        try:
-            message = self.send(request, image_data, cancel)
-        except anthropic.BadRequestError as error:
-            if 'format' not in request['output_config'] or not schema_problem(error):
-                raise ProviderError('Claude rejected the request (HTTP 400). Nothing was done.') from None
-            # A schema Claude cannot compile: ask for the same JSON in the instructions instead.
-            self.json_fallbacks.add(schema_key)
-            self.json_mode(request, system, wire)
+        while True:
+            request = {'model': self.config.model, 'max_tokens': 16000,  # thinking shares this limit
+                       'system': [{'type': 'text', 'text': system, 'cache_control': {'type': 'ephemeral'}}],
+                       'messages': claude_messages(messages, image_data),
+                       'output_config': {'effort': self.effort(image_data),
+                                         'format': {'type': 'json_schema', 'schema': wire}}}
+            if self.use_fallback:
+                request.update(betas=[FALLBACK_BETA], fallbacks='default')
+            if schema_key in self.json_fallbacks:
+                self.json_mode(request, system, wire)
             try:
                 message = self.send(request, image_data, cancel)
-            except anthropic.BadRequestError:
-                raise ProviderError('Claude rejected the request (HTTP 400). Nothing was done.') from None
+                break
+            except anthropic.BadRequestError as error:
+                detail = error_detail(error)
+                print('A11y Claude request rejected:', detail, '| request id:', getattr(error, 'request_id', ''), file=sys.stderr, flush=True)
+                # Optional parts go one at a time, and the session remembers: first the refusal
+                # fallback (a beta), then the strict schema (the same JSON asked for in words).
+                if self.use_fallback:
+                    self.use_fallback = False
+                elif schema_key not in self.json_fallbacks:
+                    self.json_fallbacks.add(schema_key)
+                else:
+                    raise ProviderError('Claude rejected the request (HTTP 400: '+detail+'). Nothing was done.') from None
         result = self.parse(message)
         if unwrap:
             if not isinstance(result, dict) or 'result' not in result:
@@ -230,7 +236,8 @@ class ClaudeProvider(Planner):
         started = time.monotonic()
         timing('claude.start', started, image=bool(image_data), effort=request['output_config']['effort'])
         try:
-            with self.client().beta.messages.stream(**request) as stream:
+            messages_api = self.client().beta.messages if 'betas' in request else self.client().messages
+            with messages_api.stream(**request) as stream:
                 for _ in stream:
                     if cancel is not None and cancel.is_set():
                         raise RequestCancelled()
@@ -275,6 +282,9 @@ class ClaudeProvider(Planner):
             raise ProviderError('Claude did not return valid JSON. No actions were applied.') from None
 
 
-def schema_problem(error):
-    detail = str(getattr(error, 'message', '') or error).casefold()
-    return any(word in detail for word in ('schema', 'output_config', 'format', 'too complex'))
+def error_detail(error):
+    """Anthropic's own reason for a rejected request (it names the field at fault), shortened."""
+    body = getattr(error, 'body', None)
+    detail = body.get('error', {}).get('message', '') if isinstance(body, dict) and isinstance(body.get('error'), dict) else ''
+    detail = ' '.join(str(detail or getattr(error, 'message', '') or 'no reason given').split())
+    return detail[:220]

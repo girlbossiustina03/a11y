@@ -216,6 +216,11 @@ class NativeTests(unittest.TestCase):
             self.window.forget_claude()
             self.assertNotIsInstance(self.window.service.provider, ClaudeProvider)
             self.assertEqual(saved_ai_settings()['provider'], 'ollama')
+            # No background thread may outlive the window: on Windows a model scan started here
+            # was still connecting when the window closed, and Qt aborted the whole process.
+            self.qt.processEvents()
+            from PyQt6.QtCore import QThread
+            self.assertEqual([t for t in self.window.findChildren(QThread) if t.isRunning()], [])
 
     def test_local_screen_consent_never_covers_claude(self):
         from companion.claude import ClaudeProvider

@@ -2082,9 +2082,8 @@ class CompanionWindow(QMainWindow):
                 self.vision.set_enabled(False)
                 self.mascot.vision_button.setText('Screen off')
                 self.mascot.set_screen_vision_indicator(False)
-            self.service.provider = OllamaProvider()
+            self.service.provider = OllamaProvider()  # the saved local model choice
             save_ai_settings(provider='ollama')
-            QTimer.singleShot(0, self.scan_ollama)
         self.connection_status.setText('Claude key removed. Using the local model.')
         self.refresh()
 

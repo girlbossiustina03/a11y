@@ -149,25 +149,36 @@ class ClaudeTransport(unittest.TestCase):
             self.assertIn(expected, str(caught.exception))
             self.assertNotIn('secret', str(caught.exception))
 
-    def test_schema_rejection_falls_back_to_json_instructions_once(self):
-        self.fake.replies += [error(400, 'invalid_request_error', 'output_config.format.schema: too complex'),
+    def test_rejected_optional_parts_are_dropped_one_at_a_time_and_remembered(self):
+        # Reported live: "Claude rejected the request (HTTP 400)". The refusal fallback (a beta) and the
+        # strict schema are optional; without them the same request still gets the same JSON.
+        self.fake.replies += [error(400, 'invalid_request_error', 'fallbacks: not available for this model'),
+                              error(400, 'invalid_request_error', 'output_config.format.schema: too complex'),
                               (200, sse('{"message": "ok"}'))]
         schema = {'type': 'object', 'additionalProperties': False, 'required': ['message'],
                   'properties': {'message': {'type': 'string'}}}
         self.assertEqual(self.provider.complete('S', [{'role': 'user', 'content': 'x'}], response_schema=schema), {'message': 'ok'})
-        retry = self.fake.requests[1]['body']
-        self.assertNotIn('format', retry['output_config'])
-        self.assertIn('Return ONLY a JSON object', retry['system'][0]['text'])
-        # The schema is remembered: the next request goes straight to JSON instructions.
+        first, second, third = (request['body'] for request in self.fake.requests)
+        self.assertEqual(first['fallbacks'], 'default')
+        self.assertNotIn('fallbacks', second)
+        self.assertEqual(self.fake.requests[1]['path'], '/v1/messages')  # regular endpoint without the beta
+        self.assertIn('format', second['output_config'])
+        self.assertNotIn('format', third['output_config'])
+        self.assertIn('Return ONLY a JSON object', third['system'][0]['text'])
+        # Remembered: the next request goes straight to what worked.
         self.fake.replies.append((200, sse('{"message": "again"}')))
         self.provider.complete('S', [{'role': 'user', 'content': 'y'}], response_schema=schema)
-        self.assertNotIn('format', self.fake.requests[2]['body']['output_config'])
+        fourth = self.fake.requests[3]['body']
+        self.assertNotIn('fallbacks', fourth)
+        self.assertNotIn('format', fourth['output_config'])
 
-    def test_other_bad_requests_do_not_retry(self):
-        self.fake.replies.append(error(400, 'invalid_request_error', 'messages: something else'))
-        with self.assertRaisesRegex(ProviderError, 'HTTP 400'):
+    def test_a_request_rejected_every_way_shows_anthropics_reason(self):
+        for _ in range(3):
+            self.fake.replies.append(error(400, 'invalid_request_error', 'messages.0.content: text must be non-empty'))
+        with self.assertRaises(ProviderError) as caught:
             self.provider.complete('S', [{'role': 'user', 'content': 'x'}])
-        self.assertEqual(len(self.fake.requests), 1)
+        self.assertIn('HTTP 400: messages.0.content: text must be non-empty', str(caught.exception))
+        self.assertEqual(len(self.fake.requests), 3)
 
     def test_stop_closes_a_slow_answer(self):
         cancel = threading.Event()
