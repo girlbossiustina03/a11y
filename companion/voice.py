@@ -140,8 +140,15 @@ class Transcriber:
     def transcribe(self, audio, name, *, prompt=None):
         segments, _ = self.model(name).transcribe(audio, language='en', beam_size=1 if name == WAKE_MODEL else 5,
                                                   initial_prompt=prompt, condition_on_previous_text=False,
-                                                  vad_filter=name != WAKE_MODEL)
+                                                  vad_filter=name != WAKE_MODEL and vad_available())
         return ''.join(segment.text for segment in segments).strip()
+
+
+def vad_available():
+    """faster-whisper's speech filter needs onnxruntime, which the Windows app leaves out;
+    the Segmenter already cuts silence, so transcription works without it."""
+    import importlib.util
+    return importlib.util.find_spec('onnxruntime') is not None
 
 
 def voice_available():

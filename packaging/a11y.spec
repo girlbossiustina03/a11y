@@ -27,8 +27,14 @@ def wanted(name):
     if name.startswith('onnxruntime') and not RUNTIME_ONNX.match(name):
         return False
     return not TESTS.search(name)
+# onnxruntime crashes on import on Windows once Qt's older MSVC runtime is loaded, so the
+# Windows app leaves it (and the Kokoro voice built on it) out: speech output uses the
+# system voice and transcription runs without the optional speech filter.
+ONNX = ['kokoro_onnx', 'onnxruntime']
+if sys.platform == 'win32':
+    UNUSED_MODULES += ONNX
 # Optional voice stack: bundled when installed in the build environment.
-for package in ('faster_whisper', 'ctranslate2', 'kokoro_onnx', 'onnxruntime', 'espeakng_loader', 'sounddevice', 'tokenizers'):
+for package in ['faster_whisper', 'ctranslate2', 'espeakng_loader', 'sounddevice', 'tokenizers']+([] if sys.platform == 'win32' else ONNX):
     try:
         package_datas, package_binaries, package_imports = collect_all(package, filter_submodules=wanted)
     except Exception:
