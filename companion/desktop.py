@@ -1252,14 +1252,14 @@ class CompanionWindow(QMainWindow):
         self.pending_desktop_action = None
         self.clear_guidance()
         self.hide()
-        self.say(f'Computer task · step {len(task.receipts)+1} of {task.max_steps}\nObserving the screen…', [('Stop task', 'computer:stop')], compact=True)
+        self.say(f'Working on it · step {len(task.receipts)+1}\nObserving the screen…', [('Stop task', 'computer:stop')], compact=True)
         self.set_busy(True)
         area = self.mascot.screen().geometry()
         worker = TaskStepWorker(task, self.desktop_monitor, self.vision, self.service.provider,
                                 {'x': area.x(), 'y': area.y()}, self)
         self.worker = worker
         worker.progress.connect(lambda message: self.say(
-            f'Computer task · step {len(task.receipts)+1} of {task.max_steps}\n{message}',
+            f'Working on it · step {len(task.receipts)+1}\n{message}',
             [('Stop task', 'computer:stop')], compact=True)
             if self.computer_task is task and not task.cancelled.is_set() else None)
         worker.result.connect(lambda result: self.receive_computer_step(task, result))
