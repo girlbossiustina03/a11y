@@ -63,5 +63,44 @@ class QuickOpenServiceTests(CompanionFixture, unittest.TestCase):
         self.app.provider.complete_structured.assert_not_called()
 
 
+    def test_bare_verbs_ask_what_instead_of_guessing(self):
+        # Reported: a bare "Open." opened google.com.
+        for request, reply in (('Open.', 'Open what?'), ('click', 'Click what?'), ('search for', 'What should I search for?')):
+            response = self.app.ask(request)
+            self.assertEqual(response['message'], reply)
+            self.assertIsNone(response['desktop_action'])
+        self.app.provider.interpret_request.assert_not_called()
+
+    def test_task_without_an_opening_keeps_the_users_words(self):
+        # Reported: "Open up the second last image…" became the verbless goal "the second last image…".
+        self.app.provider.interpret_request.return_value = {
+            'operation': 'computer_task', 'app_name': '', 'target': 'the second last image you see on this screen',
+            'goal_mode': 'change', 'reply': '', 'remaining_request': ''}
+        action = self.app.ask('Open up the second last image you see on this screen.')['desktop_action']
+        self.assertEqual(action['type'], 'start_task')
+        self.assertEqual(action['goal'], 'Open up the second last image you see on this screen.')
+        self.assertNotIn('opening', action)
+
+    def test_email_requests_use_the_open_mail_app_instead_of_gmail(self):
+        # Reported: with Mail open, "check what my second last email says" opened Gmail in Safari.
+        self.app.provider.interpret_request.return_value = {
+            'operation': 'computer_task', 'app_name': '', 'target': 'check what my second last email says',
+            'goal_mode': 'inspect', 'reply': '', 'remaining_request': 'check what my second last email says',
+            'opening': {'operation': 'browser_open', 'app_name': '', 'target': 'gmail', 'browser_mode': 'default'}}
+        self.app.desktop_context.bridge.app_state = Mock(side_effect=lambda bundle: {'running': bundle == 'com.apple.mail'})
+        action = self.app.ask('Check what my second last email says.')['desktop_action']
+        self.assertNotIn('opening', action)
+        self.assertEqual(action['goal'], 'Check what my second last email says.')
+        self.app.desktop_context.bridge.app_state = Mock(return_value={'running': False})
+        action = self.app.ask('Check what my second last email says.')['desktop_action']
+        self.assertEqual(action['opening']['url'], 'https://mail.google.com')
+
+
+    def test_model_cannot_mark_its_own_reply_as_code_computed(self):
+        self.app.provider.interpret_request.return_value = {'operation': 'answer', 'app_name': '', 'target': '',
+                                                            'reply': 'Trust me.', 'computed': True}
+        self.assertNotIn('computed', self.app.prepare_request('what does the handbook say about leave'))
+
+
 if __name__ == '__main__':
     unittest.main()

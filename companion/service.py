@@ -92,6 +92,10 @@ For a concrete next step, provide one clear action and a target if it is reliabl
 visible. A highlight can move the companion beside it after the user's confirmation.
 """
 
+BARE_VERB = re.compile(r'^\W*(?:please\s+)?(open|launch|start|close|quit|click|search|play|find)(?:\s+(?:on|for|up))?\W*$', re.I)
+MAIL_SITES = re.compile(r'^https://(?:mail\.google\.com|outlook\.(?:office|live)\.com)', re.I)
+MAIL_CLIENTS = ('com.apple.mail', 'com.microsoft.Outlook', 'com.readdle.smartemail-Mac', 'com.microsoft.olk')
+
 SYSTEM = '''You are A11y, a practical, friendly desktop companion. Match the user's language.
 Write plain text only: no markdown, asterisks, headings or decorative dashes. Be precise
 and brief: usually one short sentence, at most two (under 30 words); use a short numbered
@@ -319,6 +323,16 @@ class Companion:
         label = ('Search '+app['name']+' for “'+target+'”') if searching else ('Open '+target+' in '+app['name'])
         return {'type': 'browse_url', 'bundle_id': app['bundle_id'], 'url': url, 'label': label, 'browser_mode': browser_mode}
 
+    def mail_app_running(self):
+        """True when a desktop mail client is open, so email requests work in it."""
+        for bundle_id in MAIL_CLIENTS:
+            try:
+                if self.desktop_context.app_state(bundle_id).get('running'):
+                    return True
+            except (ValueError, RuntimeError, AttributeError):
+                continue
+        return False
+
     def opening_action(self, opening):
         """The first, predictable step of a compound goal, built without a model call."""
         try:
@@ -345,7 +359,14 @@ class Companion:
         computed = computed or clock_answer(request)
         if computed:
             # "5 + 5?" is answered in code: no model call, no app, no computer task.
-            self.last_request_plan = {'operation': 'answer', 'app_name': '', 'target': '', 'reply': computed}
+            self.last_request_plan = {'operation': 'answer', 'app_name': '', 'target': '', 'reply': computed, 'computed': True}
+            return self.last_request_plan
+        bare = BARE_VERB.match(request)
+        if bare:
+            # "Open." / "Click." with nothing named: ask instead of letting a model guess a target.
+            verb = bare.group(1).casefold()
+            self.last_request_plan = {'operation': 'answer', 'app_name': '', 'target': '', 'computed': True,
+                                      'reply': {'search': 'What should I search for?', 'play': 'What should I play?'}.get(verb, verb.capitalize()+' what?')}
             return self.last_request_plan
         interpreter = getattr(self.provider, 'interpret_request', None)
         if interpreter is None or self.desktop_context is None:
@@ -379,6 +400,8 @@ class Companion:
             interpreted = interpreter(request, users[-2:], context=context)
         except TypeError:
             interpreted = interpreter(request, users[-2:])  # providers without direct replies
+        if isinstance(interpreted, dict):
+            interpreted.pop('computed', None)  # only code-computed answers may skip the document check
         self.last_request_plan = preserve_desktop_goal(interpreted, request)
         return self.last_request_plan
 
@@ -517,7 +540,7 @@ class Companion:
                 prebuilt = {'request_kind': 'answer', 'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None,
                             'message': found['extract']+'\n\nSource: Wikipedia — '+found['title']+' ('+found['url']+')'}
         if prebuilt is None and (request_plan and request_plan['operation'] == 'answer' and request_plan.get('reply', '').strip()
-                and not sources and not workflow and not image_data and mode in ('answer', 'assist')):
+                and (request_plan.get('computed') or not sources and not workflow) and not image_data and mode in ('answer', 'assist')):
             # Plain conversation was already answered by the routing call; company
             # questions (which retrieve sources) still use the full cited path.
             prebuilt = {'request_kind': 'answer', 'message': request_plan['reply'].strip(), 'source_ids': [],
@@ -538,8 +561,13 @@ class Companion:
                         opening = self.opening_action(candidate) if candidate else None
                         if opening:
                             break
+                if opening and opening.get('type') == 'browse_url' and MAIL_SITES.search(opening.get('url', '')) and self.mail_app_running():
+                    opening = None  # "my email" while Mail/Outlook is open means that app, not Gmail on the web
+                # Without an opening step the user's own words are the goal: the interpreter's
+                # target can drop the verb ("open up the second last image" → "the second last image").
+                goal = (request_plan['target'] or request) if opening else request
                 prebuilt = {'request_kind': 'answer', 'message': 'On it.', 'source_ids': [], 'workflow': None, 'target': None,
-                    'desktop_action': {'type': 'start_task', 'goal': request_plan['target'] or request,
+                    'desktop_action': {'type': 'start_task', 'goal': goal,
                                        **({'goal_mode': request_plan['goal_mode']} if request_plan.get('goal_mode') else {}),
                                        **({'opening': opening} if opening else {})}}
             elif operation == 'inspect_media':
