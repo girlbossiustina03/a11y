@@ -206,6 +206,19 @@ path. Logs emit `A11y timing` records without screen/prompt/model content.
 
 ## Code-first steps (from live macOS timings, Oct 23)
 
+Second live run (qwen3:4b-instruct + qwen3-vl:4b-instruct, M5 Pro): steps ~4.5–7 s,
+rechecks ~1 s thanks to 97% prompt-cache reuse. Remaining costs: ~3,500–5,700 text
+tokens per step at ~1.1 ms/token, plus ~1 s image encoding. Ollama starts Qwen-VL with
+`--image-min-tokens 1024`, so images under ~1M pixels are upscaled and cost the same.
+
+- `quick_open.py`: "open X [in <browser> window/tab] [and …]" is resolved in code —
+  one installed app, else a known web app/typed address, else a web search. Vague
+  targets ("the second email", "downloads folder"), ambiguous apps and playback
+  follow-ups go to the model as before.
+- `web_apps.py`: common web app addresses, used only when a browser/web is named.
+- Task observations are compact strings (`text|x,y` OCR centers,
+  `id|role|label|x,y,w,h` controls): about half the characters per step.
+
 Live logs (two Teams runs, qwen3-vl:8b-instruct) measured ~16 s per step: a text
 pass that produced no valid action on 19/19 steps (~5.5 s), an image pass (~10 s,
 ~6,800 prompt tokens) and 2.8 s model reloads after idle. Now:
@@ -217,7 +230,7 @@ pass that produced no valid action on 19/19 steps (~5.5 s), an image pass (~10 s
 - After `browse_url`/`launch_app` the loop recaptures every 0.6 s (≤4 times) until
   OCR text is stable instead of spending a model step on `wait`.
 - The text-only pass is opt-in (`A11Y_TEXT_PASS=1`); OCR text still goes in the
-  image-pass prompt. The model gets a 768-px image copy (`A11Y_MODEL_IMAGE_WIDTH`).
+  image-pass prompt. The model gets a 1280-px image copy (`A11Y_MODEL_IMAGE_WIDTH`); Ollama upscales smaller images to its 1024-token minimum, so going lower saves nothing there.
 - `move_geometry` requests naming an edge/corner/center move without a second call.
 - Text-only calls use `A11Y_AI_MODEL` and image calls `A11Y_VISION_MODEL`, so a
   small fast text model can handle routing/chat while the VL model does vision.

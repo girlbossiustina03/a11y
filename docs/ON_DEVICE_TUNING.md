@@ -37,7 +37,7 @@ export OLLAMA_KV_CACHE_TYPE=q8_0       # smaller KV cache (needs flash attention
 # A11y
 export A11Y_AI_MODEL=qwen3:4b-instruct
 export A11Y_VISION_MODEL=qwen3-vl:4b-instruct
-export A11Y_MODEL_IMAGE_WIDTH=768      # 512 is faster; raise if icons are missed
+export A11Y_MODEL_IMAGE_WIDTH=1280     # Ollama upscales smaller images to ~1024 tokens anyway
 export A11Y_OLLAMA_KEEP_ALIVE=30m
 ```
 
@@ -61,8 +61,8 @@ Goal: make computer-use tasks fast and reliable on THIS machine, measured, not g
    models and save the JSON. It never executes actions.
 3. Pull the candidate models in docs/ON_DEVICE_TUNING.md (verify each tag exists).
    For each text/vision pair, rerun the benchmark with A11Y_AI_MODEL and
-   A11Y_VISION_MODEL set, plus A11Y_MODEL_IMAGE_WIDTH 512/768/1024 for the vision
-   model. Record p50/p95 step time, model calls per step, prompt_eval_count,
+   A11Y_VISION_MODEL set, plus A11Y_MODEL_IMAGE_WIDTH 1280 vs 1440 for the vision
+   model (Ollama upscales anything smaller to ~1024 image tokens). Record p50/p95 step time, model calls per step, prompt_eval_count,
    prompt_eval_ms and eval_ms. Also try OLLAMA_FLASH_ATTENTION=1 and
    OLLAMA_KV_CACHE_TYPE=q8_0 on the Ollama server.
 4. With me watching, run these real tasks with each promising pair and record

@@ -270,6 +270,9 @@ class Companion:
         default = 'Safari' if any(app['bundle_id'] == 'com.apple.Safari' for app in catalog) else 'Microsoft Edge'
         matches = [app for app in resolve_app(app_name or default, catalog) if app['bundle_id'] in BROWSER_IDS]
         target = target.strip()
+        from .web_apps import WEB_APPS
+        if operation == 'browser_open' and target.casefold() in WEB_APPS:
+            target = WEB_APPS[target.casefold()]  # "teams" → its address, not https://teams
         # A complete domain is navigation even if intent called it search.
         is_address = bool(re.fullmatch(r'(?:https?://)?(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,63}(?::[0-9]+)?(?:[/?#][^\s]*)?', target))
         searching = operation == 'browser_search' and not is_address
@@ -291,8 +294,11 @@ class Companion:
                 if len(matches) == 1:
                     return self.desktop_context.authorize_action({'type': 'launch_app', 'bundle_id': matches[0]['bundle_id']})
                 return None
+            from .web_apps import WEB_APPS
             target = opening['target'].strip()
-            # Only a real address (with a dot) or a search; "teams" alone is left to the model.
+            target = WEB_APPS.get(target.casefold(), target)
+            # Only a real address (with a dot), a known web app or a search; other bare
+            # names are left to the model rather than guessed.
             if opening['operation'] == 'browser_open' and '.' not in target:
                 return None
             action = self.browser_action(opening['operation'], opening['app_name'], target, opening.get('browser_mode', 'default'))
@@ -304,6 +310,16 @@ class Companion:
         interpreter = getattr(self.provider, 'interpret_request', None)
         if interpreter is None or self.desktop_context is None:
             return None
+        from .quick_open import plan as quick_plan
+        try:
+            quick = quick_plan(request, self.desktop_context.installed_apps())
+        except (RuntimeError, ValueError, OSError):
+            quick = None
+        if quick is not None:
+            # "Open X": installed app first, then a known web app/address, then a
+            # web search. Resolved in code, so no model call is needed to route it.
+            self.last_request_plan = preserve_desktop_goal(quick, request)
+            return self.last_request_plan
         users = [item['content'][:500] for item in self.history(limit=4) if item['role'] == 'user']
         users.extend(item['content'][:500] for item in self.desktop_session if item['role'] == 'user')
         self.last_request_plan = preserve_desktop_goal(interpreter(request, users[-2:]), request)
@@ -411,7 +427,13 @@ class Companion:
         if request_plan:
             operation = request_plan['operation']
             if operation == 'computer_task':
-                opening = self.opening_action(request_plan['opening']) if request_plan.get('opening') and self.desktop_context else None
+                from .web_apps import web_opening
+                opening = None
+                if self.desktop_context:
+                    for candidate in (request_plan.get('opening'), web_opening(request)):
+                        opening = self.opening_action(candidate) if candidate else None
+                        if opening:
+                            break
                 prebuilt = {'request_kind': 'answer', 'message': 'Starting this goal using fresh screen observations.', 'source_ids': [], 'workflow': None, 'target': None,
                     'desktop_action': {'type': 'start_task', 'goal': request_plan['target'] or request,
                                        **({'goal_mode': request_plan['goal_mode']} if request_plan.get('goal_mode') else {}),

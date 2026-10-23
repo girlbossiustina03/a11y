@@ -233,14 +233,27 @@ class LiveTeamsLogTests(Harness):
             task.record({'type': 'press_control', 'label': '2', 'status': 'submitted'})
         self.assertEqual(task.repeats({'type': 'press_control', 'label': '2'}), 0)
 
-    def test_browser_is_not_launched_as_a_separate_step(self):
+    def test_launching_the_browser_for_a_known_web_app_becomes_the_navigation(self):
         safari = [{'name': 'Safari', 'bundle_id': 'com.apple.Safari'}]
         self.desktop.bridge.value['installed_apps'] = safari
         self.desktop.bridge.catalog = Mock(return_value=safari)
         task = ComputerTask('open teams in a new safari window and check tasks', automatic=True, goal_mode='inspect')
-        browse = {'status': 'action', 'message': 'Open Teams.', 'risk': 'navigation',
-                  'action': {'type': 'browse_url', 'bundle_id': 'com.apple.Safari', 'url': 'https://teams.microsoft.com/',
-                             'browser_mode': 'window', 'label': 'Open Teams'}}
+        self.provider.complete_structured.return_value = {'status': 'action', 'message': 'Launch Safari.', 'risk': 'navigation',
+                                                         'action': {'type': 'launch_app', 'bundle_id': 'Safari'}}
+        step = self.propose(task)
+        self.assertEqual((step['action']['type'], step['action']['url'], step['action']['browser_mode']),
+                         ('browse_url', 'https://teams.microsoft.com', 'window'))
+        self.assertFalse(step['review'])
+        self.assertEqual(self.provider.complete_structured.call_count, 1)
+
+    def test_browser_is_not_launched_as_a_separate_step_for_other_sites(self):
+        safari = [{'name': 'Safari', 'bundle_id': 'com.apple.Safari'}]
+        self.desktop.bridge.value['installed_apps'] = safari
+        self.desktop.bridge.catalog = Mock(return_value=safari)
+        task = ComputerTask('open the company portal in safari and check tasks', automatic=True, goal_mode='inspect')
+        browse = {'status': 'action', 'message': 'Open portal.', 'risk': 'navigation',
+                  'action': {'type': 'browse_url', 'bundle_id': 'com.apple.Safari', 'url': 'https://portal.example.com/',
+                             'browser_mode': 'default', 'label': 'Open portal'}}
         self.provider.complete_structured.side_effect = [
             {'status': 'action', 'message': 'Launch Safari.', 'risk': 'navigation', 'action': {'type': 'launch_app', 'bundle_id': 'Safari'}}, browse]
         step = self.propose(task)

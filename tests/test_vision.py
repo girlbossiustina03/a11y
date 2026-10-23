@@ -113,8 +113,8 @@ class ModelImageTests(unittest.TestCase):
         from companion.vision import ScreenVision
         scaled = ScreenVision.model_image(self.frame(1440, 900))
         image = QImage.fromData(base64.b64decode(scaled.split(',', 1)[1]))
-        self.assertEqual((image.width(), image.height()), (768, 480))
-        small = self.frame(700, 400)
+        self.assertEqual((image.width(), image.height()), (1280, 800))
+        small = self.frame(1200, 750)
         self.assertEqual(ScreenVision.model_image(small), small)
         with patch.dict('os.environ', {'A11Y_MODEL_IMAGE_WIDTH': '1440'}):
             original = self.frame(1440, 900)

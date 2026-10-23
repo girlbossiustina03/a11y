@@ -39,7 +39,7 @@ class RequestPlanningTests(CompanionFixture, unittest.TestCase):
         self.assertIn('Open Stremio', result['message'])
         provider.complete.assert_not_called()
         provider.complete_structured.assert_not_called()
-        self.assertEqual(provider.interpret_request.call_args.args[1], [])
+        provider.interpret_request.assert_not_called()  # "open X" is resolved in code
         receipt = ComputerUse(self.monitor).execute_confirmed(result['desktop_action'])
         self.assertTrue(receipt['application_state']['running'])
         self.assertFalse(self.monitor.enabled)
@@ -47,9 +47,11 @@ class RequestPlanningTests(CompanionFixture, unittest.TestCase):
 
     def test_unknown_app_never_falls_back_to_terminal(self):
         provider = self.app.provider = StagedProvider('launch_app', 'MissingApp')
+        self.bridge.catalog.return_value.append({'name': 'Safari', 'bundle_id': 'com.apple.Safari'})
         result = self.app.ask('open MissingApp')
-        self.assertIsNone(result['desktop_action'])
-        self.assertIn('exact application name', result['message'])
+        # Not installed: searched on the web, never a substitute local app.
+        self.assertEqual(result['desktop_action']['type'], 'browse_url')
+        self.assertEqual(result['desktop_action']['url'], 'https://duckduckgo.com/?q=MissingApp')
         provider.complete_structured.assert_not_called()
         self.bridge.application_action.assert_not_called()
 

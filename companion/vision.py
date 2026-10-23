@@ -94,18 +94,19 @@ class ScreenVision:
 
     @staticmethod
     def model_image(image_data):
-        """A narrower copy of a frame for the model only.
+        """A copy of a frame sized for the model only.
 
-        A live log measured ~2,100 prompt tokens (~4 s) for a 1440-px frame. Image
-        tokens scale with area, so 768 px is about a quarter of them. Screen text
-        reaches the model as OCR regions, so the image mainly carries layout and
-        icons. Click guards and OCR keep using the full frame; coordinates are
-        fractions, so they are unchanged. A11Y_MODEL_IMAGE_WIDTH (512-2048) tunes it."""
+        Ollama's Qwen-VL runner starts with --image-min-tokens 1024 and upscales any
+        smaller image to about 1M pixels, so shrinking further saves no tokens and
+        only blurs it (measured live: a 768-px copy still cost ~1,040 tokens).
+        1280x800 is at that minimum. Click guards and OCR keep the full frame;
+        coordinates are fractions, so they are unchanged. A11Y_MODEL_IMAGE_WIDTH
+        (512-2048) tunes it for other runtimes."""
         import base64
         try:
-            width = int(os.getenv('A11Y_MODEL_IMAGE_WIDTH', '768'))
+            width = int(os.getenv('A11Y_MODEL_IMAGE_WIDTH', '1280'))
         except ValueError:
-            width = 768
+            width = 1280
         width = max(512, min(width, 2048))
         try:
             from PyQt6.QtCore import QBuffer, QByteArray, QIODevice, Qt

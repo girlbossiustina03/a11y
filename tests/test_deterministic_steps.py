@@ -45,11 +45,25 @@ class OpeningServiceTests(CompanionFixture, unittest.TestCase):
                             'open calculator and sum 2+2')
         self.assertEqual(action['opening'], {'type': 'launch_app', 'bundle_id': 'com.apple.calculator', 'label': 'Open Calculator'})
 
-    def test_a_bare_name_is_not_turned_into_a_guessed_address(self):
-        action = self.start({'operation': 'browser_open', 'app_name': 'Safari', 'target': 'teams',
-                             'browser_mode': 'window', 'remaining_request': 'check tasks'}, 'open teams and check tasks')
+    def test_a_bare_unknown_name_is_searched_not_turned_into_a_guessed_address(self):
+        action = self.start({'operation': 'browser_open', 'app_name': 'Safari', 'target': 'intranet',
+                             'browser_mode': 'window', 'remaining_request': 'check tasks'}, 'open intranet in safari and check tasks')
         self.assertEqual(action['type'], 'start_task')
-        self.assertNotIn('opening', action)
+        self.assertEqual(action['opening']['url'], 'https://duckduckgo.com/?q=intranet')
+
+    def test_known_web_app_name_opens_its_address_even_when_the_model_gave_a_bare_name(self):
+        # Live: qwen3:4b returned target "teams" or skipped the opening entirely.
+        for plan in ({'operation': 'browser_open', 'app_name': 'Safari', 'target': 'teams', 'browser_mode': 'window',
+                      'remaining_request': 'check notifications'},
+                     {'operation': 'computer_task', 'app_name': '', 'target': 'x'}):
+            action = self.start(plan, 'open up teams in a new safari window YOURSELF, and see if there are any new notifications')
+            self.assertEqual(action['opening']['url'], 'https://teams.microsoft.com')
+            self.assertEqual(action['opening']['browser_mode'], 'window')
+
+    def test_without_a_browser_named_teams_means_the_installed_app(self):
+        self.bridge.catalog.return_value.append({'name': 'Microsoft Teams', 'bundle_id': 'com.microsoft.teams2'})
+        action = self.start({'operation': 'computer_task', 'app_name': '', 'target': 'x'}, 'open teams and check my tasks')
+        self.assertEqual(action['opening']['bundle_id'], 'com.microsoft.teams2')
 
     def test_left_of_the_screen_moves_without_a_second_model_call(self):
         action = self.start({'operation': 'move_geometry', 'app_name': '', 'target': 'left of the screen'}, 'move to the left of the screen')
@@ -130,6 +144,19 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(plan['operation'], 'computer_task')
         self.assertEqual(plan['opening'], {'operation': 'browser_open', 'app_name': 'Safari',
                                            'target': 'https://teams.microsoft.com', 'browser_mode': 'window'})
+
+
+class CompactObservationTests(unittest.TestCase):
+    def test_ocr_lines_and_controls_are_short_strings_with_click_ready_centers(self):
+        from companion.computer_task import compact_regions, compact_desktop
+        self.assertEqual(compact_regions([{'text': 'Activity', 'x': .02, 'y': .2, 'width': .06, 'height': .02}]), ['Activity|0.050,0.210'])
+        desktop = compact_desktop({'status': 'available', 'app': {'name': 'Safari', 'bundle_id': 'com.apple.Safari', 'pid': 3},
+            'window': {'title': 'Teams', 'bounds': {'x': 0, 'y': 0, 'width': 10, 'height': 10}},
+            'controls': [{'id': 'control-0', 'role': 'AXButton', 'label': 'Activity', 'enabled': True,
+                          'bounds': {'x': 10.4, 'y': 20, 'width': 30, 'height': 40}}],
+            'available_apps': [{'name': 'Safari', 'bundle_id': 'com.apple.Safari'}]})
+        self.assertEqual(desktop, {'status': 'available', 'app': 'Safari (com.apple.Safari)', 'window': 'Teams',
+                                   'controls': ['control-0|button|Activity|10,20,30,40'], 'running_apps': ['Safari=com.apple.Safari']})
 
 
 if __name__ == '__main__':

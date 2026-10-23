@@ -61,7 +61,7 @@ class BrowserServiceTests(CompanionFixture, unittest.TestCase):
     def test_open_website_has_no_screen_guidance_requirement(self):
         self.bridge.catalog.return_value.append({'name': 'Safari', 'bundle_id': 'com.apple.Safari'})
         self.app.provider = StagedProvider('browser_open', 'Safari', 'https://www.youtube.com')
-        self.assertEqual(self.app.ask('go to youtube.com in Safari')['desktop_action']['url'], 'https://www.youtube.com')
+        self.assertEqual(self.app.ask('go to youtube.com in Safari')['desktop_action']['url'], 'https://youtube.com')
 
     def test_native_automation_denial_and_timeout_are_reported_without_retry(self):
         import subprocess
