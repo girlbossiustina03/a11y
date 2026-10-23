@@ -364,8 +364,10 @@ class NativeTests(unittest.TestCase):
                     break
         history = self.window.transcript.toPlainText()[start:]
         recorded = [entry.strip() for entry in history.split('A11y: ')[1:]]
-        self.assertEqual(recorded, [message.strip() for message in shown])
-        self.assertTrue(any('Search is visible; opening it.' in message for message in shown))
+        # History keeps the answers; status lines are only shown while they are current.
+        from companion.desktop import progress_message
+        self.assertEqual(recorded, [message.strip() for message in shown if not progress_message(message)])
+        self.assertTrue(any(message == 'New Folder…' for message in shown))
         self.assertIn('Help results are listed.', shown[-1])
 
     def test_live_teams_request_opens_safari_window_before_any_model_step(self):

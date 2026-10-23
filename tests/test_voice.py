@@ -218,7 +218,7 @@ class VoiceConversationTests(unittest.TestCase):
         self.window.say('Sent: Open Teams. Checking the result…', [('Stop', 'computer:stop')])
         self.window.say('Pressing 5…', [('Stop', 'computer:stop')])
         self.assertEqual(self.tts.spoken, [])
-        self.window.say('On it: open the report', [('Stop', 'computer:stop')])
+        self.window.say('On it.', [('Stop', 'computer:stop')])
         self.assertIn('Say stop to stop the task.', self.tts.spoken[-1])
         self.assertNotIn('Say yes', self.tts.spoken[-1])
 

@@ -170,6 +170,27 @@ class OllamaDiscovery(QThread):
             self.failed.emit(str(e))
 
 
+PROGRESS = re.compile(r'^(Thinking…|On it\.|Step \d+ · .*|Sent: .*|.*…)$', re.S)
+FILLER = re.compile(r'^(?:(?:the )?goal (?:is )?(?:fully )?(?:achieved|met|complete)[.:,]?\s*|goal achieved[.:,]?\s*|success(?:fully)?[.:,]?\s*)', re.I)
+
+
+def progress_message(message):
+    """Transient status (shown, never added to History or read aloud)."""
+    return bool(PROGRESS.match(message.strip()))
+
+
+def brief(message, sentences=2, words=40):
+    """Keep replies short: the first sentences, at most `words` words, minus 'goal achieved' filler."""
+    text = FILLER.sub('', ' '.join(message.split()))
+    text = re.sub(r'\s*(?:The )?goal (?:is )?(?:fully )?(?:achieved|met)[^.]*\.?$', '', text, flags=re.I).strip() or text
+    parts = re.split(r'(?<=[.!?])\s+', text)
+    text = ' '.join(parts[:sentences])
+    tokens = text.split()
+    if len(tokens) > words:
+        text = ' '.join(tokens[:words]).rstrip(',;:')+'…'
+    return text[:1].upper()+text[1:] if text else message
+
+
 def label(value):
     widget = QLabel(value)
     widget.setTextFormat(Qt.TextFormat.PlainText)
@@ -721,7 +742,7 @@ class CompanionWindow(QMainWindow):
             else:
                 QTimer.singleShot(0, lambda: self.execute_desktop_action(proposal))
             return
-        self.mascot_home(response['message'], sources=response['sources'])
+        self.mascot_home(response['message'] if response['sources'] else brief(response['message'], 2, 45), sources=response['sources'])
         if self.pending_desktop_action and self.pending_desktop_action['type'] == 'move_companion':
             destination = self.pending_desktop_action['destination']
             self.pending_desktop_action = None
@@ -749,7 +770,29 @@ class CompanionWindow(QMainWindow):
         self.pointer.dismiss()
         self.capture_context = None
         self.mascot.set_state('idle')
-        self.mascot_home('I couldn’t complete that request.\n\n'+message)
+        if 'Accessibility permission' in message and sys.platform == 'darwin':
+            self.ask_for_accessibility()
+            self.mascot_home('I need Accessibility access to click. Turn on A11y in the settings I opened, then ask again.')
+            return
+        self.mascot_home('I couldn’t do that. '+message)
+
+    def ask_for_accessibility(self):
+        """macOS lets an app click only after the user turns it on in Privacy & Security →
+        Accessibility. Show the system prompt (which also adds A11y to that list) and the pane.
+        Each new unsigned build counts as a new app, so an older A11y entry there must be re-enabled."""
+        import subprocess
+        import threading
+        bridge = self.desktop_monitor.bridge
+        def request():
+            try:
+                bridge.request_access()
+            except Exception as error:  # the pane below still lets the user grant it
+                print('Accessibility request failed:', error, file=sys.stderr, flush=True)
+        threading.Thread(target=request, daemon=True).start()
+        try:
+            subprocess.Popen(['open', 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility'])
+        except OSError:
+            pass
 
     def show_companion_control(self, control_id):
         try:
@@ -1066,10 +1109,10 @@ class CompanionWindow(QMainWindow):
         if not self.voice_conversation or not self.tts or not message:
             return
         task_running = any(action == 'computer:stop' for _, action in choices)
-        if re.match(r'Step \d+ · ', message) or message.startswith('Sent: ') or (task_running and message.endswith('…') and not message.startswith('On it: ')):
+        if progress_message(message) and not (task_running and message == 'On it.'):
             return  # step-by-step progress is shown, not read aloud; the start and the result are spoken
         titles = [title for title, action in choices if title and action != 'computer:stop']
-        if task_running and message.startswith('On it: '):
+        if task_running and message == 'On it.':
             message += ' Say stop to stop the task.'
         if len(titles) == 1:
             message += ' Say yes to '+titles[0][0].lower()+titles[0][1:]+', or no to cancel.'
@@ -1490,7 +1533,7 @@ class CompanionWindow(QMainWindow):
             # The already-resolved first step (open the named app/site); see ComputerTask.take_opening.
             self.pending_desktop_action['opening'] = opening
         proposal = self.pending_desktop_action
-        self.say('On it: '+goal, [('Stop', 'computer:stop')], compact=True, state='thinking')
+        self.say('On it.', [('Stop', 'computer:stop')], compact=True, state='thinking')
         def begin():
             if self.pending_desktop_action is proposal:
                 self.start_computer_task(automatic=True)
@@ -1557,12 +1600,14 @@ class CompanionWindow(QMainWindow):
             return
         if step['status'] != 'action':
             task.stop(step['status'])
-            prefix = 'Looks done: ' if step['status'] == 'done' else 'Paused: '  # the model's reading of the screen, not a verified result
-            self.say(prefix+step['message'], compact=True)
+            # The model's reading of the screen, not a verified result; kept to the point.
+            prefix = 'Looks done. ' if step['status'] == 'done' else 'Paused. '
+            self.say(prefix+brief(step['message']), compact=True)
             if step['status'] == 'done':
                 self.mascot.character.hop(height=14.0)
             return
-        response = {'message': step['message'], 'sources': [], 'workflow': None, 'target': None,
+        label = step['action'].get('label') or 'Working'
+        response = {'message': label+'…', 'sources': [], 'workflow': None, 'target': None,
                     'desktop_action': step['action'], 'visual_capture': step['visual_capture'], 'task_step': True}
         self.received(response)
         if self.pending_desktop_action is None:
@@ -1863,6 +1908,8 @@ class CompanionWindow(QMainWindow):
             self.mascot_home('Connection settings are ready. What would you like to work on?')
 
     def record_companion_message(self, message):
+        if progress_message(message):
+            return  # status lines would bury the actual answers in History
         if getattr(self, '_last_companion_message', None) != message:
             self.transcript.appendPlainText('A11y: '+message+'\n')
             self._last_companion_message = message

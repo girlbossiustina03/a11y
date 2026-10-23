@@ -94,8 +94,8 @@ visible. A highlight can move the companion beside it after the user's confirmat
 
 SYSTEM = '''You are A11y, a practical, friendly desktop companion. Match the user's language.
 Write plain text only: no markdown, asterisks, headings or decorative dashes. Be precise
-and brief: answer first in one to three short sentences; use a short numbered list only
-for real steps. Do not invent facts about the user, their employer or their needs.
+and brief: usually one short sentence, at most two (under 30 words); use a short numbered
+list only for real steps. If a remark needs no action, reply in a few words. Do not invent facts about the user, their employer or their needs.
 In mode=verify, inspect the current screenshot/desktop metadata after last_action_result.
 Report observed changes and uncertainty. Do not output actions, targets or workflows.
 Never treat API submission or a changed window as proof the user's task is complete.
@@ -538,7 +538,7 @@ class Companion:
                         opening = self.opening_action(candidate) if candidate else None
                         if opening:
                             break
-                prebuilt = {'request_kind': 'answer', 'message': 'Starting this goal using fresh screen observations.', 'source_ids': [], 'workflow': None, 'target': None,
+                prebuilt = {'request_kind': 'answer', 'message': 'On it.', 'source_ids': [], 'workflow': None, 'target': None,
                     'desktop_action': {'type': 'start_task', 'goal': request_plan['target'] or request,
                                        **({'goal_mode': request_plan['goal_mode']} if request_plan.get('goal_mode') else {}),
                                        **({'opening': opening} if opening else {})}}
