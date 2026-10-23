@@ -752,7 +752,10 @@ class CompanionWindow(QMainWindow):
             else:
                 QTimer.singleShot(0, lambda: self.execute_desktop_action(proposal))
             return
-        self.mascot_home(response['message'] if response['sources'] else brief(response['message'], 2, 45), sources=response['sources'])
+        full = response['sources'] or response.get('full_text')  # cited answers and emails are shown whole
+        self.mascot_home(response['message'] if full else brief(response['message'], 2, 45), sources=response['sources'])
+        if response.get('read_aloud') and self.tts and not self.voice_conversation:
+            self.speak_now(speakable(response['message']))  # "read out my last email" (in a voice chat it is spoken anyway)
         if self.pending_desktop_action and self.pending_desktop_action['type'] == 'move_companion':
             destination = self.pending_desktop_action['destination']
             self.pending_desktop_action = None

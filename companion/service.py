@@ -1,6 +1,7 @@
 """Shared application boundary. Only validated plans can become workflows."""
 import json
 import re
+import subprocess
 from collections import deque
 import os
 from pathlib import Path
@@ -92,6 +93,7 @@ For a concrete next step, provide one clear action and a target if it is reliabl
 visible. A highlight can move the companion beside it after the user's confirmation.
 """
 
+READ_ALOUD = re.compile(r'\bread\b(?:\s+\w+){0,2}?\s+(?:out|aloud)\b|\bread (?:it |them )?(?:to me|me)\b|\bread out\b', re.I)
 NEVER_MIND = re.compile(r'^\W*(?:(?:no|nope|nah|cancel|stop|never ?mind|forget it|not that)\b\W*)+$', re.I)
 BARE_VERB = re.compile(r'^\W*(?:please\s+)?(open|launch|start|close|quit|click|search|play|find)(?:\s+(?:on|for|up))?\W*$', re.I)
 MAIL_SITES = re.compile(r'^https://(?:mail\.google\.com|outlook\.(?:office|live)\.com)', re.I)
@@ -366,6 +368,17 @@ class Companion:
             # "No, no, no." / "cancel": drop whatever was proposed, no model call.
             self.last_request_plan = {'operation': 'answer', 'app_name': '', 'target': '', 'reply': 'Okay.', 'computed': True}
             return self.last_request_plan
+        from . import mail_reader
+        nth = mail_reader.position(request) if mail_reader.available() else None
+        if nth:
+            # Read in code from Mail itself (exact message, exact text); see mail_reader.
+            try:
+                reply = mail_reader.describe(nth, mail_reader.newest(nth))
+            except (PermissionError, RuntimeError, OSError, subprocess.SubprocessError) as error:
+                reply = str(error) if isinstance(error, (PermissionError, RuntimeError)) else 'Mail did not answer. Open Mail once, then ask again.'
+            self.last_request_plan = {'operation': 'answer', 'app_name': '', 'target': '', 'reply': reply, 'computed': True,
+                                      'full_text': True, 'read_aloud': bool(READ_ALOUD.search(request))}
+            return self.last_request_plan
         bare = BARE_VERB.match(request)
         if bare:
             # "Open." / "Click." with nothing named: ask instead of letting a model guess a target.
@@ -406,7 +419,8 @@ class Companion:
         except TypeError:
             interpreted = interpreter(request, users[-2:])  # providers without direct replies
         if isinstance(interpreted, dict):
-            interpreted.pop('computed', None)  # only code-computed answers may skip the document check
+            for key in ('computed', 'full_text', 'read_aloud'):  # set only by code-computed answers
+                interpreted.pop(key, None)
         self.last_request_plan = preserve_desktop_goal(interpreted, request)
         return self.last_request_plan
 
@@ -698,7 +712,9 @@ class Companion:
                 if mode == 'verify' and (response.get('desktop_action') or response.get('target') or response.get('workflow')):
                     raise ValidationError('Verification may report observations or ask a clarification, but must not propose another action.')
                 if image_data and (response.get('desktop_action') or {}).get('type') == 'request_screen':
-                    raise ValidationError('A current image is already supplied; inspect it or ask a clarification.')
+                    # The screenshot is already attached: keep the answer, drop the redundant request
+                    # (this used to fail the whole reply with an error the user could do nothing about).
+                    response['desktop_action'] = None
                 break
             except ValidationError as error:
                 if attempt:
@@ -727,15 +743,20 @@ class Companion:
         saved_workflow = None
         if response['workflow']:
             saved_workflow = self.store.create_workflow(self.identity, response['workflow'], preferences, citations)
-        # Images and screen-derived answers are ephemeral, never stored in conversation history.
-        if not image_data and not desktop.get('enabled'):
+        full_text = bool(request_plan and request_plan.get('full_text'))
+        # Images, screen-derived answers and email contents are ephemeral, never stored in
+        # conversation history (an email read aloud stays out of the database).
+        if not image_data and not desktop.get('enabled') and not full_text:
             self.store.add_exchange(self.identity, request, response['message'],
                                     source_documents={s['document_id'] for s in sources})
             self.adaptation.observe(self.identity, request)
-        elif image_data or (desktop.get('enabled') and self.desktop_context.enabled
-              and desktop_generation == self.desktop_context.generation):
+        elif not full_text and (image_data or (desktop.get('enabled') and self.desktop_context.enabled
+              and desktop_generation == self.desktop_context.generation)):
             documents = [s['document_id'] for s in sources]
             for role, content in [('user', request), ('assistant', response['message'])]:
                 self.desktop_session.append({'role': role, 'content': content[:1800], 'source_documents': documents})
-        return {'desktop_action': response.get('desktop_action'), 'message': response['message'], 'sources': citations, 'workflow': saved_workflow,
-                'target': response['target'], 'effective': preferences}
+        result = {'desktop_action': response.get('desktop_action'), 'message': response['message'], 'sources': citations, 'workflow': saved_workflow,
+                  'target': response['target'], 'effective': preferences}
+        if full_text:
+            result.update(full_text=True, read_aloud=bool(request_plan.get('read_aloud')))
+        return result

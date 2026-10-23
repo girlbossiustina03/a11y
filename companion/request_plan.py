@@ -110,7 +110,7 @@ def with_opening(plan, request):
 
 
 def validate_plan(value):
-    if not isinstance(value, dict) or not {'operation', 'app_name', 'target'} <= set(value) or set(value) - {'operation', 'app_name', 'target', 'browser_mode', 'remaining_request', 'media_artist', 'goal_mode', 'opening', 'reply', 'computed'}:
+    if not isinstance(value, dict) or not {'operation', 'app_name', 'target'} <= set(value) or set(value) - {'operation', 'app_name', 'target', 'browser_mode', 'remaining_request', 'media_artist', 'goal_mode', 'opening', 'reply', 'computed', 'full_text', 'read_aloud'}:
         raise ValidationError('The request could not be interpreted reliably. Please name the action and target.')
     if value['operation'] not in OPERATIONS or any(not isinstance(value[key], str) or len(value[key]) > (2000 if key == 'target' else 500) for key in ('app_name', 'target')):
         raise ValidationError('The request planner returned an invalid operation.')
