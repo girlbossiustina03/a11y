@@ -67,4 +67,8 @@ def main():
 
 
 if __name__ == '__main__':
+    # Packaged apps re-launch themselves for multiprocessing helpers (joblib's resource
+    # tracker); this runs the helper and exits before A11y parses its own arguments.
+    import multiprocessing
+    multiprocessing.freeze_support()
     sys.exit(main())

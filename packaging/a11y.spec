@@ -60,7 +60,7 @@ if sys.platform == 'win32':
                       'winrt.windows.storage.streams', 'winrt.windows.foundation']
 
 analysis = Analysis([str(ROOT/'a11y_desktop.py')], pathex=[str(ROOT)], binaries=binaries, datas=datas,
-                    hiddenimports=hiddenimports, excludes=['tkinter', 'unittest', 'pydoc']+UNUSED_MODULES, noarchive=False)
+                    hiddenimports=hiddenimports, excludes=['tkinter']+UNUSED_MODULES, noarchive=False)
 pyz = PYZ(analysis.pure)
 exe = EXE(pyz, analysis.scripts, [], exclude_binaries=True, name='A11y', console=False,
           icon=str(ICONS/('A11y.ico' if sys.platform == 'win32' else 'A11y.icns')),
