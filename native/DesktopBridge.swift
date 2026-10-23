@@ -197,6 +197,18 @@ if let index = args.firstIndex(of: "--input"), index+1 < args.count {
     } else { emit(["error": "Unsupported input operation."]); exit(1) }
     emit(["submitted": true, "verification_required": true]); exit(0)
 }
+// The app whose normal window is frontmost at a point, ignoring A11y's own windows.
+func windowOwner(at point: CGPoint) -> pid_t? {
+    guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
+    for info in list {
+        guard (info[kCGWindowLayer as String] as? Int) == 0,
+              let pid = info[kCGWindowOwnerPID as String] as? pid_t, pid != ownPID,
+              let frame = info[kCGWindowBounds as String] as? NSDictionary,
+              let rect = CGRect(dictionaryRepresentation: frame as CFDictionary), rect.contains(point) else { continue }
+        return pid
+    }
+    return nil
+}
 if let index = args.firstIndex(of: "--click"), index+4 < args.count {
     guard AXIsProcessTrusted(), let x = Double(args[index+1]), let y = Double(args[index+2]),
           x.isFinite, y.isFinite, let displayID = UInt32(args[index+3]), CGDisplayIsActive(displayID) != 0,
@@ -209,24 +221,44 @@ if let index = args.firstIndex(of: "--click"), index+4 < args.count {
     guard ["left", "right"].contains(buttonName), [1, 2].contains(count), buttonName != "right" || count == 1 else {
         emit(["error": "Unsupported mouse click."]); exit(1)
     }
+    let point = CGPoint(x: x, y: y)
+    let actual = CGDisplayBounds(displayID)
+    guard actual.contains(point), expected["x"] == actual.origin.x,
+          expected["y"] == actual.origin.y, expected["width"] == actual.width, expected["height"] == actual.height else {
+        emit(["error": "The display changed. No click was sent."]); exit(1)
+    }
+    // A click on a window of an app that is not active is often swallowed: the app only comes
+    // forward (web pages, Teams and other Electron apps). Bring the target's app forward first.
+    var activated = false
+    if let pid = windowOwner(at: point), let target = NSRunningApplication(processIdentifier: pid), !target.isActive {
+        target.activate(options: [.activateIgnoringOtherApps])
+        let deadline = Date().addingTimeInterval(1.0)
+        while !target.isActive && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.03)) }
+        RunLoop.current.run(until: Date().addingTimeInterval(0.15))
+        activated = target.isActive
+    }
+    // A real left (or right) click: move there, press, hold briefly, release, as a mouse does.
+    let source = CGEventSource(stateID: .hidSystemState)
     let button: CGMouseButton = buttonName == "left" ? .left : .right
     let downType: CGEventType = buttonName == "left" ? .leftMouseDown : .rightMouseDown
     let upType: CGEventType = buttonName == "left" ? .leftMouseUp : .rightMouseUp
-    let actual = CGDisplayBounds(displayID)
-    guard actual.contains(CGPoint(x: x, y: y)), expected["x"] == actual.origin.x,
-          expected["y"] == actual.origin.y, expected["width"] == actual.width, expected["height"] == actual.height,
-          let down = CGEvent(mouseEventSource: nil, mouseType: downType, mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: button),
-          let up = CGEvent(mouseEventSource: nil, mouseType: upType, mouseCursorPosition: CGPoint(x: x, y: y), mouseButton: button) else {
-        emit(["error": "The display changed. No click was sent."]); exit(1)
+    guard let move = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: button),
+          let down = CGEvent(mouseEventSource: source, mouseType: downType, mouseCursorPosition: point, mouseButton: button),
+          let up = CGEvent(mouseEventSource: source, mouseType: upType, mouseCursorPosition: point, mouseButton: button) else {
+        emit(["error": "The mouse events could not be created. No click was sent."]); exit(1)
     }
+    move.post(tap: .cghidEventTap)
+    RunLoop.current.run(until: Date().addingTimeInterval(0.06))
     for click in 1...count {
         down.setIntegerValueField(.mouseEventClickState, value: Int64(click))
         up.setIntegerValueField(.mouseEventClickState, value: Int64(click))
         down.post(tap: .cghidEventTap)
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         up.post(tap: .cghidEventTap)
-        if click < count { RunLoop.current.run(until: Date().addingTimeInterval(0.06)) }
+        if click < count { RunLoop.current.run(until: Date().addingTimeInterval(0.08)) }
     }
-    emit(["submitted": true, "verification_required": true]); exit(0)
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))  // let the events reach the app before exiting
+    emit(["submitted": true, "verification_required": true, "activated_target_app": activated]); exit(0)
 }
 if let index = args.firstIndex(of: "--activate"), index+1 < args.count {
     let bundle = args[index+1]
