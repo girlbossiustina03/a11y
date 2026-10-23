@@ -15,15 +15,22 @@ for name in ('desktop-bridge', 'screen-bridge'):
     if (helpers/name).exists():
         binaries.append((str(helpers/name), 'native/bin'))
 hiddenimports = []
-# Model-conversion and test tooling A11y never runs at runtime. Importing onnxruntime.quantization
-# during the build crashes PyInstaller's isolated child on Windows, so it is left out entirely.
+# Of onnxruntime, A11y runs only the inference core. Its other subpackages (datasets,
+# quantization, transformers, tools...) crash PyInstaller's import check on Windows,
+# so only the runtime parts are bundled. Test packages are skipped everywhere.
 import re
-UNUSED = re.compile(r'^onnxruntime\.(quantization|transformers|tools)(\.|$)|(^|\.)tests?(\.|$)')
-UNUSED_MODULES = ['onnxruntime.quantization', 'onnxruntime.transformers', 'onnxruntime.tools']
+RUNTIME_ONNX = re.compile(r'^onnxruntime(\.(capi|backend|experimental)(\.|$)|$)')
+TESTS = re.compile(r'(^|\.)tests?(\.|$)')
+UNUSED_MODULES = ['onnxruntime.datasets', 'onnxruntime.quantization', 'onnxruntime.transformers', 'onnxruntime.tools']
+
+def wanted(name):
+    if name.startswith('onnxruntime') and not RUNTIME_ONNX.match(name):
+        return False
+    return not TESTS.search(name)
 # Optional voice stack: bundled when installed in the build environment.
 for package in ('faster_whisper', 'ctranslate2', 'kokoro_onnx', 'onnxruntime', 'espeakng_loader', 'sounddevice', 'tokenizers'):
     try:
-        package_datas, package_binaries, package_imports = collect_all(package, filter_submodules=lambda name: not UNUSED.search(name))
+        package_datas, package_binaries, package_imports = collect_all(package, filter_submodules=wanted)
     except Exception:
         continue
     datas += package_datas
