@@ -101,8 +101,8 @@ class InstallerTests(unittest.TestCase):
 class PathTests(unittest.TestCase):
     def test_packaged_app_uses_the_platform_data_folder(self):
         with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(paths, 'frozen', return_value=True), \
-                mock.patch.object(paths.sys, 'platform', 'darwin'):
-            self.assertEqual(paths.data_dir(), Path.home()/'Library'/'Application Support'/'A11y')
+                mock.patch.object(paths.sys, 'platform', 'darwin'), mock.patch.object(paths.Path, 'home', return_value=Path('/Users/u')):
+            self.assertEqual(paths.data_dir(), Path('/Users/u')/'Library'/'Application Support'/'A11y')
         with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(paths, 'frozen', return_value=False):
             self.assertEqual(paths.data_dir(), Path('.data'))
         with mock.patch.dict(os.environ, {'A11Y_DATA_DIR': '/x'}):

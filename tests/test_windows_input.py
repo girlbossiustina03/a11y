@@ -3,6 +3,7 @@
 Win32, SendInput and UIA are doubled: these run on any OS and check what the
 bridge decides to send. They do not prove behavior on a real Windows desktop."""
 import struct
+import sys
 import unittest
 from unittest import mock
 from companion.desktop_context import DesktopContext
@@ -260,7 +261,8 @@ class OcrTests(unittest.TestCase):
 
     def test_missing_winrt_reports_unavailable_instead_of_guessing(self):
         from companion.windows_ocr import recognize
-        self.assertIsNone(recognize(b'\x00'*16, 2, 2))
+        with mock.patch.dict(sys.modules, {'winrt.windows.graphics.imaging': None}):
+            self.assertIsNone(recognize(b'\x00'*16, 2, 2))
 
 
 class PlatformToolTests(unittest.TestCase):

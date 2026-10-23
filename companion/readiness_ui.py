@@ -1,17 +1,22 @@
 """'Get A11y ready' window: installs Ollama and the local models after an explicit choice."""
 import threading
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import QDialog, QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout
 from . import installer
 from .theme import PANEL_STYLE
 
 
-class StatusWorker(QThread):
+class StatusWorker(QObject):
+    """Checks Ollama and the models on a daemon thread, so closing a window or quitting
+    never has to wait for (or abort on) a slow local HTTP check."""
     result = pyqtSignal(object)
 
     def __init__(self, models=None, parent=None):
         super().__init__(parent)
         self.models = models
+
+    def start(self):
+        threading.Thread(target=self.run, daemon=True).start()
 
     def run(self):
         value = installer.status()
@@ -21,7 +26,10 @@ class StatusWorker(QThread):
                          text_ready=installer.has_model(self.models[0], present),
                          vision_ready=installer.has_model(self.models[1], present))
         value['ready'] = value['ollama_running'] and value['text_ready'] and value['vision_ready']
-        self.result.emit(value)
+        try:
+            self.result.emit(value)
+        except RuntimeError:  # the window was closed while checking
+            pass
 
 
 class SetupWorker(QThread):

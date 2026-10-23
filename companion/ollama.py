@@ -147,6 +147,12 @@ class OllamaProvider:
                             sock.shutdown(socket.SHUT_RDWR)
                         except OSError:
                             pass
+                        # Winsock does not wake a blocked recv on shutdown; closing the handle does.
+                        # detach() first so the socket object never closes the handle a second time.
+                        try:
+                            socket.close(sock.detach())
+                        except OSError:
+                            pass
                     return
         watcher = threading.Thread(target=watch, daemon=True) if cancel is not None else None
         content, result, size = [], {}, 0
