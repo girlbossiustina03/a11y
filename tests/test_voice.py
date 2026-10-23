@@ -169,7 +169,7 @@ class VoiceConversationTests(unittest.TestCase):
     def test_wake_then_request_uses_text_path_and_listens_again(self):
         self.window.voice_woke('')
         self.assertTrue(self.window.voice_conversation)
-        self.assertEqual(self.tts.spoken[-1], 'Yes? I’m listening.')
+        self.assertEqual(self.tts.spoken[-1], 'Yes?')
         self.assertEqual(self.voice.calls[-1], 'listen')
         self.window.voice_heard('How do I start onboarding?')
         self.wait_for_worker()
@@ -360,3 +360,51 @@ class NaturalVoiceDownloadTests(unittest.TestCase):
             self.assertEqual(sorted(fetched), sorted([neural_voice.MODEL_FILE, neural_voice.VOICES_FILE]))
             self.assertTrue(neural_voice.neural_voice_available(directory) or not importlib.util.find_spec('kokoro_onnx'))
             self.assertEqual(sorted(p.name for p in folder.iterdir()), sorted([neural_voice.MODEL_FILE, neural_voice.VOICES_FILE]))
+
+
+class HearingTests(unittest.TestCase):
+    """Reported: it heard things nobody said, woke on other speech and cut the user off."""
+    def segment(self, text, no_speech=0.0, logprob=-0.2):
+        from types import SimpleNamespace
+        return SimpleNamespace(text=text, no_speech_prob=no_speech, avg_logprob=logprob)
+
+    def test_noise_turned_into_words_is_dropped(self):
+        from companion.voice import heard_text
+        self.assertEqual(heard_text([self.segment(' Open Teams.')]), 'Open Teams.')
+        self.assertEqual(heard_text([self.segment(" I didn't have this case for too long, man.", no_speech=0.8, logprob=-0.9)]), '')
+        self.assertEqual(heard_text([self.segment(' Thank you.')]), '')
+        self.assertEqual(heard_text([self.segment(' something', logprob=-1.5)]), '')
+
+    def test_hello_and_other_greetings_do_not_wake(self):
+        self.assertIsNone(wake_split('Hello Ellie, how are you'))
+        self.assertEqual(wake_split('Hey Ally open Teams'), 'open Teams')
+
+    @unittest.skipUnless(importlib.util.find_spec('PyQt6') and importlib.util.find_spec('numpy'), 'PyQt6 or numpy missing')
+    def test_wake_needs_the_accurate_model_to_agree(self):
+        from PyQt6.QtWidgets import QApplication
+        from companion.voice import VoiceListener, SPEECH_MODEL
+        QApplication.instance() or QApplication([])
+        heard = {'tiny.en': 'Hey Ally', SPEECH_MODEL: 'Hey, I lost it.'}
+        class Fake:
+            def transcribe(self, audio, name, prompt=None):
+                return heard[name]
+        listener = VoiceListener(transcriber=Fake())
+        woke = []
+        listener.woke.connect(woke.append)
+        listener._transcribe(None, 'wake', listener.generation)
+        self.assertEqual(woke, [])
+        heard[SPEECH_MODEL] = 'Hey Ally, open Teams.'
+        listener._transcribe(None, 'wake', listener.generation)
+        self.assertEqual(woke, ['open Teams'])
+
+    @unittest.skipUnless(importlib.util.find_spec('PyQt6') and importlib.util.find_spec('numpy'), 'PyQt6 or numpy missing')
+    def test_a_one_second_pause_does_not_end_the_turn_and_app_names_guide_recognition(self):
+        from PyQt6.QtWidgets import QApplication
+        from companion.voice import VoiceListener
+        QApplication.instance() or QApplication([])
+        listener = VoiceListener(transcriber=object())
+        listener.source = object()
+        listener.listen()
+        self.assertGreaterEqual(listener.segmenter.end_frames*FRAME/SAMPLE_RATE, 1.5)
+        listener.vocabulary = ['Microsoft Teams', 'Mail']
+        self.assertIn('Microsoft Teams', listener.prompt())

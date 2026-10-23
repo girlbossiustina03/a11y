@@ -1076,6 +1076,21 @@ class CompanionWindow(QMainWindow):
         self.mascot.voice_on = True
         self.voice.start()
         self.fetch_natural_voice()
+        self.load_voice_vocabulary()
+
+    def load_voice_vocabulary(self):
+        """Give speech recognition the app and site names the user is likely to say."""
+        import threading
+        from .web_apps import WEB_APPS
+        voice, monitor = self.voice, self.desktop_monitor
+        def work():
+            try:
+                apps = [app.get('name', '') for app in monitor.installed_apps() if isinstance(app, dict)]
+            except Exception:
+                apps = []
+            names = list(dict.fromkeys(name for name in apps+[name.title() for name in WEB_APPS] if name and len(name) < 40))
+            voice.vocabulary = names
+        threading.Thread(target=work, daemon=True).start()
 
     def stop_voice(self):
         self.voice_conversation = False
@@ -1144,7 +1159,7 @@ class CompanionWindow(QMainWindow):
         if request:
             self.voice_heard(request)
         else:
-            self.speak_now('Yes? I’m listening.')
+            self.speak_now('Yes?')
 
     def voice_heard(self, text):
         text = text.strip()
@@ -1181,7 +1196,7 @@ class CompanionWindow(QMainWindow):
     def voice_timeout(self):
         self.voice_conversation = False
         self.mascot.footer.setText('Say “Hey Ally” to talk again.')
-        self.speak_now('I’ll be here. Say Hey Ally when you need me.')
+        self.voice_resume()  # back to waiting for the wake phrase, quietly
 
     def stop_speech(self):
         if self.tts:
@@ -1603,6 +1618,9 @@ class CompanionWindow(QMainWindow):
             # The model's reading of the screen, not a verified result; kept to the point.
             prefix = 'Looks done. ' if step['status'] == 'done' else 'Paused. '
             self.say(prefix+brief(step['message']), compact=True)
+            # A finished task ends the spoken exchange: after the result is read, A11y waits
+            # for "Hey Ally" again instead of keeping the conversation open.
+            self.voice_conversation = False
             if step['status'] == 'done':
                 self.mascot.character.hop(height=14.0)
             return

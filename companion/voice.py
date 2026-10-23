@@ -16,10 +16,13 @@ from . import paths
 SAMPLE_RATE = 16000
 FRAME = 480                      # 30 ms
 WAKE_MODEL, SPEECH_MODEL = 'tiny.en', 'small.en'
-CONVERSATION_TIMEOUT = 30        # seconds without speech before waiting for "Hey Ally" again
+CONVERSATION_TIMEOUT = 8         # seconds without speech before waiting for "Hey Ally" again
+# Whisper invents fluent text from noise; these are its usual inventions, never real requests.
+HALLUCINATIONS = re.compile(r'^\W*(?:thank you|thanks|thanks for watching|thank you for watching|you|bye|'
+                            r'please subscribe|subscribe|so|okay|uh+|um+|hmm+)\W*$', re.IGNORECASE)
 
 _NAME = r'(?:ally|allie|alley|ali|alli|aly|ally\'s|alle|ellie|elly|allee|a11y)'
-_WAKE = re.compile(r'^\W*(?:(?:hey|hi|hay|okay|ok|hello)\W+)' + _NAME + r'\b\W*(.*)$', re.IGNORECASE | re.DOTALL)
+_WAKE = re.compile(r'^\W*(?:(?:hey|hi|hay|okay|ok)\W+)' + _NAME + r'\b\W*(.*)$', re.IGNORECASE | re.DOTALL)
 _FAREWELL = re.compile(r'^\W*(?:(?:ok(?:ay)?|thanks?|thank you)\W+)*(?:good ?bye|bye(?: bye)?|bye ally|stop listening|'
                        r'that\'?s all|that is all|go to sleep|we\'?re done|i\'?m done)\b', re.IGNORECASE)
 _YES = re.compile(r'^\W*(?:yes|yeah|yep|yup|sure|ok(?:ay)?|confirm(?:ed)?|do it|go ahead|please do|correct|right)\b'
@@ -141,7 +144,18 @@ class Transcriber:
         segments, _ = self.model(name).transcribe(audio, language='en', beam_size=1 if name == WAKE_MODEL else 5,
                                                   initial_prompt=prompt, condition_on_previous_text=False,
                                                   vad_filter=name != WAKE_MODEL and vad_available())
-        return ''.join(segment.text for segment in segments).strip()
+        return heard_text(segments)
+
+
+def heard_text(segments):
+    """Join what Whisper is confident was speech. Segments it marks as probably not speech,
+    or decodes with very low confidence, are noise it turned into words; so is a lone
+    'Thank you.' and the like."""
+    kept = [segment.text for segment in segments
+            if not (getattr(segment, 'no_speech_prob', 0) > 0.6 and getattr(segment, 'avg_logprob', 0) < -0.7)
+            and getattr(segment, 'avg_logprob', 0) > -1.2]
+    text = ''.join(kept).strip()
+    return '' if HALLUCINATIONS.match(text) else text
 
 
 def vad_available():
@@ -187,6 +201,7 @@ class VoiceListener(QObject):
         self.generation = 0
         self.source = self.device = None
         self.heard_signal = False
+        self.vocabulary = []
         self.last_speech = time.monotonic()
         self.idle_timer = QTimer(self)
         self.idle_timer.timeout.connect(self.check_idle)
@@ -296,15 +311,23 @@ class VoiceListener(QObject):
         if self.source is None:
             return
         self.mode, self.capturing = 'wake', True
-        self.segmenter = Segmenter(end_silence=0.6, max_seconds=12)
+        self.segmenter = Segmenter(end_silence=1.2, max_seconds=15)
         self.status.emit('Say “Hey Ally” to talk to me.')
+
+    def prompt(self, lead=''):
+        """Whisper prompt with the names the user is likely to say (installed apps, sites), so
+        'Teams' is not heard as 'things'."""
+        names = ', '.join(self.vocabulary[:60])
+        return ' '.join(part for part in (lead, 'Open '+names+'.' if names else '') if part) or None
 
     def listen(self):
         """Take the next conversation turn."""
         if self.source is None:
             return
         self.mode, self.capturing = 'conversation', True
-        self.segmenter = Segmenter(end_silence=0.9, max_seconds=20)
+        # Natural speech pauses for a second or more mid-sentence; wait longer before
+        # treating silence as the end of the turn, so A11y neither cuts in nor talks over.
+        self.segmenter = Segmenter(end_silence=1.6, max_seconds=30)
         self.last_speech = time.monotonic()
         self.status.emit('Listening…')
 
@@ -342,17 +365,17 @@ class VoiceListener(QObject):
         try:
             if mode == 'wake':
                 quick = self.transcriber.transcribe(audio, WAKE_MODEL, prompt='Hey Ally.')
-                rest = wake_split(quick)
+                if wake_split(quick) is None or generation != self.generation:
+                    return
+                # The quick model hears "Hey Ally" in a lot of speech and noise; only wake when
+                # the accurate model hears it too. Its transcript also carries the request.
+                full = self.transcriber.transcribe(audio, SPEECH_MODEL, prompt=self.prompt('Hey Ally.'))
+                rest = wake_split(full)
                 if rest is None or generation != self.generation:
                     return
-                if len(words(rest)) >= 2:
-                    # The request came with the wake phrase: transcribe it accurately.
-                    full = self.transcriber.transcribe(audio, SPEECH_MODEL, prompt='Hey Ally.')
-                    accurate = wake_split(full)
-                    rest = accurate if accurate is not None else rest
                 self.woke.emit(rest)
             else:
-                text = self.transcriber.transcribe(audio, SPEECH_MODEL)
+                text = self.transcriber.transcribe(audio, SPEECH_MODEL, prompt=self.prompt())
                 if generation != self.generation:
                     return
                 if words(text):
