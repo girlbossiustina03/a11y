@@ -304,6 +304,7 @@ class ComputerTask:
         # Apps where the text-only pass already failed to produce an action. Live
         # logs showed it failing on every Teams step, doubling each step's cost.
         self.text_pass_misses = set()
+        self.stale_retries = 0
         # The request interpreter can classify scope in the same call that routes
         # the goal; only tasks started without that plan need a separate call.
         self.timings = []

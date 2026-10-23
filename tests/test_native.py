@@ -359,6 +359,72 @@ class NativeTests(unittest.TestCase):
         self.assertTrue(any('Search is visible; opening it.' in message for message in shown))
         self.assertIn('Help results are listed.', shown[-1])
 
+    def test_live_teams_request_opens_safari_window_before_any_model_step(self):
+        # Live (build e79f024ef6): the opening was resolved but dropped by the UI, so the
+        # model clicked dock icons instead. Drive the user's sentence through the window.
+        from copy import deepcopy
+        from unittest.mock import Mock
+        from companion.desktop_context import DesktopContext
+        from test_desktop_context import FakeBridge
+        from test_computer_task import context
+        self.window.setup_dialog.reject()
+        bridge = FakeBridge()
+        bridge.value = context()
+        bridge.catalog = Mock(return_value=[{'name': 'Safari', 'bundle_id': 'com.apple.Safari'}])
+        monitor = self.window.desktop_monitor = self.service.desktop_context = DesktopContext(bridge, clock=lambda: 100)
+        monitor.enabled = True
+        monitor.collect_once()
+        self.window.vision.set_enabled(True)
+        area = self.window.mascot.screen().geometry()
+        frame = {'image_data': 'data:image/png;base64,iVBORw0KGgo=', 'display_id': 7, 'windows': [],
+                 'screen': {'x': area.x(), 'y': area.y(), 'width': area.width(), 'height': area.height()},
+                 'captured_monotonic': time.monotonic(), 'text_regions': []}
+        class Provider:
+            interpret_request = Mock(side_effect=AssertionError('"open X" must not need the interpreter'))
+            classify_task_goal = Mock(return_value='inspect')
+            complete_structured = Mock(return_value={'status': 'done', 'message': 'Activity shows no new notifications.',
+                                                     'risk': 'navigation', 'action': None})
+        self.service.provider = Provider()
+        executed = []
+        def submitted(proposal):
+            executed.append((proposal['type'], Provider.complete_structured.call_count))
+            return {'type': proposal['type'], 'label': proposal['label'], 'status': 'submitted', 'native_result': {'submitted': True}}
+        self.window.input.setPlainText('open up teams in a new safari window and see if ive got any new notifications')
+        with patch.object(self.window.vision, 'capture', side_effect=lambda *a, **k: deepcopy(frame)), \
+                patch('companion.desktop.ComputerUse.execute_confirmed', side_effect=submitted) as execute, \
+                patch('companion.computer_task.time.sleep'):
+            self.window.ask(mode='assist', from_mascot=True)
+            deadline = time.monotonic()+6
+            while time.monotonic() < deadline:
+                self.qt.processEvents()
+                QTest.qWait(5)
+                task = self.window.computer_task
+                if task and task.status == 'done' and not (self.window.worker and self.window.worker.isRunning()):
+                    break
+        opening = execute.call_args_list[0].args[0]
+        self.assertEqual((opening['type'], opening['url'], opening['browser_mode']), ('browse_url', 'https://teams.microsoft.com', 'window'))
+        self.assertEqual(executed[0], ('browse_url', 0))  # executed before any model step
+        self.assertEqual(self.window.computer_task.status, 'done')
+        Provider.interpret_request.assert_not_called()
+
+    def test_a_changed_target_during_a_task_looks_again_instead_of_failing(self):
+        from companion.computer_task import ComputerTask
+        task = self.window.computer_task = ComputerTask('Find help', automatic=True)
+        proposal = {'type': 'press_key', 'key': 'tab', 'label': 'Next field'}
+        with patch('companion.desktop.ComputerUse.execute_confirmed',
+                   side_effect=ValueError('The target or its window changed. No click was sent; ask for a fresh target.')), \
+                patch.object(self.window, 'next_computer_step') as next_step:
+            for attempt in range(3):
+                self.window.execute_desktop_action(proposal)
+                deadline = time.monotonic()+2
+                while self.window.worker.isRunning() and time.monotonic() < deadline:
+                    self.qt.processEvents()
+                QTest.qWait(400)
+                self.qt.processEvents()
+        self.assertEqual(next_step.call_count, 2)  # two fresh looks, then the task stops
+        self.assertEqual(task.status, 'blocked')
+        self.assertFalse(task.receipts)
+
     def test_stop_cancels_an_automatic_step_queued_for_execution(self):
         from companion.computer_task import ComputerTask
         task = self.window.computer_task = ComputerTask('Find help', automatic=True)
