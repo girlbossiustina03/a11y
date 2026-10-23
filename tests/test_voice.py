@@ -282,7 +282,7 @@ if __name__ == '__main__':
     unittest.main()
 
 
-@unittest.skipUnless(importlib.util.find_spec('PyQt6'), 'PyQt6 missing')
+@unittest.skipUnless(importlib.util.find_spec('PyQt6') and importlib.util.find_spec('numpy'), 'PyQt6 or numpy missing')
 class MicrophonePermissionTests(unittest.TestCase):
     def setUp(self):
         from unittest import mock

@@ -40,7 +40,7 @@ class Server:
                         time.sleep(0.02)
                         self.wfile.write(b'\n')
                         self.wfile.flush()
-                except (BrokenPipeError, ConnectionResetError):
+                except ConnectionError:  # broken pipe/reset; Windows reports ConnectionAbortedError
                     outer.disconnected.set()
 
         self.httpd = ThreadingHTTPServer(('127.0.0.1', 0), Handler)

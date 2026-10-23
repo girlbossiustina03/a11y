@@ -2072,7 +2072,16 @@ class CompanionWindow(QMainWindow):
         self.overlay.close()
         self.pointer.close()
         self.mascot.close()
+        self.finish_workers(5000)
         QApplication.instance().quit()
+
+    def finish_workers(self, timeout_ms):
+        """Wait for background checks (e.g. the first screen-helper build) so Qt never
+        destroys a thread that is still running, which aborts the process."""
+        deadline = time.monotonic()+timeout_ms/1000
+        for worker in self.findChildren(QThread):
+            if worker.isRunning():
+                worker.wait(max(0, int((deadline-time.monotonic())*1000)))
 
     def closeEvent(self, event):
         if getattr(self, 'setup_dialog', None):

@@ -5,7 +5,7 @@ from .theme import MASCOT_STYLE, MENU_STYLE
 from .icons import control_icon
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QFrame, QVBoxLayout, QHBoxLayout, QPushButton,
-    QPlainTextEdit, QLineEdit, QLabel, QAbstractButton, QMenu, QScrollArea, QGraphicsDropShadowEffect)
+    QPlainTextEdit, QLineEdit, QGridLayout, QLabel, QAbstractButton, QMenu, QScrollArea, QGraphicsDropShadowEffect)
 from PyQt6.QtCore import Qt, QTimer, QPoint, QPointF, QRectF, QElapsedTimer, pyqtSignal, QRect, QSize, QEvent
 from PyQt6.QtGui import QPainter, QPainterPath, QColor, QPen, QShortcut, QKeySequence, QPixmap, QFontMetrics, QCursor
 
@@ -42,6 +42,12 @@ class RoundControl(QPushButton):
                            '{background:transparent;border:0;}')
         self.setAttribute(Qt.WidgetAttribute.WA_MacShowFocusRect, False)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+
+    def sizeHint(self):
+        # The stylesheet's min-height:0 undoes setFixedSize's minimum, so aligned layouts
+        # would shrink the circle to the text-less button hint; keep the set size instead.
+        maximum = self.maximumSize()
+        return maximum if maximum.width() < 1000 and maximum.height() < 1000 else super().sizeHint()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -191,6 +197,7 @@ class Mascot(QWidget):
         self.input.document().setDocumentMargin(0)
         self.input.setTabChangesFocus(True)
         self.input.textChanged.connect(self.limit_input)
+        self.input.textChanged.connect(self.grow_prompt)
         self.input.setAccessibleName('Reply to your companion')
         self.input.installEventFilter(self)
         self.input.viewport().installEventFilter(self)
@@ -234,6 +241,14 @@ class Mascot(QWidget):
         bottom.addStretch()
         bottom.addWidget(self.character)
         bottom.addStretch()
+        self.character_layout = bottom
+        # Compact mode: the cloud and the prompt share one cell, so the prompt can grow up behind it.
+        self.stack = QWidget()
+        self.stack_layout = QGridLayout(self.stack)
+        self.stack_layout.setContentsMargins(0, 0, 0, 0)
+        self.stack_layout.setSpacing(0)
+        self.stack.hide()
+        self.prompt_sheet = None
         self.controls_row = QWidget()
         self.controls_layout = QHBoxLayout(self.controls_row)
         self.controls_layout.setContentsMargins(0, 0, 0, 0)
@@ -252,6 +267,7 @@ class Mascot(QWidget):
         layout.addWidget(self.character_row)
         self.controls_layout.addWidget(self.card)
         layout.addWidget(self.controls_row)
+        layout.addWidget(self.stack)
         for surface in (self.card, self.reply_panel):
             shadow = QGraphicsDropShadowEffect(surface)
             shadow.setBlurRadius(18)
@@ -319,20 +335,31 @@ class Mascot(QWidget):
         for widget in (self.card, self.input):
             widget.style().unpolish(widget)
             widget.style().polish(widget)
-        self.card_layout.setContentsMargins(12, 2, 12, 2) if compact else self.card_layout.setContentsMargins(18, 16, 18, 16)
+        self.card_layout.setContentsMargins(14, 3, 3, 3) if compact else self.card_layout.setContentsMargins(18, 16, 18, 16)
         self.card_layout.setSpacing(0 if compact else 12)
-        # The prompt is its own surface. Actions float beside it, below the character.
+        self.entry_layout.setSpacing(4 if compact else 8)
         for button in (self.send, self.prompt_settings):
             self.entry_layout.removeWidget(button)
-            self.controls_layout.removeWidget(button)
+        for layout in (self.controls_layout, self.character_layout, self.stack_layout):
+            layout.removeWidget(self.card)
+            layout.removeWidget(self.character)
         if compact:
-            self.controls_layout.insertWidget(1, self.send, 0, Qt.AlignmentFlag.AlignVCenter)
-            self.controls_layout.insertWidget(2, self.prompt_settings, 0, Qt.AlignmentFlag.AlignVCenter)
+            # One pill holds the text and both buttons. As the text grows the pill rises
+            # behind the cloud until, at its tallest, it is a box around the whole cloud.
+            self.stack_layout.addWidget(self.card, 0, 0, 2, 1, Qt.AlignmentFlag.AlignBottom)
+            self.stack_layout.addWidget(self.character, 0, 0, Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+            self.character.raise_()
+            self.entry_layout.insertWidget(1, self.send, 0, Qt.AlignmentFlag.AlignBottom)
+            self.entry_layout.insertWidget(2, self.prompt_settings, 0, Qt.AlignmentFlag.AlignBottom)
         else:
+            self.controls_layout.addWidget(self.card)
+            self.character_layout.insertWidget(1, self.character)
             self.entry_layout.insertWidget(0, self.send)
             self.entry_layout.insertWidget(1, self.prompt_settings)
         self.layout().removeWidget(self.character_row)
-        self.layout().insertWidget(1 if compact else 2, self.character_row)
+        self.layout().insertWidget(2, self.character_row)
+        self.character_row.setVisible(not compact)
+        self.stack.setVisible(compact)
         self.send.setFixedSize(32, 32)
         self.prompt_settings.setFixedSize(32, 32)
         self.prompt_settings.setVisible(compact)
@@ -348,9 +375,9 @@ class Mascot(QWidget):
         self.settings_button.setVisible(not compact)
         self.context_button.setVisible(not compact)
         self.footer.setVisible(not compact)
-        self.input.setFixedHeight(self.input.fontMetrics().height()+2 if compact else 88)
-        self.card.setFixedHeight(34) if compact else self.card.setMaximumHeight(16777215)
         if not compact:
+            self.input.setFixedHeight(88)
+            self.card.setMaximumHeight(16777215)
             self.card.setMinimumHeight(0)
         self.bubble.setVisible(bool(message))
         self.bubble.setPlainText(message)
@@ -378,12 +405,47 @@ class Mascot(QWidget):
         self.update_interaction_state()
         self.reply_available = bool(message) or bool(choices)
         self.reply_panel.setVisible(compact and self.reply_available and not self.user_collapsed)
-        self.controls_row.setVisible(not self.user_collapsed)
+        self.controls_row.setVisible(not compact and not self.user_collapsed)
         self.card.setVisible(not self.user_collapsed)
         self.setFixedWidth(self.expanded_width if not self.user_collapsed else self.character.width()+16)
+        self.grow_prompt()
         self.fit_on_screen(anchor)
         if placeholder is not None and self.card.isVisible() and self.isActiveWindow():
             self.input.setFocus()
+
+    PROMPT_HEIGHT = 40
+
+    def grow_prompt(self):
+        """Size the compact pill to its text: one line sits under the cloud; more lines raise
+        the pill behind the cloud, a little more see-through as it grows."""
+        compact = getattr(self, 'compact', False)
+        if not compact or self.user_collapsed:
+            self.stack_layout.setRowMinimumHeight(1, 0)
+            if not compact and self.prompt_sheet is not None:
+                self.prompt_sheet = None
+                self.card.setStyleSheet('')
+            return
+        base = self.PROMPT_HEIGHT
+        metrics = self.input.fontMetrics()
+        line = metrics.lineSpacing()
+        width = self.input.viewport().width() if self.input.isVisible() else 0
+        if width < 40:  # not laid out yet: the pill minus its padding and both buttons
+            width = self.expanded_width-16-18-4-2*(32+4)
+        text = self.input.toPlainText() or ' '
+        if text.endswith('\n'):
+            text += ' '
+        lines = max(1, round(metrics.boundingRect(QRect(0, 0, width, 100000), Qt.TextFlag.TextWordWrap, text).height()/line))
+        tallest = self.character.height()+base+6
+        height = min(tallest, max(base, lines*line+16))
+        self.input.setFixedHeight(metrics.height()+2 if lines == 1 else min(height-12, lines*line+2))
+        self.card.setFixedHeight(height)
+        self.stack_layout.setRowMinimumHeight(1, base+6)
+        progress = (height-base)/max(1, tallest-base)
+        sheet = ('QFrame#conversationCard {background:rgba(28,28,31,%d);border:1px solid rgba(255,255,255,0.10);border-radius:%dpx;}'
+                 'QFrame#conversationCard[inputFocused="true"] {border:1px solid #7aa7ff;}') % (round(235-70*progress), 17 if height == base else 22)
+        if sheet != self.prompt_sheet:
+            self.prompt_sheet = sheet
+            self.card.setStyleSheet(sheet)
 
     def size_message(self, message):
         metrics = QFontMetrics(self.bubble.font())
@@ -442,6 +504,7 @@ class Mascot(QWidget):
         self.card.hide()
         self.controls_row.hide()
         self.reply_panel.hide()
+        self.grow_prompt()
         self.setFixedWidth(self.character.width()+16)
         self.fit_on_screen(anchor)
         self.character.setFocus()
@@ -450,8 +513,9 @@ class Mascot(QWidget):
         anchor = self.character.mapToGlobal(QPoint())
         self.user_collapsed = False
         self.setFixedWidth(self.expanded_width)
-        self.controls_row.show()
+        self.controls_row.setVisible(not getattr(self, 'compact', False))
         self.card.show()
+        self.grow_prompt()
         self.reply_panel.hide()
         self.fit_on_screen(anchor)
         if self.entry_row.isVisible():

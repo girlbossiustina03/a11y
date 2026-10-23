@@ -41,6 +41,7 @@ class NativeTests(unittest.TestCase):
     def tearDown(self):
         if self.window.worker:
             self.window.worker.wait(2000)
+        self.window.finish_workers(120000)  # e.g. VisionPermission compiling the Swift helper on macOS
         self.window.desktop_monitor.disable()
         self.window.context_timer.stop()
         self.window.mascot.close()
@@ -810,11 +811,11 @@ class NativeTests(unittest.TestCase):
         self.assertFalse(self.window.mascot.card.isVisible())
         self.assertFalse(self.window.isVisible())
 
-    def test_character_opens_small_pill_and_two_right_circles(self):
+    def test_character_opens_small_pill_with_both_buttons_inside(self):
         mascot = self.window.mascot
         self.assertFalse(mascot.reply_panel.isVisible())
         self.assertFalse(mascot.header_widget.isVisible())
-        self.assertEqual(mascot.card.height(), 34)
+        self.assertEqual(mascot.card.height(), mascot.PROMPT_HEIGHT)
         self.assertEqual(mascot.send.width(), 32)
         input_top = mascot.input.mapTo(mascot.card, QPoint()).y()
         self.assertAlmostEqual(input_top+mascot.input.height()/2, mascot.card.height()/2, delta=1)
@@ -822,25 +823,41 @@ class NativeTests(unittest.TestCase):
         self.assertGreaterEqual(mascot.input.viewport().height(), mascot.input.fontMetrics().height())
         self.assertEqual(mascot.send.width(), mascot.send.height())
         self.assertEqual(mascot.prompt_settings.width(), mascot.prompt_settings.height())
-        self.assertLess(mascot.send.x(), mascot.prompt_settings.x())
         def bounds(widget):
             return widget.mapTo(mascot, QPoint()), widget.size()
         send_pos, send_size = bounds(mascot.send)
         settings_pos, settings_size = bounds(mascot.prompt_settings)
-        card_pos, _ = bounds(mascot.card)
+        input_pos, input_size = bounds(mascot.input)
+        card_pos, card_size = bounds(mascot.card)
         character_pos, character_size = bounds(mascot.character)
-        self.assertLess(card_pos.x()+mascot.card.width(), send_pos.x())
+        # Text first, then send and settings, all inside the one pill.
+        self.assertLess(input_pos.x()+input_size.width(), send_pos.x())
+        self.assertLess(send_pos.x(), settings_pos.x())
+        self.assertLessEqual(settings_pos.x()+settings_size.width(), card_pos.x()+card_size.width())
+        for pos, size in ((send_pos, send_size), (settings_pos, settings_size)):
+            self.assertGreaterEqual(pos.y(), card_pos.y())
+            self.assertLessEqual(pos.y()+size.height(), card_pos.y()+card_size.height())
         self.assertLessEqual(mascot.width()-mascot.character.width(), 150)  # 300-px compact surface
-        self.assertEqual(mascot.send.parentWidget(), mascot.controls_row)
-        self.assertEqual(mascot.prompt_settings.parentWidget(), mascot.controls_row)
         self.assertLess(character_pos.y()+character_size.height(), card_pos.y())
         self.assertAlmostEqual(character_pos.x()+character_size.width()/2, mascot.width()/2, delta=1)
-        self.assertAlmostEqual(send_pos.y()+send_size.height()/2, card_pos.y()+mascot.card.height()/2, delta=1)
+        self.assertAlmostEqual(send_pos.y()+send_size.height()/2, card_pos.y()+card_size.height()/2, delta=1)
         self.assertEqual(len([b for b in mascot.findChildren(QPushButton) if b.isVisible()]), 2)
+        # Typing grows the pill upward behind the cloud, never taller than a box around it.
+        height = mascot.height()
+        mascot.input.setPlainText('Open Teams and read me every new notification in Activity, please. '*12)
+        self.qt.processEvents()
+        card_pos, card_size = bounds(mascot.card)
+        self.assertEqual(card_size.height(), mascot.character.height()+mascot.PROMPT_HEIGHT+6)
+        self.assertLessEqual(card_pos.y(), character_pos.y())
+        self.assertEqual(mascot.height(), height)
+        self.assertIn('rgba(28,28,31,165)', mascot.card.styleSheet())
+        mascot.input.clear()
+        self.qt.processEvents()
+        self.assertEqual(mascot.card.height(), mascot.PROMPT_HEIGHT)
         self.window.mascot_home('Here is an answer.')
         self.qt.processEvents()
         self.assertTrue(mascot.reply_panel.isVisible())
-        self.assertLess(mascot.reply_panel.geometry().bottom(), mascot.character_row.geometry().top())
+        self.assertLess(mascot.reply_panel.geometry().bottom(), mascot.stack.geometry().top())
         mascot.collapse_chat()
         mascot.character.click()
         self.qt.processEvents()
