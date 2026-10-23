@@ -46,8 +46,9 @@ def neural_voice_available(data_directory):
     return (folder/MODEL_FILE).is_file() and (folder/VOICES_FILE).is_file()
 
 
-def download_models(data_directory):
-    """Fetch the open model files once (about 340 MB). Called only after voice is turned on."""
+def download_models(data_directory, progress=None):
+    """Fetch the open model files once (about 340 MB), from setup or after voice is turned on.
+    progress(fraction or None) is called while downloading."""
     import urllib.request
     folder = model_directory(data_directory)
     folder.mkdir(parents=True, exist_ok=True)
@@ -55,7 +56,11 @@ def download_models(data_directory):
         target = folder/name
         if not target.is_file():
             partial = target.with_suffix(target.suffix+'.part')
-            urllib.request.urlretrieve(MODEL_URL+name, partial)
+            hook = None
+            if progress:
+                def hook(blocks, size, total):
+                    progress(min(1.0, blocks*size/total) if total > 0 else None)
+            urllib.request.urlretrieve(MODEL_URL+name, partial, hook)
             partial.replace(target)
 
 

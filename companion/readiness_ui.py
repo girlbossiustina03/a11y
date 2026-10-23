@@ -11,9 +11,10 @@ class StatusWorker(QObject):
     never has to wait for (or abort on) a slow local HTTP check."""
     result = pyqtSignal(object)
 
-    def __init__(self, models=None, parent=None):
+    def __init__(self, models=None, parent=None, data_directory=None):
         super().__init__(parent)
         self.models = models
+        self.data_directory = data_directory
 
     def start(self):
         threading.Thread(target=self.run, daemon=True).start()
@@ -25,7 +26,12 @@ class StatusWorker(QObject):
             value.update(text_model=self.models[0], vision_model=self.models[1],
                          text_ready=installer.has_model(self.models[0], present),
                          vision_ready=installer.has_model(self.models[1], present))
-        value['ready'] = value['ollama_running'] and value['text_ready'] and value['vision_ready']
+        try:
+            value.update(installer.voice_status(self.data_directory))
+        except Exception:  # never block the AI check on the voice check
+            value.update(speech_supported=False, speech_ready=True, natural_supported=False, natural_ready=True)
+        value['ready'] = (value['ollama_running'] and value['text_ready'] and value['vision_ready']
+                          and value['speech_ready'] and value['natural_ready'])
         try:
             self.result.emit(value)
         except RuntimeError:  # the window was closed while checking
@@ -37,16 +43,17 @@ class SetupWorker(QThread):
     finished_ok = pyqtSignal(str, str)
     failed = pyqtSignal(str)
 
-    def __init__(self, models, parent=None):
+    def __init__(self, models, parent=None, data_directory=None):
         super().__init__(parent)
         self.models = models
+        self.data_directory = data_directory
         self.cancel = threading.Event()
 
     def run(self):
         try:
             text, vision = installer.prepare_everything(
                 lambda message, fraction: self.progress.emit(message, -1.0 if fraction is None else float(fraction)),
-                self.cancel, self.models)
+                self.cancel, self.models, self.data_directory)
             self.finished_ok.emit(text, vision)
         except installer.SetupError as error:
             self.failed.emit(str(error))
@@ -74,11 +81,15 @@ class ReadinessDialog(QDialog):
         rows = [('Ollama (local AI runtime, from ollama.com)', status['ollama_running'] or status['ollama_installed']),
                 ('Language model: '+status['text_model'], status['text_ready']),
                 ('Vision model: '+status['vision_model'], status['vision_ready'])]
+        if status.get('speech_supported'):
+            rows.append(('Speech recognition for “Hey Ally” (Whisper)', status.get('speech_ready', True)))
+        if status.get('natural_supported'):
+            rows.append(('Natural reading voice (Kokoro)', status.get('natural_ready', True)))
         for text, done in rows:
             row = QLabel(('✓  ' if done else '○  ')+text)
             row.setAccessibleName(text+(' is ready' if done else ' will be installed'))
             layout.addWidget(row)
-        note = QLabel('Models are a few gigabytes in total; the first download can take several minutes.')
+        note = QLabel('AI and voice models are a few gigabytes in total; the first download can take several minutes.')
         note.setObjectName('detailLabel')
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -110,7 +121,8 @@ class ReadinessDialog(QDialog):
         self.start.setEnabled(False)
         self.later.setText('Cancel')
         self.bar.show()
-        self.worker = SetupWorker((self.status['text_model'], self.status['vision_model']), self)
+        self.worker = SetupWorker((self.status['text_model'], self.status['vision_model']), self,
+                                  getattr(getattr(self.owner, 'service', None), 'store', None) and self.owner.service.store.directory)
         self.worker.progress.connect(self.show_progress)
         self.worker.finished_ok.connect(self.done_ok)
         self.worker.failed.connect(self.done_failed)

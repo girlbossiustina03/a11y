@@ -306,7 +306,12 @@ class MicrophonePermissionTests(unittest.TestCase):
     def test_mac_app_asks_before_first_listen(self):
         answer, app = self.permission(self.Qt.PermissionStatus.Undetermined)
         self.assertEqual(answer, 'asking')
-        app.requestPermission.assert_called_once()
+        # PyQt6's signature is requestPermission(permission, handler); a third argument raised
+        # inside a Qt slot and aborted the app when voice was turned on.
+        self.assertEqual(len(app.requestPermission.call_args.args), 2)
+        from PyQt6.QtCore import QCoreApplication
+        self.assertIn('handler', QCoreApplication.requestPermission.__doc__)
+        self.assertNotIn('context', QCoreApplication.requestPermission.__doc__)
 
     def test_mac_app_reports_denied_instead_of_recording_silence(self):
         self.assertEqual(self.permission(self.Qt.PermissionStatus.Denied)[0], 'denied')

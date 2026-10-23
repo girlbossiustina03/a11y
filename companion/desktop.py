@@ -290,7 +290,7 @@ class CompanionWindow(QMainWindow):
         from .readiness_ui import StatusWorker
         config = self.service.provider.config
         models = (config.model, config.vision_model or config.model) if config.model else None
-        worker = StatusWorker(models, self)
+        worker = StatusWorker(models, self, self.service.store.directory)
         self.readiness_worker = worker
         worker.result.connect(lambda status: self.show_readiness(status, always=always))
         worker.start()
@@ -310,7 +310,9 @@ class CompanionWindow(QMainWindow):
         self.service.provider = OllamaProvider(AIConfig(base_url=config.base_url if config.base_url.startswith('http://127.') else 'http://127.0.0.1:11434',
                                                         model=text, vision_model=vision, timeout=120))
         self.refresh()
-        self.mascot_home('All set. The local AI is ready. What can I help you with?')
+        if self.tts and neural_voice_available(self.service.store.directory) and not self.tts_speaking():
+            self.use_natural_voice()
+        self.mascot_home('All set. The local AI and voice are ready. What can I help you with?')
 
     def restore_access(self):
         choice = self.access_preferences.get()

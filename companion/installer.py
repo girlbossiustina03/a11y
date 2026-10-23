@@ -203,8 +203,59 @@ def pull_model(name, progress, cancel=None):
         raise SetupError('Could not download '+name+': '+str(error)[:200]) from None
 
 
-def prepare_everything(progress, cancel=None, models=None):
-    """Install/start Ollama and pull the recommended models. Returns (text, vision)."""
+def voice_status(data_directory):
+    """What spoken conversation needs, as shipped in this build: Whisper speech recognition
+    and, where bundled, the natural Kokoro voice. Packages missing from the build are not
+    'missing downloads' (the app then uses the system voice), so they are reported as unsupported."""
+    import importlib.util
+    from . import voice, neural_voice
+    speech_supported = importlib.util.find_spec('faster_whisper') is not None
+    natural_supported = importlib.util.find_spec('kokoro_onnx') is not None
+    speech_ready = True
+    if speech_supported:
+        try:
+            from faster_whisper.utils import download_model
+            for name in (voice.WAKE_MODEL, voice.SPEECH_MODEL):
+                download_model(name, local_files_only=True)
+        except Exception:  # not cached yet (or the cache is unreadable)
+            speech_ready = False
+    return {'speech_supported': speech_supported, 'speech_ready': speech_ready,
+            'natural_supported': natural_supported,
+            'natural_ready': not natural_supported or neural_voice.neural_voice_available(data_directory)}
+
+
+def prepare_voice(progress, cancel=None, data_directory=None):
+    """Download the speech recognition models and the natural voice, if this build has them."""
+    from . import voice, neural_voice
+    state = voice_status(data_directory)
+    if state['speech_supported'] and not state['speech_ready']:
+        from faster_whisper.utils import download_model
+        for name in (voice.WAKE_MODEL, voice.SPEECH_MODEL):
+            if cancel is not None and cancel.is_set():
+                raise SetupError('Setup was cancelled.')
+            progress('Downloading speech recognition ('+name+')…', None)
+            try:
+                download_model(name)
+            except Exception as error:
+                raise SetupError('Could not download the speech model '+name+': '+str(error)[:200]) from None
+    if state['natural_supported'] and not state['natural_ready'] and data_directory is not None:
+        if cancel is not None and cancel.is_set():
+            raise SetupError('Setup was cancelled.')
+        progress('Downloading the natural voice…', None)
+        def report(fraction):
+            if cancel is not None and cancel.is_set():
+                raise SetupError('Setup was cancelled.')
+            progress('Downloading the natural voice…', fraction)
+        try:
+            neural_voice.download_models(data_directory, report)
+        except SetupError:
+            raise
+        except Exception as error:
+            raise SetupError('Could not download the natural voice: '+str(error)[:200]) from None
+
+
+def prepare_everything(progress, cancel=None, models=None, data_directory=None):
+    """Install/start Ollama, pull the recommended models and fetch the voice models. Returns (text, vision)."""
     text, vision = models or recommended_models()
     if not ollama_running():
         if ollama_app() is None:
@@ -215,5 +266,6 @@ def prepare_everything(progress, cancel=None, models=None):
     for name in dict.fromkeys((text, vision)):
         if not has_model(name, present):
             pull_model(name, progress, cancel)
+    prepare_voice(progress, cancel, data_directory)
     progress('Ready.', 1.0)
     return text, vision

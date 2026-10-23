@@ -34,6 +34,11 @@ def _unlock(file, *, windows=None):
 
 
 def build_id():
+    from .paths import frozen, resource_dir
+    stamp = resource_dir()/'build-id.txt'
+    if frozen() and stamp.is_file():
+        # Packaged apps carry no .py files to hash; the build writes the commit it was made from.
+        return stamp.read_text().strip()[:40] or 'unknown'
     root = Path(__file__).resolve().parent
     digest = hashlib.sha256()
     for path in sorted(root.glob('*.py')):

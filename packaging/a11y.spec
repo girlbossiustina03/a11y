@@ -9,6 +9,15 @@ ICONS = ROOT/'packaging'/'icons'
 datas = [(str(ROOT/'native'/'DesktopBridge.swift'), 'native'), (str(ROOT/'native'/'ScreenBridge.swift'), 'native'),
          (str(ROOT/'examples'), 'examples'), (str(ROOT/'index.html'), '.'), (str(ROOT/'app.js'), '.'), (str(ROOT/'style.css'), '.')]
 binaries = []
+# Stamp the commit so a running packaged app reports which version it is (see instance.build_id).
+import subprocess
+try:
+    commit = subprocess.run(['git', 'rev-parse', '--short=10', 'HEAD'], cwd=ROOT, capture_output=True, text=True, timeout=10).stdout.strip()
+except OSError:
+    commit = ''
+(ROOT/'build').mkdir(exist_ok=True)
+(ROOT/'build'/'build-id.txt').write_text(commit or 'unknown')
+datas.append((str(ROOT/'build'/'build-id.txt'), '.'))
 # Swift helpers compiled at build time (macOS), so users need no Xcode tools.
 helpers = ROOT/'build'/'native-bin'
 for name in ('desktop-bridge', 'screen-bridge'):
@@ -58,7 +67,7 @@ if sys.platform == 'darwin':
     app = BUNDLE(collected, name='A11y.app', icon=str(ICONS/'A11y.icns'), bundle_identifier='com.a11y.companion',
                  info_plist={
                      'CFBundleName': 'A11y', 'CFBundleDisplayName': 'A11y',
-                     'CFBundleShortVersionString': '0.9.1', 'CFBundleVersion': '0.9.1',
+                     'CFBundleShortVersionString': '0.9.2', 'CFBundleVersion': '0.9.2',
                      'LSMinimumSystemVersion': '14.0', 'NSHighResolutionCapable': True,
                      'NSMicrophoneUsageDescription': 'A11y listens for “Hey Ally” and your spoken requests when you turn voice on. Audio is processed on this Mac and never saved.',
                      'NSAppleEventsUsageDescription': 'A11y controls Music and Safari only when you ask it to play a song or open a page.',

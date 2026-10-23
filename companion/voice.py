@@ -222,7 +222,7 @@ class VoiceListener(QObject):
         if state == Qt.PermissionStatus.Granted:
             return 'granted'
         if state == Qt.PermissionStatus.Undetermined:
-            app.requestPermission(permission, self, self.permission_answered)
+            app.requestPermission(permission, self.permission_answered)  # PyQt6 takes (permission, handler)
             self.status.emit('Allow microphone access so I can hear you.')
             return 'asking'
         # Running from source, Python has no usage description, so Qt says denied without asking;
@@ -230,8 +230,9 @@ class VoiceListener(QObject):
         return 'denied' if paths.frozen() else 'granted'
 
     def permission_answered(self, permission):
-        from PyQt6.QtCore import Qt
-        if permission.status() == Qt.PermissionStatus.Granted:
+        from PyQt6.QtCore import QCoreApplication, Qt
+        app = QCoreApplication.instance()
+        if app is not None and app.checkPermission(permission) == Qt.PermissionStatus.Granted:
             self.open_microphone()
         else:
             self.microphone_denied()

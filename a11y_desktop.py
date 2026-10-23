@@ -17,6 +17,13 @@ def main():
         if log.exists() and log.stat().st_size > 5_000_000:
             log.replace(directory/'a11y.previous.log')
         sys.stdout = sys.stderr = open(log, 'a', buffering=1, encoding='utf-8')
+    # PyQt aborts the whole app on an exception inside a Qt callback unless an excepthook is set.
+    # Log it and keep the companion running instead; the failing action simply does nothing.
+    def log_unexpected(kind, value, trace):
+        import traceback
+        print('A11y unexpected error (the app kept running):', file=sys.stderr)
+        traceback.print_exception(kind, value, trace, file=sys.stderr)
+    sys.excepthook = log_unexpected
     try:
         from PyQt6.QtWidgets import QApplication
         from companion.desktop import CompanionWindow

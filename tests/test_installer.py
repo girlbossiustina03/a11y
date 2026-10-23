@@ -1,7 +1,9 @@
 """First-run setup: model choice, Ollama pulls, verified installs, saved settings, packaged paths."""
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import importlib.util
 import json
 import os
+import sys
 import tempfile
 import threading
 import unittest
@@ -66,9 +68,10 @@ class InstallerTests(unittest.TestCase):
                 mock.patch.object(installer, 'ollama_app', return_value=None), \
                 mock.patch.object(installer, 'install_ollama', side_effect=lambda *a: calls.append('install')), \
                 mock.patch.object(installer, 'installed_models', return_value={'qwen3:4b-instruct'}), \
-                mock.patch.object(installer, 'pull_model', side_effect=lambda name, *a: calls.append(name)):
+                mock.patch.object(installer, 'pull_model', side_effect=lambda name, *a: calls.append(name)), \
+                mock.patch.object(installer, 'prepare_voice', side_effect=lambda *a: calls.append('voice')):
             result = installer.prepare_everything(lambda *a: None, models=('qwen3:4b-instruct', 'qwen3-vl:4b-instruct'))
-        self.assertEqual(calls, ['install', 'qwen3-vl:4b-instruct'])
+        self.assertEqual(calls, ['install', 'qwen3-vl:4b-instruct', 'voice'])
         self.assertEqual(result, ('qwen3:4b-instruct', 'qwen3-vl:4b-instruct'))
 
     def test_unverified_windows_installer_is_never_run(self):
@@ -139,3 +142,60 @@ class PathTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class VoiceSetupTests(unittest.TestCase):
+    """Setup also fetches the voice models, so turning talk on needs no first-use download."""
+    def fake_whisper(self, cached):
+        import types
+        downloaded = []
+        def download_model(name, local_files_only=False):
+            if local_files_only and name not in cached:
+                raise FileNotFoundError(name)
+            if not local_files_only:
+                downloaded.append(name)
+            return '/cache/'+name
+        utils = types.ModuleType('faster_whisper.utils')
+        utils.download_model = download_model
+        package = types.ModuleType('faster_whisper')
+        package.utils = utils
+        return {'faster_whisper': package, 'faster_whisper.utils': utils}, downloaded
+
+    def specs(self, *present):
+        real = importlib.util.find_spec
+        return mock.patch('importlib.util.find_spec', side_effect=lambda name, *a: object() if name in present else (None if name in ('faster_whisper', 'kokoro_onnx') else real(name, *a)))
+
+    def test_builds_without_voice_packages_report_nothing_to_download(self):
+        with self.specs():
+            state = installer.voice_status('/tmp/none')
+        self.assertEqual(state, {'speech_supported': False, 'speech_ready': True, 'natural_supported': False, 'natural_ready': True})
+
+    def test_setup_downloads_both_speech_models_and_the_natural_voice(self):
+        modules, downloaded = self.fake_whisper(cached=())
+        messages = []
+        with mock.patch.dict(sys.modules, modules), self.specs('faster_whisper', 'kokoro_onnx'), \
+                mock.patch('companion.neural_voice.neural_voice_available', return_value=False), \
+                mock.patch('companion.neural_voice.download_models') as natural:
+            self.assertFalse(installer.voice_status('/data')['speech_ready'])
+            installer.prepare_voice(lambda message, fraction: messages.append(message), None, '/data')
+        self.assertEqual(downloaded, ['tiny.en', 'small.en'])
+        natural.assert_called_once()
+        self.assertEqual(natural.call_args.args[0], '/data')
+        self.assertIn('Downloading the natural voice…', messages)
+
+    def test_cached_models_are_not_downloaded_again(self):
+        modules, downloaded = self.fake_whisper(cached=('tiny.en', 'small.en'))
+        with mock.patch.dict(sys.modules, modules), self.specs('faster_whisper'):
+            self.assertTrue(installer.voice_status('/data')['speech_ready'])
+            installer.prepare_voice(lambda *a: None, None, '/data')
+        self.assertEqual(downloaded, [])
+
+    def test_cancel_stops_before_the_next_voice_download(self):
+        import threading
+        modules, downloaded = self.fake_whisper(cached=())
+        cancel = threading.Event()
+        cancel.set()
+        with mock.patch.dict(sys.modules, modules), self.specs('faster_whisper'), \
+                self.assertRaisesRegex(installer.SetupError, 'cancelled'):
+            installer.prepare_voice(lambda *a: None, cancel, '/data')
+        self.assertEqual(downloaded, [])
