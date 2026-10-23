@@ -5,3 +5,4 @@ People should start with the main README and docs/ARCHITECTURE.md instead.
 
 - CLAUDE_HANDOFF.md: what to preserve, platform status (macOS and Windows), and where things live.
 - ON_DEVICE_TUNING.md: local model choices, measured latency, and a ready-made tuning prompt.
+- ../../CLAUDE.md (repo root): the current working brief that Claude Code loads automatically.
