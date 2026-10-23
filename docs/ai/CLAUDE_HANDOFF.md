@@ -68,7 +68,7 @@ saved workflows and desktop guidance. Normal use should happen through the masco
 | Windows tools | `companion/windows_desktop.py`, `windows_screen.py` | Win32 app/window actions, Start-menu catalog and GDI capture |
 | Input/execution | `companion/input_actions.py`, `computer_use.py`, `models.py` | Allowlisted input, observed target binding, executors and schemas |
 | UI | `companion/mascot.py`, `overlay.py`, `settings_ui.py`, `theme.py` | Mascot, rounded menu, white pointer/highlight, compact settings |
-| Notes/tests | `docs/ARCHITECTURE.md`, `docs/IMPLEMENTATION_PLAN.md`, `tests/`, `scripts/evaluate_*.py` | Existing contracts, change history, regression coverage and model evaluation fixtures |
+| Notes/tests | `docs/ARCHITECTURE.md`, `tests/`, `scripts/evaluate_*.py` | Existing contracts, regression coverage and model evaluation fixtures (change history is in git) |
 
 Read the actual code when notes and implementation disagree. The implementation
 plan includes historical milestones and limitations, not a guarantee that every

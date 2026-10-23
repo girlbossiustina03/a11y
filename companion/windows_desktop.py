@@ -182,7 +182,7 @@ class _Win32:
 
 class WindowsDesktopBridge:
     # SendInput clicks/typing/keys and UI Automation presses are implemented below
-    # (windows_input.py). Not yet exercised on real Windows; see docs/CLAUDE_HANDOFF.md.
+    # (windows_input.py). Not yet exercised on real Windows; see docs/ai/CLAUDE_HANDOFF.md.
     supports_input = True
 
     def __init__(self, directory=None, *, win32=None, monitors=None, sender=None, uia=None, focus=None):

@@ -51,7 +51,7 @@ Copy this into Codex or Claude Code opened in this repository on your Mac:
 
 ```text
 You are working in the A11y repository on my Mac (Apple Silicon) with Ollama
-installed. Read docs/CLAUDE_HANDOFF.md and docs/ON_DEVICE_TUNING.md first.
+installed. Read docs/ai/CLAUDE_HANDOFF.md and docs/ai/ON_DEVICE_TUNING.md first.
 Goal: make computer-use tasks fast and reliable on THIS machine, measured, not guessed.
 
 1. Confirm the running code: quit A11y, relaunch it, and check that the build ID
@@ -59,7 +59,7 @@ Goal: make computer-use tasks fast and reliable on THIS machine, measured, not g
    `python -c "import companion.instance as i; print(i.build_id())"`.
 2. Baseline: run `python scripts/benchmark_pipeline.py --runs 5` with the current
    models and save the JSON. It never executes actions.
-3. Pull the candidate models in docs/ON_DEVICE_TUNING.md (verify each tag exists).
+3. Pull the candidate models in docs/ai/ON_DEVICE_TUNING.md (verify each tag exists).
    For each text/vision pair, rerun the benchmark with A11Y_AI_MODEL and
    A11Y_VISION_MODEL set, plus A11Y_MODEL_IMAGE_WIDTH 1280 vs 1440 for the vision
    model (Ollama upscales anything smaller to ~1024 image tokens). Record p50/p95 step time, model calls per step, prompt_eval_count,
