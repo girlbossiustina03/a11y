@@ -115,5 +115,16 @@ class QuickOpenServiceTests(CompanionFixture, unittest.TestCase):
         self.app.provider.complete_structured.assert_not_called()
 
 
+    def test_companion_moves_are_decided_in_code(self):
+        # Reported regression: "move to the left" failed with "Target is outside the captured screen".
+        for request, destination in (('move to the left', 'left_edge'), ('Bring your scooter, move to the left.', 'left_edge'),
+                                     ('move to the right', 'right_edge'), ('go to the top right corner', 'top_right')):
+            action = self.app.ask(request)['desktop_action']
+            self.assertEqual((action['type'], action['destination']), ('move_companion', destination), request)
+        self.app.provider.interpret_request.assert_not_called()
+        from companion.service import MOVE_SELF
+        self.assertIsNone(MOVE_SELF.search('move the window to the left'))  # moving something else is not a companion move
+
+
 if __name__ == '__main__':
     unittest.main()

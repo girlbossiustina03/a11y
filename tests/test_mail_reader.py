@@ -37,18 +37,25 @@ class NewestTests(unittest.TestCase):
         mail_reader.newest(1, run)
         self.assertEqual(calls[-1], (mail_reader.MESSAGE, 12))
 
-    def test_window_widens_until_enough_messages(self):
-        run, calls = self.runner(['', '5\x1f2026-10-01T10:00:00\x1e'])
+    def test_fast_listing_and_duplicates(self):
+        # The first and last messages by index are listed once each, in one quick call.
+        run, calls = self.runner(['5\x1f2026-10-01T10:00:00\x1e5\x1f2026-10-01T10:00:00\x1e'])
         self.assertIsNotNone(mail_reader.newest(1, run))
-        self.assertEqual([argument for script, argument in calls if script is mail_reader.LISTING], [3, 30])
-        run, _ = self.runner(['', '', ''])
-        self.assertIsNone(mail_reader.newest(1, run))
+        self.assertEqual([argument for script, argument in calls if script is mail_reader.LISTING], [30])
+        run, _ = self.runner(['5\x1f2026-10-01T10:00:00\x1e'])
+        self.assertIsNone(mail_reader.newest(2, run))
 
     def test_reply_names_sender_subject_and_text(self):
         reply = mail_reader.describe(1, ('Rockstar Games <noreply@rockstargames.com>', 'Your code', 'Thursday', 'Your verification code is 368229.'))
         self.assertTrue(reply.startswith('Your last email is from Rockstar Games, subject "Your code", received Thursday.'))
         self.assertIn('368229', reply)
         self.assertIn('Email number 2 from the newest', mail_reader.describe(2, ('a', 'b', 'c', 'd')))
+
+    def test_html_mail_placeholders_and_blank_lines_are_removed(self):
+        reply = mail_reader.describe(2, ('GitHub', 'Run failed', 'Friday', '\ufffc\n[iediot/a11y] Run failed\n \n\ufffc\n \n\n\n\nView workflow run \n\ufffc'))
+        self.assertNotIn('\ufffc', reply)
+        self.assertNotIn('\n\n\n', reply)
+        self.assertTrue(reply.endswith('View workflow run'))
 
     def test_denied_automation_explains_the_setting(self):
         result = Mock(returncode=1, stderr='execution error: Not authorized to send Apple events to Mail. (-1743)', stdout='')
@@ -73,6 +80,17 @@ class MailServiceTests(CompanionFixture, unittest.TestCase):
         self.app.provider.interpret_request.assert_not_called()
         self.app.provider.complete_structured.assert_not_called()
         self.assertNotIn('368229', str(self.app.store.history(self.app.identity, limit=50)))
+
+    def test_any_wording_the_model_understands_reads_the_exact_email_in_code(self):
+        # Reported: "give me my second last email here" missed the fixed phrases.
+        self.app.provider.interpret_request.return_value = {'operation': 'read_mail', 'app_name': '', 'target': '2',
+                                                            'reply': '', 'browser_mode': 'default', 'remaining_request': ''}
+        found = ('Ana', 'Hi', 'today', 'See you at 5.')
+        with patch.object(mail_reader, 'available', return_value=True), patch.object(mail_reader, 'newest', return_value=found) as newest:
+            response = self.app.ask('give me my second last email here')
+        newest.assert_called_once_with(2)
+        self.assertIn('See you at 5.', response['message'])
+        self.app.provider.complete_structured.assert_not_called()
 
     def test_other_platforms_use_the_normal_path(self):
         with patch.object(mail_reader, 'available', return_value=False), patch.object(mail_reader, 'newest') as newest:

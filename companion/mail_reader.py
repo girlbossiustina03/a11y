@@ -16,12 +16,25 @@ REQUEST = re.compile(
     r'\b(?P<position>(?:(?:second|2nd|third|3rd|fourth|4th|fifth|5th)(?:\s+(?:to\s+)?)?)?(?:last|latest|newest|most recent|recent))\b'
     r'\s+(?:(?:un)?read\s+)?(?:e-?mails?|mails?|messages? in mail)\b', re.I)
 SEPARATOR, END = '\x1f', '\x1e'
+# Dates of the first and last 30 inbox messages by index: Mail keeps the inbox in date order
+# (which end is newest depends on its sort), so the newest are among these. A "whose date"
+# search over a 16,000-message inbox was slow enough to look like no answer at all.
 LISTING = '''on run argv
-  set cutoff to (current date) - ((item 1 of argv) as integer) * days
+  set k to (item 1 of argv) as integer
   set output to ""
   tell application id "com.apple.mail"
-    set found to (messages of inbox whose date received > cutoff)
-    repeat with m in found
+    set c to count of messages of inbox
+    if c is 0 then return ""
+    if c < k then set k to c
+    set picks to {}
+    repeat with i from 1 to k
+      set end of picks to i
+    end repeat
+    repeat with i from (c - k + 1) to c
+      if i > k then set end of picks to i
+    end repeat
+    repeat with i in picks
+      set m to message (i as integer) of inbox
       set output to output & (id of m as string) & (ASCII character 31) & ((date received of m) as «class isot» as string) & (ASCII character 30)
     end repeat
   end tell
@@ -63,19 +76,17 @@ def run(script, argument, timeout):
 
 def newest(n, runner=run):
     """(sender, subject, date, text) of the nth newest inbox message, or None if there are fewer."""
-    for days in (3, 30, 365):
-        listing = runner(LISTING, days, 60)
-        rows = []
-        for row in listing.split(END):
-            if SEPARATOR in row:
-                message_id, received = row.strip().split(SEPARATOR, 1)
-                if message_id.strip().isdigit():
-                    rows.append((received.strip(), int(message_id)))
-        if len(rows) >= n:
-            rows.sort(reverse=True)  # ISO dates sort chronologically; newest first
-            sender, subject, received, text = (runner(MESSAGE, rows[n-1][1], 30).rstrip('\n').split(SEPARATOR, 3)+['', '', '', ''])[:4]
-            return sender.strip(), subject.strip(), received.strip(), text
-    return None
+    rows = {}
+    for row in runner(LISTING, max(30, n), 45).split(END):
+        if SEPARATOR in row:
+            message_id, received = row.strip().split(SEPARATOR, 1)
+            if message_id.strip().isdigit():
+                rows[int(message_id)] = received.strip()
+    if len(rows) < n:
+        return None
+    ordered = sorted(rows.items(), key=lambda item: item[1], reverse=True)  # ISO dates: newest first
+    sender, subject, received, text = (runner(MESSAGE, ordered[n-1][0], 30).rstrip('\n').split(SEPARATOR, 3)+['', '', '', ''])[:4]
+    return sender.strip(), subject.strip(), received.strip(), text
 
 
 def describe(n, found):
@@ -85,7 +96,9 @@ def describe(n, found):
         return 'I could not find that many recent emails in your inbox.'
     sender, subject, received, text = found
     name = re.sub(r'\s*<[^>]*>\s*$', '', sender).strip('" ') or sender
-    body = re.sub(r'\n{3,}', '\n\n', re.sub(r'[ \t]+', ' ', text)).strip()
+    # Mail's plain text keeps image placeholders (U+FFFC) and layout whitespace from HTML mail.
+    lines = [re.sub(r'[ \t\u00a0\ufffc]+', ' ', line).strip() for line in text.replace('\r', '').split('\n')]
+    body = re.sub(r'\n{3,}', '\n\n', '\n'.join(lines)).strip()
     if len(body) > 1200:
         body = body[:1200].rsplit(' ', 1)[0]+'…'
     return which+' is from '+name+(', subject "'+subject+'"' if subject else '')+(', received '+received if received else '')+'.'+('\n\n'+body if body else '')

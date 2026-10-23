@@ -94,6 +94,12 @@ visible. A highlight can move the companion beside it after the user's confirmat
 """
 
 READ_ALOUD = re.compile(r'\bread\b(?:\s+\w+){0,2}?\s+(?:out|aloud)\b|\bread (?:it |them )?(?:to me|me)\b|\bread out\b', re.I)
+GEOMETRY_WORDS = {'the', 'top', 'bottom', 'upper', 'lower', 'left', 'right', 'center', 'centre', 'middle',
+                  'side', 'edge', 'corner', 'of', 'screen', 'part', 'to'}
+# The companion moving itself: a movement verb followed only by filler and a place on the screen.
+MOVE_SELF = re.compile(r'\b(?:move|go|scoot|slide|hop|jump|get|head|fly)\s+(?:(?:yourself|over|a|bit|little|more|to|the|on|onto|towards?|all|way|of|screen)\s+)*'
+                       r'(?:(?:top|bottom|upper|lower)[\s-]*(?:left|right)?|left|right|center|centre|middle)'
+                       r'(?:\s+(?:side|edge|corner|part|of|the|screen))*\W*$', re.I)
 NEVER_MIND = re.compile(r'^\W*(?:(?:no|nope|nah|cancel|stop|never ?mind|forget it|not that)\b\W*)+$', re.I)
 BARE_VERB = re.compile(r'^\W*(?:please\s+)?(open|launch|start|close|quit|click|search|play|find)(?:\s+(?:on|for|up))?\W*$', re.I)
 MAIL_SITES = re.compile(r'^https://(?:mail\.google\.com|outlook\.(?:office|live)\.com)', re.I)
@@ -356,6 +362,17 @@ class Companion:
         except (ValueError, RuntimeError):
             return None
 
+    def read_mail_plan(self, nth, request):
+        """Read the nth newest email in code from Mail itself (exact message, exact text)."""
+        from . import mail_reader
+        try:
+            reply = mail_reader.describe(nth, mail_reader.newest(nth))
+        except (PermissionError, RuntimeError, OSError, subprocess.SubprocessError) as error:
+            reply = str(error) if isinstance(error, (PermissionError, RuntimeError)) else 'Mail did not answer. Open Mail once, then ask again.'
+        self.last_request_plan = {'operation': 'answer', 'app_name': '', 'target': '', 'reply': reply, 'computed': True,
+                                  'full_text': True, 'read_aloud': bool(READ_ALOUD.search(request))}
+        return self.last_request_plan
+
     def prepare_request(self, request):
         from .arithmetic import answer as arithmetic_answer, clock_answer
         computed = arithmetic_answer(request) if not re.search(r'\bcalculator\b', request, re.I) else None
@@ -371,13 +388,13 @@ class Companion:
         from . import mail_reader
         nth = mail_reader.position(request) if mail_reader.available() else None
         if nth:
-            # Read in code from Mail itself (exact message, exact text); see mail_reader.
-            try:
-                reply = mail_reader.describe(nth, mail_reader.newest(nth))
-            except (PermissionError, RuntimeError, OSError, subprocess.SubprocessError) as error:
-                reply = str(error) if isinstance(error, (PermissionError, RuntimeError)) else 'Mail did not answer. Open Mail once, then ask again.'
-            self.last_request_plan = {'operation': 'answer', 'app_name': '', 'target': '', 'reply': reply, 'computed': True,
-                                      'full_text': True, 'read_aloud': bool(READ_ALOUD.search(request))}
+            return self.read_mail_plan(nth, request)
+        moving = MOVE_SELF.search(request)
+        if moving and geometric_destination(moving.group(0)):
+            # "Move to the left" / "go to the top right": moving the companion itself is decided
+            # in code. It used to depend on the interpreter picking move_geometry; when it did not,
+            # the request failed with "Target is outside the captured screen".
+            self.last_request_plan = {'operation': 'move_geometry', 'app_name': '', 'target': moving.group(0), 'computed': True}
             return self.last_request_plan
         bare = BARE_VERB.match(request)
         if bare:
@@ -421,6 +438,19 @@ class Companion:
         if isinstance(interpreted, dict):
             for key in ('computed', 'full_text', 'read_aloud'):  # set only by code-computed answers
                 interpreted.pop(key, None)
+            if interpreted.get('operation') == 'read_mail':
+                # The model understood the wording; code reads the exact message.
+                from . import mail_reader
+                digits = re.findall(r'\d+', str(interpreted.get('target', '')))
+                nth = max(1, min(50, int(digits[0]))) if digits else 1
+                if mail_reader.available():
+                    return self.read_mail_plan(nth, request)
+                self.last_request_plan = {'operation': 'answer', 'app_name': '', 'target': '', 'computed': True,
+                                          'reply': 'Reading emails directly works with Apple Mail on a Mac.'}
+                return self.last_request_plan
+            if interpreted.get('operation') == 'move_object' and geometric_destination(str(interpreted.get('target', ''))) \
+                    and not set(re.findall(r'[a-z]+', str(interpreted.get('target', '')).casefold())) - GEOMETRY_WORDS:
+                interpreted = dict(interpreted, operation='move_geometry')  # "the left" is a place, not an object
         self.last_request_plan = preserve_desktop_goal(interpreted, request)
         return self.last_request_plan
 

@@ -1047,8 +1047,7 @@ class NativeTests(unittest.TestCase):
             self.assertEqual(self.window.mascot.x(), expected)
             self.assertIsNone(self.window.pending_target)
             self.assertIsNone(self.window.pending_desktop_action)
-            self.assertEqual(self.provider.calls[-1][1][-1]['content'], request)
-            self.assertEqual(self.provider.contexts[-1]['request'], request)
+        self.assertEqual(self.provider.calls, [])  # plain edge moves are decided in code, no model call
 
 
     def test_upper_left_changes_both_axes_and_precise_point_centers_character(self):

@@ -4,7 +4,7 @@ import re
 from .models import RESPONSE_SCHEMA, ValidationError
 
 OPERATIONS = ('answer', 'plan', 'inspect_screen', 'move_object', 'move_geometry',
-              'computer_task', 'inspect_media', 'play_media', 'type_text', 'press_key', 'scroll', 'capture_once', 'click_point', 'browser_search', 'browser_open', 'launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'press_control', 'highlight')
+              'computer_task', 'inspect_media', 'play_media', 'type_text', 'press_key', 'scroll', 'capture_once', 'click_point', 'browser_search', 'browser_open', 'launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'press_control', 'highlight', 'read_mail')
 INTENT_SCHEMA = {'type': 'object', 'additionalProperties': False,
     'required': ['operation', 'app_name', 'target', 'browser_mode', 'remaining_request'], 'properties': {
         'operation': {'enum': list(OPERATIONS)}, 'app_name': {'type': 'string'}, 'target': {'type': 'string'},
@@ -59,6 +59,10 @@ an EXISTING app forward; press_control presses a named control; move_object relo
 the companion toward an object/text/window; move_geometry relocates the companion to
 an edge/corner/center; highlight shows where an object is; inspect_screen explains
 current screen contents; plan creates task steps; answer handles conversation.
+read_mail reads one of the user's emails from Apple Mail, however it is phrased ("read out
+my last email", "give me my second last email here", "what did the latest mail say"):
+target is its position from the newest as a number ("1" newest/last, "2" second last).
+Use computer_task instead when the email is chosen by sender or subject.
 "Mark/show me where" and "highlight" request highlight only, even for a close or
 delete button. They never request clicking/closing. "Mark where the left terminal's
 close button is" is highlight, not computer_task or close_window.
