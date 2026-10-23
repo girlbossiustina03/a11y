@@ -236,14 +236,19 @@ SAFARI_PAGE = '''on run argv
     return (name of t) & (ASCII character 31) & (URL of t) & (ASCII character 31) & pageText
   end tell
 end run'''
+# One fixed script per Chromium browser: AppleScript needs the app named in the source to
+# know its terms ("active tab"), so the browser cannot be passed in as data.
 CHROMIUM_PAGE = '''on run argv
-  tell application id (item 1 of argv)
+  tell application id "BUNDLE"
     set t to active tab of front window
     return (title of t) & (ASCII character 31) & (URL of t) & (ASCII character 31) & ""
   end tell
 end run'''
+CHROMIUM_PAGES = {bundle: CHROMIUM_PAGE.replace('BUNDLE', bundle) for bundle in ('com.google.Chrome', 'com.microsoft.edgemac')}
 SCRIPTS = {'notes_list': NOTES_LIST, 'note_text': NOTE_TEXT, 'note_create': NOTE_CREATE, 'contacts': CONTACTS,
-           'safari_page': SAFARI_PAGE, 'chromium_page': CHROMIUM_PAGE}
+           'safari_page': SAFARI_PAGE, 'chrome_page': CHROMIUM_PAGES['com.google.Chrome'],
+           'edge_page': CHROMIUM_PAGES['com.microsoft.edgemac']}
+APPS_FOR = {'chrome_page': 'Google Chrome', 'edge_page': 'Microsoft Edge'}  # compiled only where installed
 
 
 def notes(script=run_script):
@@ -296,7 +301,9 @@ def read_page(bundle_id, script=run_script):
     if bundle_id == 'com.apple.Safari':
         title, url, text = (script(SAFARI_PAGE, app='Safari').split(SEP, 2)+['', '', ''])[:3]
     else:
-        title, url, text = (script(CHROMIUM_PAGE, bundle_id, app='your browser').split(SEP, 2)+['', '', ''])[:3]
+        if bundle_id not in CHROMIUM_PAGES:
+            raise AppError('I can read pages from Safari, Chrome or Edge.')
+        title, url, text = (script(CHROMIUM_PAGES[bundle_id], app='your browser').split(SEP, 2)+['', '', ''])[:3]
     return title.strip(), url.strip(), re.sub(r'\n{3,}', '\n\n', text.strip())
 
 

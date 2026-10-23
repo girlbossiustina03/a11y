@@ -255,6 +255,9 @@ class AppleScriptCompileTests(unittest.TestCase):
         from companion import mail_reader
         scripts = dict(mac_apps.SCRIPTS, mail_listing=mail_reader.LISTING, mail_message=mail_reader.MESSAGE)
         for name, source in scripts.items():
+            app = mac_apps.APPS_FOR.get(name)
+            if app and not Path('/Applications/'+app+'.app').exists():
+                continue  # its terms are only known where the browser is installed
             with tempfile.TemporaryDirectory() as folder:
                 result = subprocess.run(['osacompile', '-e', source, '-o', str(Path(folder)/'check.scpt')],
                                         capture_output=True, text=True, timeout=120)

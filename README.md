@@ -53,6 +53,7 @@ Instead of unbounded autonomous execution or rigid scripted workflows, A11y oper
 | **Autonomous Computer Tasks** | Screenshot/action loop | Screenshot/action loop with UI Automation, typing and keys (not yet verified on hardware) | — | Workflow guidance |
 | **Text-to-Speech (TTS)** | Qt `QTextToSpeech` | Qt `QTextToSpeech` / SAPI | Speech Dispatcher | Web Speech API |
 | **Voice Input (STT)** | "Hey Ally" (local faster-whisper) | "Hey Ally" (local faster-whisper) | — | Web Speech Recognition |
+| **Built-in apps in code** | Mail, Calendar, Reminders, Notes, Contacts, Finder, browser page, Shortcuts | — | — | — |
 
 ---
 
@@ -65,7 +66,8 @@ Instead of unbounded autonomous execution or rigid scripted workflows, A11y oper
 - **Enterprise onboarding & cited retrieval** — Import internal Markdown or text handbooks (e.g. `examples/onboarding.md`). Generated onboarding steps must cite an exact chunk from the imported material; uncited claims are rejected by the validation pipeline.
 - **Adaptive accessibility profiling** — A11y adapts to how you work. Repeatedly asking for shorter answers triggers a suggestion in **Settings → Preferences** to permanently adopt a concise style. Explicit preferences always take precedence over learned ones.
 - **Prompt-only bar & speech balloon** — Normal conversation takes place in a minimalist 240px wide input bar. Replies appear in an auto-sizing speech balloon overhead with text-to-speech support and accessible contrast.
-- **Hands-free voice ("Hey Ally")** — Right-click the companion → **Turn on voice**. Say "Hey Ally" (or "Hey Ally, open Teams"), then talk naturally: every spoken request takes exactly the same path as typed text, replies are read aloud in a natural local voice (Kokoro “Heart”, open weights, downloaded once when voice is turned on; `A11Y_VOICE` selects another Kokoro voice) or the system voice when it is unavailable, and confirmations accept "yes" / "no". After a reply A11y listens again; "goodbye" or 30 s of silence returns to waiting for "Hey Ally". `Ctrl+Shift+Space` starts a conversation from the keyboard. Speech is recognized locally with faster-whisper (`tiny.en` for the wake phrase, `small.en` for requests); audio is never saved or sent anywhere, and the microphone pauses while A11y speaks or works.
+- **Hands-free voice ("Hey Ally")** — Right-click the companion → **Turn on voice**. Say "Hey Ally" (or "Hey Ally, open Teams"), then talk naturally: every spoken request takes exactly the same path as typed text, replies are read aloud in a natural local voice (Kokoro “Heart”, open weights, downloaded once when voice is turned on; `A11Y_VOICE` selects another Kokoro voice) or the system voice when it is unavailable, and confirmations accept "yes" / "no". After a reply A11y listens again for 8 s; "goodbye", silence or a finished task returns to waiting for "Hey Ally". `Ctrl+Shift+Space` starts a conversation from the keyboard. Speech is recognized locally with faster-whisper (`tiny.en` for the wake phrase, `small.en` for requests); audio is never saved or sent anywhere, and the microphone pauses while A11y speaks or works.
+- **Built-in Mac apps, done in code** — Ask in your own words: “read out my last email”, “what's on my calendar tomorrow”, “what do I have to do today”, “read my trip note”, “what's Ana's number”, “what did I download last”, “summarize this page”, “run my morning shortcut”. The local model only works out what you want; A11y then reads the exact data from Mail, Calendar and Reminders (EventKit, recurring events included), Notes, Contacts, your Downloads/Desktop/Documents folders, the browser's current tab and Shortcuts. Nothing is screenshotted, and emails are not sent to a model or saved in History. Changes (adding an event, reminder or note, ticking off a reminder, running a shortcut) are shown as a button and happen only when you press it or say “yes”.
 - **Multi-instance locking** — A process-lifetime lock in `%LOCALAPPDATA%\A11y` or `.data/` guarantees only one instance touches the SQLite stores at a time, displaying the active PID and git build ID if a collision occurs.
 
 ---
@@ -83,17 +85,24 @@ tagged **Release**:
 On first launch, **Get A11y ready** offers to install everything that is missing, only after you press
 **Set up**: Ollama (downloaded from ollama.com, signature verified before use) and two local models
 chosen for your RAM (`qwen3:4b-instruct` + `qwen3-vl:4b-instruct` on 16 GB or more, smaller models
-below). Reopen it any time from the mascot's right-click menu → **Set up local AI…**. Voice ("Hey Ally")
-is included; its speech model downloads once when you turn voice on.
+below), plus the voice models (Whisper speech recognition and, on macOS, the natural Kokoro voice).
+Reopen it any time from the mascot's right-click menu → **Set up AI and voice…**.
 
-macOS asks for permissions as features need them: Accessibility (app awareness and control), Screen
-Recording (screen vision), Microphone (voice) and Automation (Music/Safari). Settings, data and the
+macOS asks for permissions as features need them: Accessibility (app awareness and clicking), Screen
+Recording (screen vision), Microphone (voice), Calendars and Reminders, Automation (Mail, Notes,
+Contacts, Music and your browser) and file access (Downloads, Desktop, Documents). Unsigned builds
+count as a new app after every update, so macOS may ask again; A11y clears its stale Accessibility
+entry and re-prompts when clicking is blocked. To keep permissions across updates, run
+`packaging/make_signing_certificate.sh` once and add its two values as the `MACOS_SIGNING_P12` and
+`MACOS_SIGNING_PASSWORD` repository secrets: every build is then signed with the same identity. Settings, data and the
 log live in `~/Library/Application Support/A11y` (`%LOCALAPPDATA%\A11y` on Windows); the log is `a11y.log`.
 
 **Build it yourself:** `packaging/build_macos.sh` on a Mac (needs Xcode Command Line Tools for the
 Swift helpers) or `packaging/build_windows.ps1` on Windows; output goes to `dist/`. To use your own
 icon artwork, save it as `packaging/icon-source.png` before building. The `Package apps` workflow
-builds both on every push to `main`; pushing a `v*` tag publishes a release. Optional secrets
+builds both on every push to `main` and runs each packaged app's `--self-test` (HTTPS, voice,
+helpers, permissions strings) before anything is published. To publish a release, run the workflow
+from **Actions → Package apps → Run workflow** with a version such as `v1.0.0` (or push a `v*` tag). Optional secrets
 `MACOS_SIGN_IDENTITY`, `APPLE_ID`, `APPLE_TEAM_ID` and `APPLE_APP_PASSWORD` enable Developer ID
 signing and notarization.
 

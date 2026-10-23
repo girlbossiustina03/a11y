@@ -771,15 +771,17 @@ class CompanionWindow(QMainWindow):
             else:
                 QTimer.singleShot(0, lambda: self.execute_desktop_action(proposal))
             return
+        moving = None
+        if self.pending_desktop_action and self.pending_desktop_action['type'] == 'move_companion':
+            # Moves right away, so no "Move to …" button is left behind on the reply.
+            moving, self.pending_desktop_action = self.pending_desktop_action['destination'], None
         full = response['sources'] or response.get('full_text')  # cited answers and emails are shown whole
         self.mascot_home(response['message'] if full else brief(response['message'], 2, 45), sources=response['sources'])
         if response.get('read_aloud') and self.tts and not self.voice_conversation:
             self.speak_now(speakable(response['message']))  # "read out my last email" (in a voice chat it is spoken anyway)
-        if self.pending_desktop_action and self.pending_desktop_action['type'] == 'move_companion':
-            destination = self.pending_desktop_action['destination']
-            self.pending_desktop_action = None
-            self.move_companion(destination)
-            self.transcript.appendPlainText('Companion moving to '+destination.replace('_', ' ')+'.\n')
+        if moving:
+            self.move_companion(moving)
+            self.transcript.appendPlainText('Companion moving to '+moving.replace('_', ' ')+'.\n')
         elif self.pending_desktop_action and self.pending_desktop_action['type'] == 'move_to_point':
             action = self.pending_desktop_action
             self.pending_desktop_action = None
@@ -804,8 +806,11 @@ class CompanionWindow(QMainWindow):
         self.mascot.set_state('idle')
         if 'Accessibility permission' in message and sys.platform == 'darwin':
             self.ask_for_accessibility()
+            from .paths import frozen
             self.mascot_home('macOS is still blocking clicks for this version of A11y. I cleared its old entry: '
-                             'switch A11y on in the list I opened, then ask again.')
+                             'switch A11y on in the list I opened, then ask again.' if frozen() else
+                             'macOS is blocking clicks. Running from source, the permission belongs to the app that '
+                             'started A11y (Terminal, iTerm or your editor): switch that on in the list I opened.')
             return
         self.mascot_home('I couldn’t do that. '+message)
 
@@ -1137,6 +1142,7 @@ class CompanionWindow(QMainWindow):
         self.mascot.voice_on = False
         if self.voice:
             self.voice.stop()
+        self.mascot.input.setPlaceholderText('Ask anything…')
 
     def voice_ready(self):
         if self.voice and self.voice.open_microphone() and self.voice_announce:
@@ -1146,6 +1152,9 @@ class CompanionWindow(QMainWindow):
     def voice_status(self, message):
         self.mascot.footer.setText(message)
         self.statusBar().showMessage(message)
+        # The footer is hidden in the compact pill; the placeholder shows what voice is doing.
+        self.mascot.voice_placeholder = message
+        self.mascot.input.setPlaceholderText(message if self.mascot.voice_on else 'Ask anything…')
 
     def voice_failed(self, message):
         self.stop_voice()
@@ -1814,7 +1823,10 @@ class CompanionWindow(QMainWindow):
                     self.set_busy(True)
                     worker = AppWriteWorker(self.desktop_monitor.bridge, proposed, self)
                     self.app_writer = worker
-                    worker.result.connect(lambda message: self.mascot_home(message))
+                    def done(message):
+                        self.service.store.add_exchange(self.service.identity, proposed['label'], message)  # what actually happened
+                        self.mascot_home(message)
+                    worker.result.connect(done)
                     worker.failed.connect(lambda message: self.mascot_home('I couldn’t do that. '+message))
                     worker.finished.connect(lambda: self.set_busy(False))
                     worker.start()

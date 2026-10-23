@@ -1031,6 +1031,32 @@ class NativeTests(unittest.TestCase):
             enable.assert_not_called()
 
 
+    def test_app_change_waits_for_the_button_then_runs_once(self):
+        from test_mac_apps import FakeBridge as AppsBridge
+        apps = AppsBridge()
+        self.window.desktop_monitor.bridge.add_reminder = apps.add_reminder
+        self.service.provider.interpret_request = lambda request, recent=(), context=None: {
+            'operation': 'add_reminder', 'app_name': '', 'target': 'Call mom | 2030-01-02T18:00', 'reply': '',
+            'browser_mode': 'default', 'remaining_request': ''}
+        with patch('companion.mac_apps.available', return_value=True):
+            self.window.mascot_submit('remind me to call mom', 'chat')
+            for _ in range(300):
+                self.qt.processEvents()
+                QTest.qWait(5)
+                if not self.window.worker.isRunning():
+                    break
+            self.qt.processEvents()
+            self.assertEqual(self.window.pending_desktop_action['kind'], 'add_reminder')
+            self.assertEqual(apps.calls, [])  # nothing written before the button
+            choices = [self.window.mascot.choice_layout.itemAt(i).widget().text() for i in range(self.window.mascot.choice_layout.count())]
+            self.assertIn('Add reminder “Call mom” for Wednesday 02 January at 18:00', choices)
+            self.window.mascot_action('desktop:apply')
+            self.window.app_writer.wait(3000)
+            self.qt.processEvents()
+        self.assertEqual([c[:2] for c in apps.calls], [('add_reminder', 'Call mom')])
+        self.assertEqual(self.window.mascot.bubble.toPlainText(), 'Added the reminder to Reminders.')
+        self.assertIsNone(self.window.pending_desktop_action)
+
     def test_left_then_right_requests_move_without_reusing_old_target(self):
         self.service.adaptation.set_explicit(self.service.identity, {'reduced_motion': True}, False)
         self.service.desktop_session.append({'role': 'assistant',

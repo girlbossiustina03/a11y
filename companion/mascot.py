@@ -403,7 +403,9 @@ class Mascot(QWidget):
         self.choice_area.setVisible(bool(choices))
         self.entry_row.setVisible(placeholder is not None or compact)
         self.submit_action = submit_action
-        self.input.setPlaceholderText(placeholder or ('Ask anything…' if compact else ''))
+        voice = getattr(self, 'voice_placeholder', '') if getattr(self, 'voice_on', False) else ''
+        self.input.setPlaceholderText(placeholder if placeholder and placeholder != 'Ask anything…' else
+                                      (voice or 'Ask anything…') if compact or placeholder else '')
         self.input.setText(draft)
         self.update_interaction_state()
         self.reply_available = bool(message) or bool(choices)
