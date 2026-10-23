@@ -142,6 +142,25 @@ class ComputerActionWorker(QThread):
             self.failed.emit('The action result is uncertain. Check the app before trying again.')
 
 
+class AppWriteWorker(QThread):
+    """Runs one app change the user confirmed (Calendar, Reminders, Notes, Shortcuts)."""
+    result = pyqtSignal(str)
+    failed = pyqtSignal(str)
+
+    def __init__(self, bridge, action, parent=None):
+        super().__init__(parent)
+        self.bridge, self.action = bridge, dict(action)
+
+    def run(self):
+        from . import mac_apps
+        try:
+            self.result.emit(mac_apps.perform(self.action, bridge=self.bridge))
+        except (PermissionError, mac_apps.AppError, RuntimeError, ValueError) as error:
+            self.failed.emit(str(error))
+        except Exception:
+            self.failed.emit('That change may not have been saved. Check the app before trying again.')
+
+
 class VisionPermission(QThread):
     result = pyqtSignal(object)
     failed = pyqtSignal(str)
@@ -1788,6 +1807,17 @@ class CompanionWindow(QMainWindow):
                     return
                 if proposed['type'] == 'move_companion':
                     self.move_companion(proposed['destination'])
+                    return
+                if proposed['type'] == 'app_write':
+                    # The user pressed the button (or said yes) for this exact change.
+                    self.pending_desktop_action = None
+                    self.set_busy(True)
+                    worker = AppWriteWorker(self.desktop_monitor.bridge, proposed, self)
+                    self.app_writer = worker
+                    worker.result.connect(lambda message: self.mascot_home(message))
+                    worker.failed.connect(lambda message: self.mascot_home('I couldn’t do that. '+message))
+                    worker.finished.connect(lambda: self.set_busy(False))
+                    worker.start()
                     return
                 if proposed['type'] in ('focus_app', 'press_control', 'launch_app', 'quit_app', 'new_window', 'close_window', 'browse_url', 'click_point', 'play_media', 'type_text', 'press_key', 'scroll', 'wait'):
                     self.execute_desktop_action(proposed)

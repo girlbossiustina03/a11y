@@ -201,6 +201,7 @@ class VoiceListener(QObject):
         self.generation = 0
         self.source = self.device = None
         self.heard_signal = False
+        self.session = 0
         self.vocabulary = []
         self.last_speech = time.monotonic()
         self.idle_timer = QTimer(self)
@@ -213,17 +214,21 @@ class VoiceListener(QObject):
             self.failed.emit('Voice needs the speech package. Install it with: pip install -r requirements-voice.txt')
             return
         self.mode = 'loading'
+        self.session += 1
         self.status.emit('Getting my ears ready… (the first time downloads the speech models)')
-        self.executor.submit(self._load)
+        self.executor.submit(self._load, self.session)
 
-    def _load(self):
+    def _load(self, session):
         try:
             self.transcriber.model(WAKE_MODEL)
             self.transcriber.model(SPEECH_MODEL)
         except Exception as error:  # download or runtime problem; reported in the UI
-            self.failed.emit('The speech models could not be loaded: '+str(error)[:200])
+            if session == self.session:
+                self.failed.emit('The speech models could not be loaded: '+str(error)[:200])
             return
-        self.ready.emit()
+        # Turned off (or restarted) while the models loaded: do not open the microphone.
+        if session == self.session and self.mode == 'loading':
+            self.ready.emit()
 
     def microphone_permission(self):
         """'granted', 'denied' or 'asking'. macOS only answers apps that ask first: without the
@@ -247,6 +252,8 @@ class VoiceListener(QObject):
     def permission_answered(self, permission):
         from PyQt6.QtCore import QCoreApplication, Qt
         app = QCoreApplication.instance()
+        if self.mode != 'loading':
+            return  # voice was turned off while macOS asked
         if app is not None and app.checkPermission(permission) == Qt.PermissionStatus.Granted:
             self.open_microphone()
         else:
@@ -262,6 +269,8 @@ class VoiceListener(QObject):
     def open_microphone(self):
         """Called on the GUI thread once the models are ready."""
         from PyQt6.QtMultimedia import QAudioFormat, QAudioSource, QMediaDevices
+        if self.mode != 'loading':
+            return self.source is not None  # turned off meanwhile, or already open
         permission = self.microphone_permission()
         if permission == 'asking':
             return True
@@ -282,23 +291,33 @@ class VoiceListener(QObject):
         self.device = self.source.start()
         self.device.readyRead.connect(self.read_audio)
         self.idle_timer.start(1000)
-        QTimer.singleShot(2500, self.check_microphone)
+        session = self.session
+        QTimer.singleShot(3000, lambda: self.check_microphone(session, final=False))
         self.wait_for_wake()
         return True
 
-    def check_microphone(self):
+    def check_microphone(self, session=None, final=True):
         from PyQt6.QtMultimedia import QAudio
-        if self.source is None:
-            return
+        if self.source is None or (session is not None and session != self.session):
+            return  # stopped or restarted since this check was scheduled
         # A blocked microphone shows up as an error on Windows and as pure digital silence on macOS.
-        if self.source.error() != QAudio.Error.NoError or not self.heard_signal:
-            self.stop()
-            self.failed.emit('The microphone is blocked. On Windows allow it in Settings → Privacy & security → '
-                             'Microphone → "Let desktop apps access your microphone". On macOS turn on A11y in '
-                             'System Settings → Privacy & Security → Microphone.')
+        # Bluetooth headsets send silence for a few seconds while they switch to their microphone,
+        # so silence is only called blocked if it lasts through a second, later check.
+        if self.source.error() == QAudio.Error.NoError and self.heard_signal:
+            return
+        if self.source.error() == QAudio.Error.NoError and not final:
+            self.status.emit('Waiting for the microphone…')
+            QTimer.singleShot(5000, lambda: self.check_microphone(session, final=True))
+            return
+        self.stop()
+        where = ('A11y' if paths.frozen() or sys.platform != 'darwin' else 'the terminal app you started A11y from')
+        self.failed.emit('I can’t hear anything from the microphone. On a Mac turn on '+where+' in System Settings → '
+                         'Privacy & Security → Microphone; on Windows allow it in Settings → Privacy & security → '
+                         'Microphone → "Let desktop apps access your microphone". Then turn voice on again.')
 
     def stop(self):
         self.generation += 1
+        self.session += 1  # cancels loading, permission answers and microphone checks still pending
         self.mode = 'off'
         self.capturing = False
         self.idle_timer.stop()

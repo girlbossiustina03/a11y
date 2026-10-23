@@ -1,5 +1,6 @@
 """Interactive mascot conversation. Artwork is independently replaceable."""
 import math
+import sys
 import os
 from .theme import MASCOT_STYLE, MENU_STYLE
 from .icons import control_icon
@@ -7,7 +8,7 @@ from PyQt6.QtWidgets import (
     QApplication, QWidget, QFrame, QVBoxLayout, QHBoxLayout, QPushButton,
     QPlainTextEdit, QLineEdit, QGridLayout, QLabel, QAbstractButton, QMenu, QScrollArea, QGraphicsDropShadowEffect)
 from PyQt6.QtCore import Qt, QTimer, QPoint, QPointF, QRectF, QElapsedTimer, pyqtSignal, QRect, QSize, QEvent
-from PyQt6.QtGui import QPainter, QPainterPath, QColor, QPen, QShortcut, QKeySequence, QPixmap, QFontMetrics, QCursor
+from PyQt6.QtGui import QPainter, QPainterPath, QColor, QPen, QShortcut, QKeySequence, QPixmap, QFontMetrics, QCursor, QTextLayout, QTextOption
 
 
 class RoundedMenu(QMenu):
@@ -195,6 +196,8 @@ class Mascot(QWidget):
         self.input.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.input.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.input.document().setDocumentMargin(0)
+        # Break a long unbroken word (a link, a pasted code) too, so the pill grows for it.
+        self.input.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
         self.input.setTabChangesFocus(True)
         self.input.textChanged.connect(self.limit_input)
         self.input.textChanged.connect(self.grow_prompt)
@@ -431,10 +434,11 @@ class Mascot(QWidget):
         width = self.input.viewport().width() if self.input.isVisible() else 0
         if width < 40:  # not laid out yet: the pill minus its padding and both buttons
             width = self.expanded_width-16-18-4-2*(32+4)
-        text = self.input.toPlainText() or ' '
-        if text.endswith('\n'):
-            text += ' '
-        lines = max(1, round(metrics.boundingRect(QRect(0, 0, width, 100000), Qt.TextFlag.TextWordWrap, text).height()/line))
+        try:
+            lines = self.wrapped_lines(width)
+        except Exception as error:  # never leave the pill stuck at one line because of a measuring error
+            print('A11y prompt sizing fell back:', error, file=sys.stderr, flush=True)
+            lines = max(1, self.input.toPlainText().count('\n')+1+len(self.input.toPlainText())*metrics.averageCharWidth()//max(1, width))
         tallest = self.character.height()+base+6
         height = min(tallest, max(base, lines*line+16))
         self.input.setFixedHeight(metrics.height()+2 if lines == 1 else min(height-12, lines*line+2))
@@ -446,6 +450,29 @@ class Mascot(QWidget):
         if sheet != self.prompt_sheet:
             self.prompt_sheet = sheet
             self.card.setStyleSheet(sheet)
+
+    def wrapped_lines(self, width):
+        """Lines the composer shows at this width, laid out with its own font and wrap rules
+        (an estimate from font metrics disagreed with the real wrapping on macOS)."""
+        option = QTextOption()
+        option.setWrapMode(self.input.wordWrapMode())
+        count = 0
+        block = self.input.document().begin()
+        while block.isValid():
+            layout = QTextLayout(block.text() or ' ', self.input.font())
+            layout.setTextOption(option)
+            layout.beginLayout()
+            lines = 0
+            while True:
+                row = layout.createLine()
+                if not row.isValid():
+                    break
+                row.setLineWidth(width)
+                lines += 1
+            layout.endLayout()
+            count += max(1, lines)
+            block = block.next()
+        return max(1, count)
 
     def size_message(self, message):
         metrics = QFontMetrics(self.bubble.font())

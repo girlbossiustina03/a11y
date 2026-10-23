@@ -4,7 +4,9 @@ import re
 from .models import RESPONSE_SCHEMA, ValidationError
 
 OPERATIONS = ('answer', 'plan', 'inspect_screen', 'move_object', 'move_geometry',
-              'computer_task', 'inspect_media', 'play_media', 'type_text', 'press_key', 'scroll', 'capture_once', 'click_point', 'browser_search', 'browser_open', 'launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'press_control', 'highlight', 'read_mail')
+              'computer_task', 'inspect_media', 'play_media', 'type_text', 'press_key', 'scroll', 'capture_once', 'click_point', 'browser_search', 'browser_open', 'launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'press_control', 'highlight', 'read_mail',
+              'read_calendar', 'add_event', 'read_reminders', 'add_reminder', 'complete_reminder', 'read_notes',
+              'create_note', 'find_contact', 'recent_files', 'open_file', 'read_page', 'list_shortcuts', 'run_shortcut')
 INTENT_SCHEMA = {'type': 'object', 'additionalProperties': False,
     'required': ['operation', 'app_name', 'target', 'browser_mode', 'remaining_request'], 'properties': {
         'operation': {'enum': list(OPERATIONS)}, 'app_name': {'type': 'string'}, 'target': {'type': 'string'},
@@ -63,6 +65,16 @@ read_mail reads one of the user's emails from Apple Mail, however it is phrased 
 my last email", "give me my second last email here", "what did the latest mail say"):
 target is its position from the newest as a number ("1" newest/last, "2" second last).
 Use computer_task instead when the email is chosen by sender or subject.
+Built-in Mac apps (A11y does these exactly; put the details in target, use "now" for dates):
+read_calendar target today|tomorrow|week|next|a weekday|YYYY-MM-DD ("any meetings today?",
+"what's my next meeting"); add_event target "title | YYYY-MM-DDTHH:MM | minutes";
+read_reminders target today|all ("what do I have to do"); add_reminder target
+"title | YYYY-MM-DDTHH:MM or empty"; complete_reminder target = the reminder's title;
+read_notes target = a note's title, "latest", or empty to list them; create_note target
+"title | text"; find_contact target = a person's name ("what's Ana's number");
+recent_files target downloads|desktop|documents|empty; open_file target = a file name
+or "latest download"; read_page for questions about the web page open in the browser
+("summarize this page"); list_shortcuts; run_shortcut target = the shortcut's name.
 "Mark/show me where" and "highlight" request highlight only, even for a close or
 delete button. They never request clicking/closing. "Mark where the left terminal's
 close button is" is highlight, not computer_task or close_window.
@@ -114,7 +126,7 @@ def with_opening(plan, request):
 
 
 def validate_plan(value):
-    if not isinstance(value, dict) or not {'operation', 'app_name', 'target'} <= set(value) or set(value) - {'operation', 'app_name', 'target', 'browser_mode', 'remaining_request', 'media_artist', 'goal_mode', 'opening', 'reply', 'computed', 'full_text', 'read_aloud'}:
+    if not isinstance(value, dict) or not {'operation', 'app_name', 'target'} <= set(value) or set(value) - {'operation', 'app_name', 'target', 'browser_mode', 'remaining_request', 'media_artist', 'goal_mode', 'opening', 'reply', 'computed', 'full_text', 'read_aloud', 'app_write'}:
         raise ValidationError('The request could not be interpreted reliably. Please name the action and target.')
     if value['operation'] not in OPERATIONS or any(not isinstance(value[key], str) or len(value[key]) > (2000 if key == 'target' else 500) for key in ('app_name', 'target')):
         raise ValidationError('The request planner returned an invalid operation.')

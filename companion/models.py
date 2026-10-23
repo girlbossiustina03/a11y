@@ -108,6 +108,22 @@ def validate_response(value, allowed_sources, *, planning=False, has_screen=Fals
             if action.get('goal_mode', 'inspect') not in ('inspect', 'draft', 'change'):
                 raise ValidationError('Invalid task scope.')
             result['desktop_action'] = dict(action, goal=text(action['goal'], 'task goal', 2000), label='Start computer task')
+        elif isinstance(action, dict) and action.get('type') == 'app_write':
+            # A change to Calendar/Reminders/Notes/Shortcuts, built in code from the user's
+            # request (mac_apps.prepare) and run only after the user confirms it.
+            allowed = {'add_event': ('title', 'start', 'end'), 'add_reminder': ('title', 'due'),
+                       'complete_reminder': ('id', 'title'), 'create_note': ('title', 'body'), 'run_shortcut': ('name',)}
+            fields = allowed.get(action.get('kind'))
+            if fields is None or set(action) != {'type', 'kind', 'label', *fields}:
+                raise ValidationError('Unsupported app change.')
+            for key in fields:
+                value = action[key]
+                if key in ('start', 'end', 'due'):
+                    if type(value) is not int or value < 0:
+                        raise ValidationError('Invalid time for that app change.')
+                elif not isinstance(value, str) or len(value) > (5000 if key == 'body' else 300) or (key != 'body' and not value.strip()):
+                    raise ValidationError('Invalid details for that app change.')
+            result['desktop_action'] = dict(action, label=text(action['label'], 'action label', 240))
         elif isinstance(action, dict) and action.get('type') == 'wait':
             keys(action, ('type', 'milliseconds'), ('type', 'milliseconds'))
             if type(action['milliseconds']) is not int or action['milliseconds'] not in (250, 500, 1000):

@@ -877,6 +877,10 @@ class NativeTests(unittest.TestCase):
         mascot.input.clear()
         self.qt.processEvents()
         self.assertEqual(mascot.card.height(), mascot.PROMPT_HEIGHT)
+        # Reported: one long word (a link) never wrapped, so the pill stayed one line.
+        mascot.input.setPlainText('https://example.com/'+'a'*150)
+        self.qt.processEvents()
+        self.assertGreater(mascot.card.height(), mascot.PROMPT_HEIGHT)
         self.window.mascot_home('Here is an answer.')
         self.qt.processEvents()
         self.assertTrue(mascot.reply_panel.isVisible())

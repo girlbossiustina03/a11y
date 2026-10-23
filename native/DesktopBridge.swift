@@ -2,6 +2,7 @@
 // Never reads AXValue, selected text, clipboard, screenshots, or secure input contents.
 import AppKit
 import ApplicationServices
+import EventKit
 import Foundation
 
 func emit(_ value: [String: Any]) {
@@ -249,6 +250,94 @@ func installedApps() -> [[String: String]] {
         }
     }
     return result.sorted { $0["name"]! < $1["name"]! }
+}
+// Calendar and Reminders through EventKit (recurring events included, unlike AppleScript).
+// Reading needs the user's Calendars/Reminders permission; adding is only ever run after the
+// user confirmed that exact item in A11y.
+func eventStore(_ type: EKEntityType) -> EKEventStore? {
+    let store = EKEventStore()
+    let done = DispatchSemaphore(value: 0)
+    var granted = false
+    if #available(macOS 14.0, *) {
+        if type == .event {
+            store.requestFullAccessToEvents { ok, _ in granted = ok; done.signal() }
+        } else {
+            store.requestFullAccessToReminders { ok, _ in granted = ok; done.signal() }
+        }
+    } else {
+        store.requestAccess(to: type) { ok, _ in granted = ok; done.signal() }
+    }
+    _ = done.wait(timeout: .now() + 60)
+    return granted ? store : nil
+}
+func accessError(_ type: EKEntityType) -> [String: Any] {
+    let pane = type == .event ? "Calendars" : "Reminders"
+    return ["error": "Allow A11y to use " + pane + " in System Settings > Privacy & Security > " + pane + ", then ask again."]
+}
+if let index = args.firstIndex(of: "--calendar-events"), index+2 < args.count {
+    guard let from = Double(args[index+1]), let to = Double(args[index+2]), to > from, to - from <= 62 * 86400 else {
+        emit(["error": "Invalid calendar range."]); exit(1)
+    }
+    guard let store = eventStore(.event) else { emit(accessError(.event)); exit(1) }
+    let predicate = store.predicateForEvents(withStart: Date(timeIntervalSince1970: from), end: Date(timeIntervalSince1970: to), calendars: nil)
+    let events = store.events(matching: predicate).sorted { $0.startDate < $1.startDate }.prefix(40)
+    emit(["events": events.map { event -> [String: Any] in
+        ["title": event.title ?? "", "start": event.startDate.timeIntervalSince1970, "end": event.endDate.timeIntervalSince1970,
+         "all_day": event.isAllDay, "location": event.location ?? "", "calendar": event.calendar?.title ?? ""]
+    }]); exit(0)
+}
+if args.contains("--reminders") {
+    guard let store = eventStore(.reminder) else { emit(accessError(.reminder)); exit(1) }
+    let predicate = store.predicateForIncompleteReminders(withDueDateStarting: nil, ending: nil, calendars: nil)
+    let done = DispatchSemaphore(value: 0)
+    var found: [EKReminder] = []
+    store.fetchReminders(matching: predicate) { reminders in found = reminders ?? []; done.signal() }
+    _ = done.wait(timeout: .now() + 30)
+    emit(["reminders": found.prefix(60).map { reminder -> [String: Any] in
+        var item: [String: Any] = ["title": reminder.title ?? "", "list": reminder.calendar?.title ?? "", "id": reminder.calendarItemIdentifier]
+        if let due = reminder.dueDateComponents, let date = Calendar.current.date(from: due) { item["due"] = date.timeIntervalSince1970 }
+        return item
+    }]); exit(0)
+}
+if let index = args.firstIndex(of: "--add-event"), index+3 < args.count {
+    guard let start = Double(args[index+2]), let end = Double(args[index+3]), end > start, !args[index+1].isEmpty else {
+        emit(["error": "Invalid event."]); exit(1)
+    }
+    guard let store = eventStore(.event) else { emit(accessError(.event)); exit(1) }
+    let event = EKEvent(eventStore: store)
+    event.title = String(args[index+1].prefix(200))
+    event.startDate = Date(timeIntervalSince1970: start)
+    event.endDate = Date(timeIntervalSince1970: end)
+    event.calendar = store.defaultCalendarForNewEvents
+    do { try store.save(event, span: .thisEvent, commit: true) } catch {
+        emit(["error": "Calendar did not save the event."]); exit(1)
+    }
+    emit(["submitted": true, "calendar": event.calendar?.title ?? ""]); exit(0)
+}
+if let index = args.firstIndex(of: "--add-reminder"), index+2 < args.count {
+    guard !args[index+1].isEmpty else { emit(["error": "Invalid reminder."]); exit(1) }
+    guard let store = eventStore(.reminder) else { emit(accessError(.reminder)); exit(1) }
+    let reminder = EKReminder(eventStore: store)
+    reminder.title = String(args[index+1].prefix(200))
+    reminder.calendar = store.defaultCalendarForNewReminders()
+    if let due = Double(args[index+2]), due > 0 {
+        reminder.dueDateComponents = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: Date(timeIntervalSince1970: due))
+    }
+    do { try store.save(reminder, commit: true) } catch {
+        emit(["error": "Reminders did not save the reminder."]); exit(1)
+    }
+    emit(["submitted": true, "list": reminder.calendar?.title ?? ""]); exit(0)
+}
+if let index = args.firstIndex(of: "--complete-reminder"), index+1 < args.count {
+    guard let store = eventStore(.reminder) else { emit(accessError(.reminder)); exit(1) }
+    guard let reminder = store.calendarItem(withIdentifier: args[index+1]) as? EKReminder else {
+        emit(["error": "That reminder no longer exists."]); exit(1)
+    }
+    reminder.isCompleted = true
+    do { try store.save(reminder, commit: true) } catch {
+        emit(["error": "Reminders did not save the change."]); exit(1)
+    }
+    emit(["submitted": true]); exit(0)
 }
 if args.contains("--catalog") { emit(["installed_apps": installedApps()]); exit(0) }
 if let index = args.firstIndex(of: "--app-state"), index+1 < args.count {

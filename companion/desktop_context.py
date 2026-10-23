@@ -43,6 +43,10 @@ def default_browser_id():
     return None
 
 
+# Calendar/Reminders calls may wait for the user to answer the macOS permission prompt.
+EVENTKIT_FLAGS = ('--calendar-events', '--reminders', '--add-event', '--add-reminder', '--complete-reminder')
+
+
 class MacDesktopBridge:
     def __init__(self, directory):
         from .paths import bundled_helper
@@ -73,7 +77,7 @@ class MacDesktopBridge:
         self.prepare()
         try:
             result = subprocess.run([str(self.binary), '--exclude-pid', str(os.getpid()), *args],
-                                    capture_output=True, timeout=45 if any(flag in args for flag in ('--browse', '--music-state', '--music-play')) or ('--new-window' in args and 'com.apple.Safari' in args) else 4)
+                                    capture_output=True, timeout=90 if any(flag in args for flag in EVENTKIT_FLAGS) else 45 if any(flag in args for flag in ('--browse', '--music-state', '--music-play')) or ('--new-window' in args and 'com.apple.Safari' in args) else 4)
             value = json.loads(result.stdout)
             if result.returncode or not isinstance(value, dict) or value.get('error'):
                 raise RuntimeError(str((value.get('error') if isinstance(value, dict) else '') or 'Desktop operation failed; the app may have changed.'))
@@ -108,6 +112,21 @@ class MacDesktopBridge:
 
     def media_state(self):
         return self.call('--music-state')
+
+    def calendar_events(self, start, end):
+        return self.call('--calendar-events', str(start), str(end)).get('events', [])
+
+    def reminders(self):
+        return self.call('--reminders').get('reminders', [])
+
+    def add_event(self, title, start, end):
+        return self.call('--add-event', title, str(start), str(end))
+
+    def add_reminder(self, title, due):
+        return self.call('--add-reminder', title, str(due or 0))
+
+    def complete_reminder(self, identifier):
+        return self.call('--complete-reminder', identifier)
 
     def application_action(self, action):
         kind = action['type']

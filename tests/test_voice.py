@@ -319,13 +319,41 @@ class MicrophonePermissionTests(unittest.TestCase):
         # From source the terminal owns the microphone prompt, so recording is still attempted.
         self.assertEqual(self.permission(self.Qt.PermissionStatus.Denied, frozen=False)[0], 'granted')
 
-    def test_digital_silence_is_reported_as_blocked(self):
+    def test_digital_silence_is_reported_as_blocked_only_after_a_second_check(self):
         source = self.mock.Mock()
         source.error.return_value = __import__('PyQt6.QtMultimedia', fromlist=['QAudio']).QAudio.Error.NoError
         self.listener.source, self.listener.heard_signal = source, False
-        self.listener.check_microphone()
+        session = self.listener.session
+        with self.mock.patch('companion.voice.QTimer.singleShot') as later:
+            self.listener.check_microphone(session, final=False)  # a headset may still be switching on
+        self.assertEqual(self.errors, [])
+        later.assert_called_once()
+        self.listener.check_microphone(session, final=True)
         self.assertIn('Microphone', self.errors[-1])
         self.assertIsNone(self.listener.source)
+
+    def test_turning_voice_off_while_models_load_never_opens_the_microphone(self):
+        # Reported: voice turned off during loading came back on, then reported a blocked mic.
+        ready = []
+        self.listener.ready.connect(lambda: ready.append(True))
+        with self.mock.patch.object(self.voice, 'voice_available', return_value=True), \
+                self.mock.patch.object(self.listener.executor, 'submit') as submit:
+            self.listener.start()
+        load, session = submit.call_args.args
+        self.listener.stop()
+        self.listener.transcriber = self.mock.Mock()
+        load(session)
+        self.assertEqual(ready, [])
+        self.assertFalse(self.listener.open_microphone())  # a late permission answer cannot open it either
+        self.assertIsNone(self.listener.source)
+
+    def test_stale_checks_from_an_earlier_session_are_ignored(self):
+        source = self.mock.Mock()
+        self.listener.source, self.listener.heard_signal = source, False
+        old = self.listener.session
+        self.listener.session += 1
+        self.listener.check_microphone(old, final=True)
+        self.assertEqual(self.errors, [])
 
 
 @unittest.skipUnless(importlib.util.find_spec('PyQt6'), 'PyQt6 missing')
