@@ -772,6 +772,8 @@ class NativeTests(unittest.TestCase):
         from companion.ollama import OllamaProvider
         from companion.provider import AIConfig
         provider = OllamaProvider(AIConfig(base_url='http://127.0.0.1:11434', model='local-vision'))
+        # Hermetic: never ask a real Ollama (CI images may run one) about this made-up model.
+        provider.metadata['local-vision'] = {'capabilities': ['completion', 'vision']}
         self.service.provider = provider
         self.window.vision.set_enabled(True)
         frame = {'image_data': 'data:image/png;base64,ACTUAL_FRAME_TEST',
@@ -784,6 +786,8 @@ class NativeTests(unittest.TestCase):
                 self.qt.processEvents()
                 QTest.qWait(5)
             self.qt.processEvents()
+        self.assertTrue(self.provider.calls, 'no model call; the companion showed: '+repr(self.window.mascot.bubble.toPlainText()[:300])
+                        +' worker running: '+str(bool(self.window.worker and self.window.worker.isRunning())))
         self.assertEqual(self.provider.calls[-1][2], 'data:image/png;base64,ACTUAL_FRAME_TEST')
         self.assertEqual(self.provider.contexts[-1]['mode'], 'assist')
         self.assertTrue(self.window.mascot.compact)
