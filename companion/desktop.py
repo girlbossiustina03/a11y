@@ -1339,7 +1339,7 @@ class CompanionWindow(QMainWindow):
             def go():
                 # Hop beside the target first so the user sees where it acts; the action
                 # waits for the landing, and the spot never covers the target.
-                point = self.action_point(proposal, step.get('visual_capture'))
+                point = None if proposal.get('sequence') else self.action_point(proposal, step.get('visual_capture'))
                 screen = QApplication.screenAt(point) if point else None
                 spot = self.companion_spot(point, screen.availableGeometry()) if screen else None
                 if spot is not None:

@@ -51,7 +51,7 @@ class Harness(unittest.TestCase):
 
 class StopsAfterLaunchTests(Harness):
     def test_calculator_arithmetic_continues_after_a_premature_done(self):
-        task = ComputerTask('Open Calculator and sum 2+2', automatic=True, goal_mode='inspect')
+        task = ComputerTask('Open Calculator and compute (2+2)*3', automatic=True, goal_mode='inspect')
         task.record({'type': 'launch_app', 'label': 'Open Calculator', 'status': 'submitted'})
         self.provider.complete_structured.side_effect = [
             {'status': 'done', 'message': 'Calculator is open.', 'risk': 'navigation', 'action': None},
@@ -67,7 +67,7 @@ class StopsAfterLaunchTests(Harness):
 
     def test_launch_uses_catalog_names_in_the_prompt_and_resolves_the_id(self):
         self.desktop.bridge.catalog = Mock(return_value=CALCULATOR['installed_apps'])
-        task = ComputerTask('Open Calculator and sum 2+2', automatic=True, goal_mode='inspect')
+        task = ComputerTask('Open Calculator and compute (2+2)*3', automatic=True, goal_mode='inspect')
         self.provider.complete_structured.return_value = {'status': 'action', 'message': 'Open Calculator.', 'risk': 'navigation',
             'action': {'type': 'launch_app', 'bundle_id': 'Calculator'}}
         step = self.propose(task)
@@ -81,7 +81,7 @@ class StopsAfterLaunchTests(Harness):
             self.propose(ComputerTask('Open a tool', goal_mode='inspect'))
 
     def test_done_after_real_work_is_not_second_guessed(self):
-        task = ComputerTask('Open Calculator and sum 2+2', automatic=True, goal_mode='inspect')
+        task = ComputerTask('Open Calculator and compute (2+2)*3', automatic=True, goal_mode='inspect')
         for kind in ('launch_app', 'press_control', 'press_control', 'press_control', 'press_control'):
             task.record({'type': kind, 'status': 'submitted'})
         self.provider.complete_structured.return_value = {'status': 'done', 'message': 'The display shows 4.', 'risk': 'navigation', 'action': None}
@@ -297,7 +297,7 @@ class HighlightOnlyTests(unittest.TestCase):
         plan = preserve_desktop_goal({'operation': 'click_point', 'app_name': '', 'target': 'x'}, 'Find the Help link and then click it')
         self.assertEqual(plan['operation'], 'computer_task')
         plan = preserve_desktop_goal({'operation': 'launch_app', 'app_name': 'Calculator', 'target': '',
-                                      'remaining_request': 'sum 2+2', 'goal_mode': 'inspect'}, 'Open Calculator and sum 2+2')
+                                      'remaining_request': 'sum 2+2', 'goal_mode': 'inspect'}, 'Open Calculator and compute (2+2)*3')
         self.assertEqual((plan['operation'], plan['goal_mode']), ('computer_task', 'inspect'))
 
 

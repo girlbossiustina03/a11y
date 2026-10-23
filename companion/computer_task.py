@@ -312,6 +312,10 @@ class ComputerTask:
         # An already-authorized first step (opening the app or site the user named),
         # executed without a model call. See ComputerTask.take_opening.
         self.opening = dict(opening) if isinstance(opening, dict) else None
+        # "Open Calculator and add 5 + 5": the keys are pressed in code, by accessible name.
+        from .arithmetic import keypad
+        sequence = keypad(self.goal)
+        self.keypad, self.keypad_expr = (sequence[0], sequence[1]) if sequence else (None, None)
         self.goal_mode = goal_mode if goal_mode in ('inspect', 'draft', 'change') else None
 
     def app_names(self, desktop, snapshot):
@@ -331,6 +335,33 @@ class ComputerTask:
         self.status = status
         self.pending = None
         self.cancelled.set()
+
+    def keypad_step(self, desktop, snapshot):
+        """Next Calculator key as a validated press, the finished result, or None for the model."""
+        app = (snapshot.get('app') or {}).get('name', '')
+        if 'calc' not in app.casefold():
+            return None  # Not in Calculator yet: let the model open or focus it.
+        from .arithmetic import evaluate, find_key, formatted
+        if not self.keypad:
+            self.keypad = None
+            return {'status': 'done', 'action': None,
+                    'message': 'Entered '+self.keypad_expr+' in Calculator. The answer is '+formatted(evaluate(self.keypad_expr))+'.'}
+        controls = snapshot.get('controls') or []
+        control = find_key(self.keypad[0], controls)
+        if control is None and self.keypad[0] == 'clear':
+            self.keypad.pop(0)
+            control = find_key(self.keypad[0], controls) if self.keypad else None
+        if control is None:
+            self.keypad = None  # Unknown layout: the model takes over from here.
+            return None
+        step = validate_step({'status': 'action', 'message': 'Pressing '+control['label']+'.', 'risk': 'navigation',
+                              'action': {'type': 'press_control', 'control_id': control['id']}},
+                             desktop, snapshot, goal_mode=self.goal_mode)
+        self.keypad.pop(0)
+        action = dict(step['action'], sequence=True)
+        self.pending = action
+        return {'status': 'action', 'message': step['message'], 'action': action, 'review': not self.automatic,
+                'visual_capture': None}
 
     def take_opening(self):
         """The predetermined opening step, once, before any model-chosen step."""
@@ -384,6 +415,12 @@ class ComputerTask:
             snapshot = desktop.context()
         timing('task.metadata.finished', observed_at, step=len(self.receipts)+1)
         stages['metadata_ms'] = round((time.monotonic()-observed_at)*1000)
+        if self.keypad is not None:
+            keyed = self.keypad_step(desktop, snapshot)
+            if keyed is not None:
+                if keyed['status'] != 'action':
+                    return {'status': keyed['status'], 'message': keyed['message'], 'action': None}
+                return keyed
         capture_at = time.monotonic()
         visual = vision.capture(provider, x=geometry['x'], y=geometry['y'], desktop=snapshot, fast_text=True)
         timing('task.capture.finished', capture_at, step=len(self.receipts)+1)

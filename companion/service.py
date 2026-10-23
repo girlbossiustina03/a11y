@@ -339,6 +339,12 @@ class Companion:
             return None
 
     def prepare_request(self, request):
+        from .arithmetic import answer as arithmetic_answer
+        computed = arithmetic_answer(request) if not re.search(r'\bcalculator\b', request, re.I) else None
+        if computed:
+            # "5 + 5?" is answered in code: no model call, no app, no computer task.
+            self.last_request_plan = {'operation': 'answer', 'app_name': '', 'target': '', 'reply': computed}
+            return self.last_request_plan
         interpreter = getattr(self.provider, 'interpret_request', None)
         if interpreter is None or self.desktop_context is None:
             return None

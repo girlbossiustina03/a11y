@@ -740,9 +740,10 @@ class CharacterButton(QAbstractButton):
                 painter.setBrush(QColor(201, 214, 230, int(255*math.sin(t*math.pi))))
                 painter.drawEllipse(QPointF(150+index*11, 40-14*t), 4.2, 4.2)
 
-        # 4. Zâmbet
-        smile = QPainterPath(QPointF(93, 104))
-        smile.quadTo(100, 110, 107, 104)
+        # 4. Zâmbet: follows the gaze at half the distance, so the face reads as a head turning.
+        mouth = QPointF(look.x()*0.5, look.y()*0.5)
+        smile = QPainterPath(QPointF(93, 104)+mouth)
+        smile.quadTo(QPointF(100, 110)+mouth, QPointF(107, 104)+mouth)
         painter.setPen(QPen(CLOUD_INK, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         painter.drawPath(smile)
 
