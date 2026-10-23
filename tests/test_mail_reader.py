@@ -28,21 +28,23 @@ class NewestTests(unittest.TestCase):
         return run, calls
 
     def test_nth_newest_is_chosen_by_date_not_list_order(self):
-        listing = '11\x1f2026-10-22T08:00:00\x1e12\x1f2026-10-23T09:30:00\x1e13\x1f2026-10-23T07:00:00\x1e'
+        # Rows from two accounts' inboxes, "<inbox>:<position>:<id>".
+        listing = '1:1:11\x1f2026-10-22T08:00:00\x1e2:1:12\x1f2026-10-23T09:30:00\x1e1:2:13\x1f2026-10-23T07:00:00\x1e'
         run, calls = self.runner([listing])
         found = mail_reader.newest(2, run)
-        self.assertEqual(calls[-1], (mail_reader.MESSAGE, 13))  # second newest by date
+        self.assertEqual(calls[-1], (mail_reader.MESSAGE, '1:2:13'))  # second newest by date
         self.assertEqual(found[1], 'Your code')
         run, calls = self.runner([listing])
         mail_reader.newest(1, run)
-        self.assertEqual(calls[-1], (mail_reader.MESSAGE, 12))
+        self.assertEqual(calls[-1], (mail_reader.MESSAGE, '2:1:12'))
 
     def test_fast_listing_and_duplicates(self):
-        # The first and last messages by index are listed once each, in one quick call.
-        run, calls = self.runner(['5\x1f2026-10-01T10:00:00\x1e5\x1f2026-10-01T10:00:00\x1e'])
+        # Only a few messages from the newest end of each inbox: 30 at both ends of a 17,865-message
+        # inbox took 17 s (live). A repeated row counts once.
+        run, calls = self.runner(['1:1:5\x1f2026-10-01T10:00:00\x1e1:1:5\x1f2026-10-01T10:00:00\x1e'])
         self.assertIsNotNone(mail_reader.newest(1, run))
-        self.assertEqual([argument for script, argument in calls if script is mail_reader.LISTING], [30])
-        run, _ = self.runner(['5\x1f2026-10-01T10:00:00\x1e'])
+        self.assertEqual([argument for script, argument in calls if script is mail_reader.LISTING], [6])
+        run, _ = self.runner(['1:1:5\x1f2026-10-01T10:00:00\x1e'])
         self.assertIsNone(mail_reader.newest(2, run))
 
     def test_reply_names_sender_subject_and_text(self):

@@ -16,34 +16,50 @@ REQUEST = re.compile(
     r'\b(?P<position>(?:(?:second|2nd|third|3rd|fourth|4th|fifth|5th)(?:\s+(?:to\s+)?)?)?(?:last|latest|newest|most recent|recent))\b'
     r'\s+(?:(?:un)?read\s+)?(?:e-?mails?|mails?|messages? in mail)\b', re.I)
 SEPARATOR, END = '\x1f', '\x1e'
-# Dates of the first and last 30 inbox messages by index: Mail keeps the inbox in date order
-# (which end is newest depends on its sort), so the newest are among these. A "whose date"
-# search over a 16,000-message inbox was slow enough to look like no answer at all.
+# Mail's scripting costs ~0.1 s per property per message on a large inbox: listing 30 messages
+# at both ends of a 17,865-message unified inbox took 17 s (live). Instead, each account's own
+# inbox is checked for which end is newest (two dates) and only k messages are read from that
+# end. Each row is "<inbox>:<position>:<id>" so the text is fetched without searching by id.
 LISTING = '''on run argv
   set k to (item 1 of argv) as integer
   set output to ""
   tell application id "com.apple.mail"
-    set c to count of messages of inbox
-    if c is 0 then return ""
-    if c < k then set k to c
-    set picks to {}
-    repeat with i from 1 to k
-      set end of picks to i
-    end repeat
-    repeat with i from (c - k + 1) to c
-      if i > k then set end of picks to i
-    end repeat
-    repeat with i in picks
-      set m to message (i as integer) of inbox
-      set output to output & (id of m as string) & (ASCII character 31) & ((date received of m) as «class isot» as string) & (ASCII character 30)
+    set boxes to mailboxes of inbox
+    repeat with b from 1 to count of boxes
+      set mb to item b of boxes
+      set c to count of messages of mb
+      if c > 0 then
+        set n to k
+        if c < n then set n to c
+        if (date received of message 1 of mb) ≥ (date received of message c of mb) then
+          set top to 1
+        else
+          set top to c - n + 1
+        end if
+        set idList to id of messages top thru (top + n - 1) of mb
+        set stamps to date received of messages top thru (top + n - 1) of mb
+        repeat with i from 1 to n
+          set output to output & b & ":" & (top + i - 1) & ":" & (item i of idList) & (ASCII character 31) & ((item i of stamps) as «class isot» as string) & (ASCII character 30)
+        end repeat
+      end if
     end repeat
   end tell
   return output
 end run'''
 MESSAGE = '''on run argv
-  set wanted to (item 1 of argv) as integer
+  set AppleScript's text item delimiters to ":"
+  set parts to text items of (item 1 of argv)
+  set AppleScript's text item delimiters to ""
+  set wanted to (item 3 of parts) as integer
   tell application id "com.apple.mail"
-    set m to first message of inbox whose id is wanted
+    set mb to item ((item 1 of parts) as integer) of (mailboxes of inbox)
+    set m to missing value
+    try
+      set m to message ((item 2 of parts) as integer) of mb
+      if (id of m) is not wanted then set m to missing value
+    end try
+    -- Mail changed since the listing (new or archived mail): find it by id instead.
+    if m is missing value then set m to first message of inbox whose id is wanted
     set bodyText to content of m
     if (length of bodyText) > 4000 then set bodyText to text 1 thru 4000 of bodyText
     return (sender of m) & (ASCII character 31) & (subject of m) & (ASCII character 31) & ((date received of m) as string) & (ASCII character 31) & bodyText
@@ -77,11 +93,11 @@ def run(script, argument, timeout):
 def newest(n, runner=run):
     """(sender, subject, date, text) of the nth newest inbox message, or None if there are fewer."""
     rows = {}
-    for row in runner(LISTING, max(30, n), 45).split(END):
+    for row in runner(LISTING, n+5, 45).split(END):
         if SEPARATOR in row:
-            message_id, received = row.strip().split(SEPARATOR, 1)
-            if message_id.strip().isdigit():
-                rows[int(message_id)] = received.strip()
+            key, received = row.strip().split(SEPARATOR, 1)
+            if re.fullmatch(r'\d+:\d+:\d+', key.strip()):
+                rows[key.strip()] = received.strip()
     if len(rows) < n:
         return None
     ordered = sorted(rows.items(), key=lambda item: item[1], reverse=True)  # ISO dates: newest first

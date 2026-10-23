@@ -328,9 +328,11 @@ class OllamaProvider(Planner):
         schema = response_schema if response_schema is not None else RESPONSE_SCHEMA
         wire_schema = grammar_schema(schema)
         schema_key = (model, json.dumps(wire_schema, sort_keys=True))
+        # Greedy decoding with a fixed seed: the same request and screen get the same plan.
+        # At 0.2 the live evaluation saw one request routed three different ways.
         body = {'model': model, 'messages': [{'role': 'system', 'content': system}] + messages,
             'stream': True, 'format': wire_schema, 'keep_alive': keep_alive(),
-            'options': {'temperature': 0.2, 'num_ctx': context_length, 'num_predict': max_tokens}}
+            'options': {'temperature': 0, 'seed': 7, 'num_ctx': context_length, 'num_predict': max_tokens}}
         requested_thinking = thinking
         thinking = os.getenv('A11Y_OLLAMA_THINKING', 'default').lower()
         if thinking not in ('default', 'true', 'false'):

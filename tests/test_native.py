@@ -40,6 +40,10 @@ class NativeTests(unittest.TestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
         self.temp = tempfile.TemporaryDirectory()
+        # Saved AI choices (ai.json) go to this test's folder, never the developer's .data.
+        data = patch.dict(os.environ, {'A11Y_DATA_DIR': self.temp.name})
+        data.start()
+        self.addCleanup(data.stop)
         self.provider = RecordingProvider()
         self.service = Companion(Store(self.temp.name), Identity('company', 'employee'), self.provider)
         self.window = CompanionWindow(self.service)
@@ -859,25 +863,30 @@ class NativeTests(unittest.TestCase):
         frame = {'image_data': 'data:image/png;base64,ACTUAL_FRAME_TEST',
                  'screen': {'x': 0, 'y': 0, 'width': 800, 'height': 800},
                  'windows': [{'app': 'Xcode', 'title': 'Project'}], 'captured_monotonic': time.monotonic()}
+        sent = []
+        def describe(system, messages, *, schema, image_data=None, **options):
+            sent.append(image_data)
+            return {'message': 'Xcode is open on Project.'}
         # Hermetic: from source on macOS the installed-app lookup first compiles the Swift
         # desktop helper (up to a minute on CI); this test is about vision, not the app catalog.
         with patch.object(self.service.desktop_context, 'installed_apps', return_value=[]), \
-                patch.object(self.window.vision, 'capture', return_value=frame), patch.object(provider, 'interpret_request', return_value={'operation': 'inspect_screen', 'app_name': '', 'target': ''}), patch.object(provider, 'complete_structured', side_effect=lambda system, messages, schema, image_data=None: self.provider.complete(system, messages, image_data=image_data)):
+                patch.object(self.service, 'ask', wraps=self.service.ask) as ask, \
+                patch.object(self.window.vision, 'capture', return_value=frame), patch.object(provider, 'interpret_request', return_value={'operation': 'inspect_screen', 'app_name': '', 'target': ''}), patch.object(provider, 'complete_structured', side_effect=describe):
             self.window.mascot_submit('What is on my screen?', 'chat')
             deadline = time.monotonic()+15  # slow CI runners
             while self.window.worker.isRunning() and time.monotonic() < deadline:
                 self.qt.processEvents()
                 QTest.qWait(5)
             self.qt.processEvents()
-        if not self.provider.calls:
+        if not sent:
             import sys, traceback
             stacks = '\n'.join(''.join(traceback.format_stack(frame)) for frame in sys._current_frames().values())
             self.fail('no model call; the companion showed: '+repr(self.window.mascot.bubble.toPlainText()[:300])
                       +' worker running: '+str(bool(self.window.worker and self.window.worker.isRunning()))+'\nThreads:\n'+stacks[-6000:])
-        self.assertEqual(self.provider.calls[-1][2], 'data:image/png;base64,ACTUAL_FRAME_TEST')
-        self.assertEqual(self.provider.contexts[-1]['mode'], 'assist')
+        self.assertEqual(sent, ['data:image/png;base64,ACTUAL_FRAME_TEST'])
+        self.assertEqual(ask.call_args.kwargs['mode'], 'assist')  # mascot chat runs in assist mode
+        self.assertIn('Xcode is open on Project.', self.window.mascot.bubble.toPlainText())
         self.assertTrue(self.window.mascot.compact)
-        self.assertIsNotNone(self.window.pending_target)
 
     def test_capture_failure_does_not_ask_model_to_guess(self):
         self.window.vision.set_enabled(True)

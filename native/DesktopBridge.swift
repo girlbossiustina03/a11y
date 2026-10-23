@@ -657,6 +657,31 @@ while !queue.isEmpty && visited < 220 && controls.count < 45 && CFAbsoluteTimeGe
     }
 }
 output["controls"] = controls
+// Lists and tables (Mail's messages, Finder's files): where their visible rows are, so "click the
+// first email" is a row position rather than a guess at pixels. Row contents are not included.
+if pressIndex == nil, let window {
+    var lists: [[String: Any]] = []
+    var pending: [(AXUIElement, Int)] = [(window, 0)]
+    var seen = 0
+    let listStarted = CFAbsoluteTimeGetCurrent()
+    while !pending.isEmpty && seen < 300 && lists.count < 3 && CFAbsoluteTimeGetCurrent()-listStarted < 0.5 {
+        let (node, depth) = pending.removeFirst()
+        seen += 1
+        let role = string(node, "AXRole")
+        if ["AXTable", "AXOutline", "AXList"].contains(role) {
+            let rows = (attr(node, "AXVisibleRows") as? [AXUIElement]) ?? []
+            let frames = rows.prefix(12).compactMap { bounds($0) }
+            if let frame = bounds(node), !frames.isEmpty {
+                lists.append(["role": role, "label": string(node, "AXDescription"), "bounds": frame, "rows": frames])
+            }
+            continue  // rows are not walked: a long list would use up the budget
+        }
+        if depth < 6, let children = attr(node, "AXChildren") as? [AXUIElement] {
+            pending.append(contentsOf: children.prefix(40).map { ($0, depth+1) })
+        }
+    }
+    if !lists.isEmpty { output["lists"] = lists }
+}
 if let index = pressIndex {
     let controlID = args[index+2]
     let expectedLabel = args[index+3]

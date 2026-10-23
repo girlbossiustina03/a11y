@@ -16,6 +16,16 @@ WEB_APPS = {
     'whatsapp': 'https://web.whatsapp.com', 'slack': 'https://app.slack.com',
     'github': 'https://github.com', 'linkedin': 'https://www.linkedin.com',
 }
+# Sites whose own search results have a fixed address: "open YouTube and search for lo-fi" is
+# one navigation instead of a task that clicks through the page (it ended in Safari's address
+# bar in live runs). {} is the URL-encoded query.
+SEARCH_URLS = {
+    'youtube': 'https://www.youtube.com/results?search_query={}', 'google': 'https://www.google.com/search?q={}',
+    'wikipedia': 'https://en.wikipedia.org/w/index.php?search={}', 'github': 'https://github.com/search?q={}',
+    'duckduckgo': 'https://duckduckgo.com/?q={}', 'bing': 'https://www.bing.com/search?q={}',
+    'amazon': 'https://www.amazon.com/s?k={}',
+}
+SEARCH_PHRASE = re.compile(r'^(?:search|look)(?:\s+(?:it|up|for))*\s+(?P<query>.+?)(?:\s+(?:there|on it))?$', re.I)
 BROWSER_WORDS = {'safari': 'Safari', 'chrome': 'Google Chrome', 'edge': 'Microsoft Edge', 'firefox': 'Firefox'}
 
 
@@ -54,3 +64,14 @@ def web_opening(request):
     if site is None or browser is None:
         return None
     return {'operation': 'browser_open', 'app_name': browser, 'target': site[1], 'browser_mode': browser_mode(request)}
+
+
+def site_search(site, rest):
+    """The results address for "search for <query>" on a site with a known search page, else None."""
+    from urllib.parse import quote_plus
+    template = SEARCH_URLS.get(site.casefold().strip())
+    match = SEARCH_PHRASE.match(rest.strip().rstrip('.!?'))
+    if not template or not match:
+        return None
+    query = match.group('query').strip(' "\'“”')
+    return template.format(quote_plus(query)) if query else None

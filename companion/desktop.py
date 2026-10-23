@@ -327,7 +327,9 @@ class CompanionWindow(QMainWindow):
         self.mascot.collapse_chat()
         if not self.introduction.get().get('access_setup_reviewed'):
             self.open_setup()
-        if self.access_preferences.voice_enabled():
+        from .eval_control import enabled as evaluating
+        if self.access_preferences.voice_enabled() and not evaluating():
+            # A live evaluation types its requests; the microphone stays off so nothing else is heard.
             QTimer.singleShot(0, self.start_voice)
 
     def set_remember_access(self, enabled):

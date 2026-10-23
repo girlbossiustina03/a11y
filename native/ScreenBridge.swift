@@ -105,13 +105,31 @@ import Vision
             let filter = SCContentFilter(display: display, excludingApplications: excluded+sensitiveApps, exceptingWindows: [])
             let bounds = CGDisplayBounds(display.displayID)
             let configuration = SCStreamConfiguration()
-            configuration.width = 1440
-            configuration.height = max(1, Int(1440*bounds.height/bounds.width))
+            // The model gets a 1440-pixel-wide image. OCR reads the display's own pixels: on a
+            // Retina screen, 1440 pixels shrank interface text until "Chat" read as "Chpl".
+            // Every frame is scaled the same way, OCR or not, so a click's guard (a hash of the
+            // pixels around the target) matches between the observation and the re-check.
+            let pixelWidth = CGDisplayCopyDisplayMode(display.displayID).map { Int($0.pixelWidth) } ?? 1440
+            let captureWidth = min(3200, max(1440, pixelWidth))
+            configuration.width = captureWidth
+            configuration.height = max(1, Int(Double(captureWidth)*bounds.height/bounds.width))
             configuration.showsCursor = false
             configuration.capturesAudio = false
-            let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+            let captured = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
             guard !excluded.isEmpty || !companionIsVisible() else {
                 emit(["error": "A companion window appeared during capture. The image was discarded."]); return
+            }
+            var image = captured
+            if captured.width > 1440 {
+                let height = max(1, Int(1440*Double(captured.height)/Double(captured.width)))
+                guard let context = CGContext(data: nil, width: 1440, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                              space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+                    emit(["error": "Could not encode screen image."]); return
+                }
+                context.interpolationQuality = .high
+                context.draw(captured, in: CGRect(x: 0, y: 0, width: 1440, height: height))
+                guard let scaled = context.makeImage() else { emit(["error": "Could not encode screen image."]); return }
+                image = scaled
             }
             let bitmap = NSBitmapImageRep(cgImage: image)
             guard let png = bitmap.representation(using: .png, properties: [:]) else {
@@ -124,7 +142,7 @@ import Vision
             var textRegions: [[String: Any]] = []
             let ocrStarted = CFAbsoluteTimeGetCurrent()
             if args.contains("--ocr") {
-                do { textRegions = try recognizeText(image) }
+                do { textRegions = try recognizeText(captured) }
                 catch { /* Missing OCR falls back to image analysis, never guessed text. */ }
             }
             emit(["image_data": "data:image/png;base64,"+png.base64EncodedString(),

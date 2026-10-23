@@ -45,7 +45,8 @@ other contributor's: verify it, test it, and keep the ground rules.
 ```bash
 python3 -m pip install -r requirements.txt -r requirements-voice.txt   # voice is optional
 python3 a11y_desktop.py                         # run from source (data in .data/)
-QT_QPA_PLATFORM=offscreen python3 -m unittest discover -s tests -q   # ~480 tests, ~2.5 min
+QT_QPA_PLATFORM=offscreen python3 -m unittest discover -s tests -q   # ~510 tests, ~1.5-2.5 min
+.venv/bin/python scripts/live_eval.py --runs 3  # real requests against a source run on this Mac
 packaging/build_macos.sh                        # → dist/A11y.app and dist/A11y-macOS.dmg
 dist/A11y.app/Contents/MacOS/A11y --self-test /tmp/self-test.json   # packaged-app check
 ```
@@ -68,15 +69,25 @@ which tries these in order and stops at the first that applies:
 7. "close / quit / switch to X" with one running match → `simple_app_command`
 8. "open X" → `quick_open.plan` (installed app → known web app → web search);
    a bare app name ("Microsoft Teams.") → `quick_open.bare_name` (exact names only)
+   ("open YouTube and search for lo-fi" is one navigation to the site's results page,
+   `web_apps.SEARCH_URLS`)
 9. otherwise the model routes it: `Planner.interpret_request` (`ollama.py`) with
    `INTENT_SYSTEM` / `INTENT_SCHEMA` (`request_plan.py`). Code then maps mac-app
-   operations (`mac_apps.py`), `read_mail`, and so on.
+   operations (`mac_apps.py`), `read_mail`, and so on. Earlier requests are sent only
+   when the request points back (`REFERS_BACK`); a built-in read that names another app
+   ("notifications on Teams") becomes a computer task (`names_other_app`); reminder and
+   event times arrive in `when` and a past time moves to its next occurrence.
 
 `Companion.ask` turns the plan into a reply and at most one desktop action, validated
 in `models.validate_response`. Plan flags `computed`, `full_text`, `read_aloud` and
-`app_write` are set only by code and stripped from model output. Multi-step goals run in
+`app_write` are set only by code and stripped from model output. "What's on my screen" uses
+its own short prompt (`SCREEN_SYSTEM`). Multi-step goals run in
 `computer_task.py` (observe → act → re-observe, with a bounded number of steps, Stop is
-instant). Actions run through `computer_use.py` and the platform bridge:
+instant). Before the model, code takes the steps it can do exactly: Calculator keys, the
+Activity view for notification goals, a click on the one place labelled X ("click on Chat",
+from the accessibility tree or OCR), and the nth row of a list ("click the first email",
+from the bridge's `lists`). `press_control` may only name a control in the current
+observation (the schema's enum). Actions run through `computer_use.py` and the platform bridge:
 `desktop_context.py` + `native/DesktopBridge.swift` on macOS, `windows_desktop.py` /
 `windows_input.py` on Windows. Screenshots come from `vision.py` (ScreenCaptureKit /
 Windows capture) and are never written to disk.
@@ -116,6 +127,17 @@ Windows capture) and are never written to disk.
     notes reads stay in code.
   - Never commit, log or print a key.
 
+## Measuring on a real Mac
+
+`scripts/live_eval.py` launches a source run with `A11Y_EVAL=1` (local Ollama forced, voice
+off) and types each request through `companion/eval_control.py`, an owner-only socket that
+cannot confirm or execute anything itself. It checks the result against the Mac (Safari's
+page, Mail's selection, Calendar, the mascot's position) and writes `runs.jsonl` and
+`summary.json` under `.data/live_eval/`. `--only TEXT` picks requests, `--compare` an earlier
+summary. Ollama runs greedy with a fixed seed, so repeated runs should match; a request that
+passes sometimes is a bug to chase. It needs the terminal's Accessibility, Screen Recording,
+Automation and (for the reminders case) Reminders permissions, and it takes over the screen.
+
 ## Debugging
 
 - Every stage logs `A11y timing {...}` (event, ms, token counts, never prompt text or
@@ -125,6 +147,11 @@ Windows capture) and are never written to disk.
   commit, a source run shows a file hash.
 - Clicks on macOS: the bridge activates the target app, then sends move/down/hold/up from a
   `.hidSystemState` event source. Clicking an inactive app's window otherwise gets swallowed.
+- `QT_MAC_SET_RAISE_PROCESS=0` (set in `a11y_desktop.py`): otherwise raising the mascot after
+  an action activates A11y and takes keyboard focus from the app being worked in.
+- Screen frames are captured at the display's pixel width and scaled to 1440 for the model;
+  OCR reads the full-resolution frame. Every frame must be scaled the same way, or click
+  guards (pixel hashes) never match and every click is refused as "changed".
 - Real-world failures go in `tests/test_reported_failures.py`, with the reported
   wording.
 

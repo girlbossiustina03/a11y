@@ -42,9 +42,18 @@ FAST_SCHEMA['anyOf'][1]['properties']['status']['enum'].append('needs_vision')
 UNSUPPORTED = {'Windows': {'new_window'}}
 
 
-def schema_for(platform, fast):
-    excluded = UNSUPPORTED.get(platform, set())
+def schema_for(platform, fast, control_ids=None):
+    """The step grammar for this platform. With control_ids, press_control can name only a
+    control in the current observation (or is left out when there are none): a model that
+    invented IDs got two rejected steps and a blocked task (live, Teams in Safari)."""
+    excluded = set(UNSUPPORTED.get(platform, set()))
+    if control_ids is not None and not control_ids:
+        excluded.add('press_control')
     schema = deepcopy(FAST_SCHEMA if fast else SCHEMA)
+    if control_ids:
+        for variant in schema['anyOf'][0]['properties']['action']['anyOf']:
+            if 'press_control' in variant['properties']['type']['enum']:
+                variant['properties']['control_id'] = {'enum': list(dict.fromkeys(control_ids))}
     if excluded:
         variants = schema['anyOf'][0]['properties']['action']['anyOf']
         for variant in variants:
@@ -63,6 +72,9 @@ Never invent a coordinate for an icon or unlabelled object. Use status=needs_vis
 action=null when pixels, icons, uncertain state or missing text require the image.
 Do not infer there are no tasks/activity just because OCR omitted them. done requires
 explicit current evidence of the full requested outcome.'''
+REPORT_PASS = '''ANSWER ONLY: no further action is possible. From the attached screenshot, answer the goal:
+status=done with what the screen shows about it, or needs_user if it does not show the answer.
+action=null.'''
 IMAGE_PASS = '''IMAGE PASS: the current screenshot is attached to this message. Use the
 pixels as visual evidence together with the metadata. Click the center of a visible
 target with fractional image coordinates when it has no accessibility control_id.'''
@@ -149,6 +161,12 @@ action had no visible effect, ask the user instead of repeatedly clicking/typing
 Return only the JSON object, with one short message (at most 20 words) and ONE
 action. Do not narrate a plan or repeat screen metadata. Messages must state what you observe and the next step; never say already done before
 execution. Available actions are strictly limited by the schema. No shell or scripts.'''
+
+
+# A click A11y chooses in code answers whatever the screen asks: "OK" can confirm a deletion. These
+# confirming or changing labels wait for the user, besides the sensitive ones in needs_review.
+CONFIRMING = re.compile(r'\b(ok|okay|yes|confirm|continue|proceed|archive|save|apply|done|finish|move|mark|empty|erase|trash|'
+                        r'discard|replace|overwrite|close|quit|leave|end|reset|restore|sign out|log ?out|unsend|forward)\b', re.I)
 
 
 def needs_review(action, risk):
@@ -252,6 +270,86 @@ LABEL_FILLER = frozenset('icon tab button link the a menu item left right top bo
 def label_words(label):
     import re
     return tuple(word for word in re.findall(r"[\w']+", label.casefold()) if word not in LABEL_FILLER)
+
+
+# A goal that is one click on a named thing: "click on Chat", "double-click Report.pdf".
+CLICK_GOAL = re.compile(r'^\W*(?:(?:please|ok(?:ay)?|can you|could you)\W+)*(?P<verb>double[- ]?click|right[- ]?click|click|tap)'
+                        r'\s+(?:on\s+)?(?P<target>.+?)[\s.!?]*$', re.I)
+
+
+def click_goal(goal):
+    """(label words, button, click count) when the whole goal is one click on a named thing, else None."""
+    match = CLICK_GOAL.match(goal or '')
+    if not match:
+        return None
+    want = label_words(match.group('target'))
+    if not want or len(want) > 4:
+        return None
+    verb = match.group('verb').casefold()
+    return want, 'right' if verb.startswith('right') else 'left', 2 if verb.startswith('double') else 1
+
+
+ORDINALS = {'first': 1, 'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5, 'sixth': 6, 'seventh': 7, 'eighth': 8,
+            'ninth': 9, 'tenth': 10, '1st': 1, '2nd': 2, '3rd': 3, '4th': 4, '5th': 5, '6th': 6, '7th': 7, '8th': 8, '9th': 9, '10th': 10}
+ROW_GOAL = re.compile(r'^(?:the\s+|my\s+)?(?P<ordinal>' + '|'.join(ORDINALS) + r')\s+(?P<noun>[\w-]+)(?:\s+(?:in|on)\s+(?P<app>[\w .-]+))?$', re.I)
+
+
+def row_goal(goal):
+    """(position, noun, button, click count, app or '') for "click the first email (in Mail)", else None."""
+    match = CLICK_GOAL.match(goal or '')
+    row = ROW_GOAL.match(match.group('target').strip()) if match else None
+    if not row:
+        return None
+    verb = match.group('verb').casefold()
+    return (ORDINALS[row.group('ordinal').casefold()], row.group('noun'), 'right' if verb.startswith('right') else 'left',
+            2 if verb.startswith('double') else 1, (row.group('app') or '').strip())
+
+
+def list_row(lists, position, window, screen, noun=''):
+    """Image point of the nth visible row of the list the noun names ("mailbox" → Mail's
+    "mailboxes"), else of the window's main list: a table before an outline or list (Mail's
+    messages, not its mailboxes), then the widest. None when it is not visible."""
+    def inside(b, area):
+        x, y = b['x']+b['width']/2, b['y']+b['height']/2
+        return area['x'] <= x < area['x']+area['width'] and area['y'] <= y < area['y']+area['height']
+    candidates = [item for item in lists or () if isinstance(item, dict) and isinstance(item.get('rows'), list)
+                  and all(isinstance((item.get('bounds') or {}).get(key), (int, float)) for key in ('x', 'y', 'width', 'height'))]
+    if not candidates or not screen or not screen.get('width'):
+        return None
+    forms = lambda word: {word, word+'s', word+'es'}
+    noun = noun.casefold()
+    named = [item for item in candidates if noun and any(word in forms(noun) or noun in forms(word)
+                                                         for word in re.findall(r'\w+', (item.get('label') or '').casefold()))]
+    main = named[0] if len(named) == 1 else min(candidates, key=lambda item: (item.get('role') != 'AXTable', -item['bounds']['width']))
+    rows = [b for b in main['rows'] if isinstance(b, dict) and all(isinstance(b.get(key), (int, float)) for key in ('x', 'y', 'width', 'height'))
+            and b['height'] > 6 and (not window or inside(b, window)) and inside(b, screen)]
+    if position > len(rows):
+        return None
+    b = rows[position-1]
+    x = (b['x']+b['width']/2-screen.get('x', 0))/screen['width']
+    y = (b['y']+b['height']/2-screen.get('y', 0))/screen['height']
+    return (x, y) if 0 <= x < 1 and 0 <= y < 1 else None
+
+
+def labelled_targets(want, regions, controls, screen):
+    """Places on screen labelled exactly `want`: [(x, y, control or None)], one per place.
+
+    An accessible control and the OCR line of its own title are the same place."""
+    found = []
+    for control in controls or ():
+        bounds = (control.get('bounds') or {}) if isinstance(control, dict) else {}
+        if (control.get('enabled', True) and label_words(control.get('label', '')) == want and screen and screen.get('width')
+                and all(isinstance(bounds.get(key), (int, float)) for key in ('x', 'y', 'width', 'height'))):
+            x = (bounds['x']+bounds['width']/2-screen.get('x', 0))/screen['width']
+            y = (bounds['y']+bounds['height']/2-screen.get('y', 0))/screen['height']
+            if 0 <= x < 1 and 0 <= y < 1:
+                found.append((x, y, control))
+    for region in regions:
+        if label_words(region.get('text', '')) == want:
+            x, y = region['x']+region['width']/2, region['y']+region['height']/2
+            if not any(abs(x-fx) < .03 and abs(y-fy) < .03 for fx, fy, _ in found):
+                found.append((x, y, None))
+    return found
 
 
 def normalize_click(action):
@@ -393,6 +491,12 @@ class ComputerTask:
         self.keypad, self.keypad_expr = (sequence[0], sequence[1]) if sequence else (None, None)
         self.goal_mode = goal_mode if goal_mode in ('inspect', 'draft', 'change') else None
         self.view_opened = not NOTIFICATION_GOAL.search(self.goal)
+        # "Click on Chat": one exactly labelled target is clicked in code (see click_step).
+        self.click = click_goal(self.goal)
+        self.clicked_text = None
+        # "Click the first email": the nth visible row of the window's list (see row_step).
+        self.row = row_goal(self.goal)
+        self.row_label = None
 
     def app_names(self, desktop, snapshot):
         # Names only: a 150-app macOS catalog with bundle IDs is about 11k characters
@@ -455,7 +559,8 @@ class ComputerTask:
                      key=lambda r: r['x'], default=None)
         if control is None and region is None:
             return None  # Not visible (yet): the model navigates; this is retried next step.
-        self.view_opened = True
+        # view_opened is set once the click has a receipt (above): a click refused because the
+        # screen changed is proposed again instead of leaving the model to find the view.
         name = (control or {}).get('label') or region['text'].strip(' .')
         action = ({'type': 'press_control', 'control_id': control['id']} if control else
                   {'type': 'click_point', 'x': region['x']+region['width']/2, 'y': region['y']+region['height']/2, 'label': name})
@@ -467,6 +572,112 @@ class ComputerTask:
         self.pending = action
         return {'status': 'action', 'message': step['message'], 'action': action,
                 'review': not self.automatic, 'visual_capture': visual}
+
+    def click_step(self, desktop, snapshot, regions, visual, image_data, vision):
+        """The click a click-only goal asks for, when exactly one place carries that label.
+
+        The model is not needed to find "Chat" when the accessibility tree or OCR shows one
+        "Chat" (live: five model calls and ~20 s for this click). Anything else is left to it."""
+        if self.click is None or self.receipts:
+            return None
+        want, button, count = self.click
+        found = labelled_targets(want, regions, snapshot.get('controls') or [], visual.get('screen'))
+        if len(found) != 1:
+            self.click = None  # none or several: the model chooses, from now on
+            return None
+        x, y, control = found[0]
+        if control is not None and control.get('id') and button == 'left' and count == 1:
+            action = {'type': 'press_control', 'control_id': control['id']}
+        else:
+            action = {'type': 'click_point', 'x': round(x, 4), 'y': round(y, 4), 'label': ' '.join(want).capitalize()}
+            if button != 'left' or count != 1:
+                action.update(button=button, click_count=count)
+        step = validate_step({'status': 'action', 'message': 'Clicking '+action.get('label', control and control.get('label') or '')+'.',
+                              'risk': 'navigation', 'action': action},
+                             desktop, snapshot, goal_mode=self.goal_mode, screen=visual.get('screen'), text_regions=())
+        action = step['action']
+        if action['type'] == 'click_point':
+            guard = action['capture_guard'] = vision.click_guard(image_data, visual, action)
+        else:
+            try:
+                guard = vision.click_guard(image_data, visual, {'x': x, 'y': y})
+            except ValueError:
+                guard = {}  # a press needs no pixel guard; its result is judged by text alone
+        # What the screen looked like: its text, and the pixels around the target (a checkbox can
+        # change without any text changing).
+        self.clicked_text = (sorted(region.get('text', '') for region in regions), (x, y), guard.get('region_hash'))
+        self.pending = action
+        return {'status': 'action', 'message': step['message'], 'action': action,
+                'review': not self.automatic or needs_review(action, 'navigation') or bool(CONFIRMING.search(action.get('label', ''))),
+                'visual_capture': visual}
+
+    def row_step(self, desktop, snapshot, visual, image_data, vision):
+        """The nth row of the window's list for "click the first email": the accessibility tree
+        says where rows are; the model clicked the window title instead (live, Mail)."""
+        if self.row is None or any(receipt.get('type') not in OPENING_ACTIONS for receipt in self.receipts):
+            return None
+        position, noun, button, count, app = self.row
+        if app:
+            from .app_names import normalized
+            front = normalized((snapshot.get('app') or {}).get('name', ''))
+            if not front or normalized(app) not in front and front not in normalized(app):
+                return None  # the named app is not in front yet: the model opens it first
+        point = list_row(snapshot.get('lists'), position, (snapshot.get('window') or {}).get('bounds'), visual.get('screen'), noun)
+        if point is None:
+            self.row = None
+            return None
+        self.click = None  # the row is the target; no label search
+        label = next(word for word, value in ORDINALS.items() if value == position).capitalize()+' '+noun
+        action = {'type': 'click_point', 'x': round(point[0], 4), 'y': round(point[1], 4), 'label': label}
+        if button != 'left' or count != 1:
+            action.update(button=button, click_count=count)
+        step = validate_step({'status': 'action', 'message': 'Clicking the '+label.lower()+'.', 'risk': 'navigation', 'action': action},
+                             desktop, snapshot, goal_mode=self.goal_mode, screen=visual.get('screen'), text_regions=())
+        action = step['action']
+        action['capture_guard'] = vision.click_guard(image_data, visual, action)
+        self.row_label = label
+        self.pending = action
+        return {'status': 'action', 'message': step['message'], 'action': action,
+                'review': not self.automatic or needs_review(action, 'navigation'), 'visual_capture': visual}
+
+    def click_result(self, regions, image_data=None, visual=None, vision=None):
+        """After a code click: done when the window changed, else say so. None otherwise."""
+        if self.row_label is not None:
+            if self.receipts and (self.receipts[-1].get('label') or '') == self.row_label:
+                # Selecting a row is the whole goal, even when it was already selected.
+                return {'status': 'done', 'action': None, 'message': 'Clicked the '+self.row_label.lower()+'.'}
+            self.row_label = None  # refused before it ran: row_step proposes it again
+            return None
+        if self.clicked_text is None:
+            return None
+        if not self.receipts:
+            # The click was refused before it ran (the screen changed): look again and retry.
+            self.clicked_text = None
+            return None
+        label = self.receipts[-1].get('label') or 'it'
+        text, point, region_hash = self.clicked_text
+        try:
+            pixels_same = vision is None or image_data is None or vision.click_guard(image_data, visual, {'x': point[0], 'y': point[1]}).get('region_hash') == region_hash
+        except (ValueError, KeyError, TypeError):
+            pixels_same = True
+        if sorted(region.get('text', '') for region in regions) == text and pixels_same:
+            return {'status': 'needs_user', 'action': None, 'message': 'I clicked '+label+', but nothing on the screen changed.'}
+        return {'status': 'done', 'action': None, 'message': 'Clicked '+label+'.'}
+
+    def report_only(self, provider, messages, image, cancel_kwargs, check_active):
+        """For an inspection goal that already made progress, after two rejected proposals:
+        what the screen shows, with a schema that allows no action. Reading is always safe,
+        and the user gets an answer instead of a blocked task (live: Teams Activity was open
+        and the model kept proposing a Safari toolbar button as a change)."""
+        if self.goal_mode != 'inspect' or not self.receipts:
+            return None
+        raw = provider.complete_structured(SYSTEM, messages+[{'role': 'user', 'content': REPORT_PASS}], schema=deepcopy(_terminal_step),
+                                           image_data=image, max_tokens=400, thinking=False, **cancel_kwargs)
+        check_active()
+        if not isinstance(raw, dict) or raw.get('status') not in ('done', 'needs_user') or raw.get('action') is not None \
+                or not isinstance(raw.get('message'), str) or not raw['message'].strip():
+            return None
+        return {'status': raw['status'], 'message': text(raw['message'], 'task step', 256), 'risk': 'navigation', 'action': None}
 
     def take_opening(self):
         """The predetermined opening step, once, before any model-chosen step."""
@@ -505,12 +716,6 @@ class ComputerTask:
         desktop_generation, vision_generation = desktop.generation, vision.generation
         step_started = time.monotonic()
         stages = {}
-        if self.goal_mode is None:
-            classifier = getattr(type(provider), 'classify_task_goal', None)
-            self.goal_mode = classifier(provider, self.goal) if classifier else 'unspecified'
-            stages['classify_ms'] = round((time.monotonic()-step_started)*1000)
-            if self.cancelled.is_set() or not desktop.enabled or not vision.enabled or desktop.generation != desktop_generation or vision.generation != vision_generation:
-                raise ValueError('Computer task stopped or access was paused. No next action was submitted.')
         observed_at = time.monotonic()
         timing('task.observe.start', observed_at, step=len(self.receipts)+1)
         desktop.collect_once()
@@ -555,9 +760,37 @@ class ComputerTask:
         if self.cancelled.is_set() or not desktop.enabled or not vision.enabled or desktop.generation != desktop_generation or vision.generation != vision_generation:
             raise ValueError('Computer task stopped or access was paused. No next action was submitted.')
         regions = screen_text(visual, snapshot)
+        result = self.click_result(regions, image_data, visual, vision)
+        if result is not None:
+            for _ in range(3):  # a page can take a moment to show what the click opened
+                if result['status'] == 'done':
+                    break
+                time.sleep(0.5)
+                if self.cancelled.is_set() or not desktop.enabled or not vision.enabled or desktop.generation != desktop_generation or vision.generation != vision_generation:
+                    raise ValueError('Computer task stopped or access was paused. No next action was submitted.')
+                desktop.collect_once()
+                snapshot = desktop.context()
+                visual = vision.capture(provider, x=geometry['x'], y=geometry['y'], desktop=snapshot, fast_text=True)
+                image_data = visual.pop('image_data', None)
+                result = self.click_result(screen_text(visual, snapshot), image_data, visual, vision)
+            self.clicked_text = None
+            timing('task.step.summary', step_started, step=len(self.receipts)+1, status=result['status'], code='click_result')
+            return result
         viewed = self.view_step(desktop, snapshot, regions, visual, image_data, vision)
         if viewed is not None:
             return viewed
+        clicked = (self.row_step(desktop, snapshot, visual, image_data, vision)
+                   or self.click_step(desktop, snapshot, regions, visual, image_data, vision))
+        if clicked is not None:
+            timing('task.step.summary', step_started, step=len(self.receipts)+1, status='action', code='click')
+            return clicked
+        if self.goal_mode is None:
+            classify_at = time.monotonic()
+            classifier = getattr(type(provider), 'classify_task_goal', None)
+            self.goal_mode = classifier(provider, self.goal) if classifier else 'unspecified'
+            stages['classify_ms'] = round((time.monotonic()-classify_at)*1000)
+            if self.cancelled.is_set() or not desktop.enabled or not vision.enabled or desktop.generation != desktop_generation or vision.generation != vision_generation:
+                raise ValueError('Computer task stopped or access was paused. No next action was submitted.')
         # A text pass over one or two OCR fragments almost always ends in
         # needs_vision; skip straight to the image instead of paying twice.
         app_key = (snapshot.get('app') or {}).get('bundle_id', '')
@@ -598,6 +831,7 @@ class ComputerTask:
 
         model_image = None
         correction = None
+        control_ids = [c['id'] for c in snapshot.get('controls') or [] if isinstance(c, dict) and c.get('id') and c.get('enabled', True)]
         for attempt in range(2):
             check_active()
             if attempt and progress:
@@ -614,7 +848,8 @@ class ComputerTask:
             request_messages = messages + [{'role': 'user', 'content': final}]
             try:
                 raw = provider.complete_structured(SYSTEM, request_messages,
-                                                   schema=schema_for(snapshot.get('platform'), fast_pass), image_data=None if fast_pass else model_image,
+                                                   schema=schema_for(snapshot.get('platform'), fast_pass, control_ids),
+                                                   image_data=None if fast_pass else model_image,
                                                    max_tokens=1200, thinking=False, **cancel_kwargs)
             finally:
                 stages['model'].append({'mode': 'text' if fast_pass else 'image', 'ms': round((time.monotonic()-inference_at)*1000)})
@@ -643,9 +878,14 @@ class ComputerTask:
                 if fast_pass:
                     self.text_pass_misses.add(app_key)
                 timing('task.step.invalid', inference_at, step=len(self.receipts)+1, attempt=attempt+1,
-                       status_action_mismatch=isinstance(raw, dict) and raw.get('status') in ('done', 'needs_user') and raw.get('action') is not None)
+                       status_action_mismatch=isinstance(raw, dict) and raw.get('status') in ('done', 'needs_user') and raw.get('action') is not None,
+                       action_type=str(((raw.get('action') if isinstance(raw, dict) else None) or {}).get('type', ''))[:20])
                 if attempt:
-                    raise ValidationError('I could not find a safe next step, so nothing was done. ('+str(error)[:300]+')') from error
+                    answer = self.report_only(provider, messages, model_image or image_data, cancel_kwargs, check_active)
+                    if answer is None:
+                        raise ValidationError('I could not find a safe next step, so nothing was done. ('+str(error)[:300]+')') from error
+                    step, raw = answer, dict(answer, action=None)
+                    break
                 correction = ('The previous proposal was rejected before execution: '+str(error)[:500]+
                     ' No action has run. Re-examine the attached screenshot and return ONE corrected JSON object. '
                     'A click or other operation requires status=action and one non-null action. '

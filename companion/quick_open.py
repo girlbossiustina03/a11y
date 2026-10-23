@@ -9,7 +9,7 @@ Anything after "and"/"then" stays for the computer task. Requests this parser
 does not clearly understand return None and go to the model as before."""
 import re
 from .app_names import ALIASES, normalized, resolve_app
-from .web_apps import BROWSER_WORDS, WEB_APPS
+from .web_apps import BROWSER_WORDS, WEB_APPS, site_search
 
 VERB = r'(?:please\s+)?(?:can you\s+|could you\s+)?(?:open(?:\s+up)?|launch|start|go to|bring up)'
 PLACEMENT = re.compile(r'\s+(?:in|on|using|with)\s+(?:a\s+|the\s+)?(new\s+)?(?:(safari|chrome|edge|firefox|browser)\s*)?(window|tab)?\s*$', re.I)
@@ -65,6 +65,11 @@ def plan(request, catalog):
                     'browser_mode': 'default', 'remaining_request': rest}
         if len(apps) > 1:
             return None  # Ambiguous installed apps: let the model ask which one.
+    # Only an unambiguous "search for X": with another "and/then" or a comma ("rock and roll",
+    # "cats, click the first one") the query's end is unclear, so the task gets the whole request.
+    found = site_search(name, rest) if rest and not FOLLOW_UP.search(rest) and not re.search(r'[,;:]', rest) else None
+    if found:
+        return dict(base, operation='browser_open', target=found, remaining_request='')
     if name.casefold() in WEB_APPS:
         return dict(base, operation='browser_open', target=WEB_APPS[name.casefold()])
     if DOMAIN.fullmatch(name):

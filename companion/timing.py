@@ -2,10 +2,15 @@
 import json
 import time
 
+# Extra receivers of each record (the live evaluation channel); empty in normal use.
+listeners = []
+
 
 def timing(event, started, **metrics):
     record = {'event': event, 'elapsed_ms': round((time.monotonic()-started)*1000)}
     record.update(metrics)
+    for listener in listeners:
+        listener(record)
     try:
         print('A11y timing '+json.dumps(record, ensure_ascii=True), flush=True)
     except OSError:

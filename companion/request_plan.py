@@ -12,8 +12,8 @@ INTENT_SCHEMA = {'type': 'object', 'additionalProperties': False,
         'operation': {'enum': list(OPERATIONS)}, 'app_name': {'type': 'string'}, 'target': {'type': 'string'},
         'browser_mode': {'enum': ['window', 'tab', 'default']},
         'remaining_request': {'type': 'string'}, 'media_artist': {'type': 'string'},
-        'goal_mode': {'enum': ['inspect', 'draft', 'change']}, 'reply': {'type': 'string'}}}
-INTENT_SCHEMA['required'] += ['goal_mode', 'reply']
+        'goal_mode': {'enum': ['inspect', 'draft', 'change']}, 'reply': {'type': 'string'}, 'when': {'type': 'string'}}}
+INTENT_SCHEMA['required'] += ['goal_mode', 'reply', 'when']
 INTENT_SYSTEM = '''Interpret ONLY the latest user request. Do not execute or answer it.
 Return operation, app_name (the actual requested app, empty if none), target, and
 browser_mode (default for non-browser requests), remaining_request (empty if the
@@ -65,16 +65,23 @@ read_mail reads one of the user's emails from Apple Mail, however it is phrased 
 my last email", "give me my second last email here", "what did the latest mail say"):
 target is its position from the newest as a number ("1" newest/last, "2" second last).
 Use computer_task instead when the email is chosen by sender or subject.
-Built-in Mac apps (A11y does these exactly; put the details in target, use "now" for dates):
+Built-in Mac apps (A11y does these exactly; put the details in target, use "now" for dates).
+They read ONLY Apple's Mail, Calendar, Reminders, Notes and Contacts. Notifications,
+messages, mentions, activity or tasks in any other app or website (Teams, Slack, WhatsApp,
+Outlook) are computer_task with the full request as target.
 read_calendar target today|tomorrow|week|next|a weekday|YYYY-MM-DD ("any meetings today?",
-"what's my next meeting"); add_event target "title | YYYY-MM-DDTHH:MM | minutes";
-read_reminders target today|all ("what do I have to do"); add_reminder target
-"title | YYYY-MM-DDTHH:MM or empty"; complete_reminder target = the reminder's title;
+"what's my next meeting"); add_event target = the event's title (add " | minutes" only for
+a stated length); read_reminders target today|all ("what do I have to do"); add_reminder
+target = what to be reminded of, in the user's words ("call mom"), never the time;
+complete_reminder target = the reminder's title;
 read_notes target = a note's title, "latest", or empty to list them; create_note target
 "title | text"; find_contact target = a person's name ("what's Ana's number");
 recent_files target downloads|desktop|documents|empty; open_file target = a file name
 or "latest download"; read_page for questions about the web page open in the browser
 ("summarize this page"); list_shortcuts; run_shortcut target = the shortcut's name.
+when: for add_event and add_reminder the time as YYYY-MM-DDTHH:MM worked out from "now"
+("at 6" is the next 6 o'clock; "tomorrow at 3" is 15:00 tomorrow), empty if no time is given;
+empty for every other operation.
 "Mark/show me where" and "highlight" request highlight only, even for a close or
 delete button. They never request clicking/closing. "Mark where the left terminal's
 close button is" is highlight, not computer_task or close_window.
@@ -82,7 +89,8 @@ When the target is inside A11y's own settings/menu, use app_name=A11y. These are
 the companion's controls, not Finder, Terminal, or the macOS desktop.
 These operations are not substitutes. "close lower right terminal" is close_window,
 app_name Terminal, not movement. "open Stremio" is launch_app, app_name Stremio,
-never Terminal. "open a new terminal" is new_window, app_name Terminal.
+never Terminal. "open a new terminal" is new_window, app_name Terminal. "open a new Safari
+window" is new_window, app_name Safari, never a website.
 A complaint such as "you did not close it" is answer; do not repeat an action.
 goal_mode classifies the requested outcome: inspect means opening, navigating,
 searching, reading, checking information (including activity/tasks) or calculator
@@ -126,7 +134,7 @@ def with_opening(plan, request):
 
 
 def validate_plan(value):
-    if not isinstance(value, dict) or not {'operation', 'app_name', 'target'} <= set(value) or set(value) - {'operation', 'app_name', 'target', 'browser_mode', 'remaining_request', 'media_artist', 'goal_mode', 'opening', 'reply', 'computed', 'full_text', 'read_aloud', 'app_write'}:
+    if not isinstance(value, dict) or not {'operation', 'app_name', 'target'} <= set(value) or set(value) - {'operation', 'app_name', 'target', 'browser_mode', 'remaining_request', 'media_artist', 'goal_mode', 'opening', 'reply', 'when', 'computed', 'full_text', 'read_aloud', 'app_write'}:
         raise ValidationError('The request could not be interpreted reliably. Please name the action and target.')
     if value['operation'] not in OPERATIONS or any(not isinstance(value[key], str) or len(value[key]) > (2000 if key == 'target' else 500) for key in ('app_name', 'target')):
         raise ValidationError('The request planner returned an invalid operation.')
@@ -140,9 +148,9 @@ def validate_plan(value):
         raise ValidationError('Invalid direct reply.')
     if value.get('goal_mode', 'inspect') not in ('inspect', 'draft', 'change'):
         raise ValidationError('Invalid goal scope.')
-    for field in ('remaining_request', 'media_artist'):
+    for field in ('remaining_request', 'media_artist', 'when'):
         if not isinstance(value.get(field, ''), str) or len(value.get(field, '')) > 500:
-            raise ValidationError('Invalid remaining request or media artist.')
+            raise ValidationError('Invalid remaining request, media artist or time.')
     return value
 
 

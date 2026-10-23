@@ -1,5 +1,6 @@
 """Launch the native companion. Use server.py for the dependency-free web fallback."""
 import argparse
+import os
 import sys
 
 
@@ -50,6 +51,10 @@ def main():
             'This launch did not load new code. Quit the existing companion from its right-click menu, then relaunch.\n\n'+str(error))
         return 1
     print(f'A11y desktop build {build_id()}', flush=True)
+    # On macOS Qt's raise_() also activates the whole app. Raising the mascot after each action
+    # then took keyboard focus from the app the user (or a task) was working in. Opening the
+    # panel still activates A11y through activateWindow().
+    os.environ.setdefault('QT_MAC_SET_RAISE_PROCESS', '0')
     app = QApplication(sys.argv[:1])
     from companion.theme import apply_theme
     apply_theme(app)
@@ -57,6 +62,10 @@ def main():
     app.setApplicationName('A11y')
     app.setOrganizationName('A11y Hackathon')
     window = CompanionWindow(service)
+    from companion import eval_control
+    if eval_control.enabled():
+        # scripts/live_eval.py drives this source run through an owner-only local socket.
+        window.eval_control = eval_control.EvalControl(window, os.getenv('A11Y_EVAL_SOCKET') or service.store.directory/'eval.sock')
     window.start_companion()
     if args.panel:
         window.show()
