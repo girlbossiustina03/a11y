@@ -1877,6 +1877,8 @@ class CompanionWindow(QMainWindow):
         if self.pending_target:
             choices.append(('Show me where', 'guide'))
         elif self.pending_desktop_action and self.pending_desktop_action['type'] == 'start_task':
+            if message:
+                self.record_companion_message(message)  # e.g. why a follow-up task starts
             self.offer_computer_task(self.pending_desktop_action['goal'], self.pending_desktop_action.get('goal_mode'),
                                      self.pending_desktop_action.get('opening'))
             return

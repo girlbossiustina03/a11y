@@ -111,6 +111,17 @@ class MacDesktopBridge:
             return self.call('--input', json.dumps(action))
         if kind == 'play_media':
             return self.call('--music-play', action['query'], action['artist'])
+        if kind == 'music_search':
+            # Fixed command, no shell: the Music app opens its Apple Music search page.
+            from urllib.parse import quote
+            url = 'https://music.apple.com/search?term='+quote(action['query'])
+            try:
+                result = subprocess.run(['open', '-b', 'com.apple.Music', url], capture_output=True, timeout=10)
+            except (OSError, subprocess.TimeoutExpired):
+                raise RuntimeError('Music could not open Apple Music search.') from None
+            if result.returncode:
+                raise RuntimeError('Music could not open Apple Music search.')
+            return {'submitted': True, 'verification_required': True, 'url': url}
         if kind == 'browse_url':
             return self.call('--browse', action['bundle_id'], action['url'], action.get('browser_mode', 'default'))
         if kind == 'close_window':
@@ -310,9 +321,31 @@ class DesktopContext:
                 raise RuntimeError('Input submission is uncertain. Check the app before retrying.')
             self.collect_once()
             return result
+        if kind == 'music_search':
+            query = proposal.get('query')
+            if not isinstance(query, str) or not query.strip() or len(query) > 300 or any(ord(c) < 32 for c in query):
+                raise ValueError('Name a song to search for.')
+            if not any(app['bundle_id'] == 'com.apple.Music' for app in self.installed_apps()):
+                raise ValueError('Music is not installed.')
+            return self.bridge.application_action({'type': 'music_search', 'query': query.strip()})
         if kind == 'play_media':
-            current = self.authorize_action({key: proposal[key] for key in ('type', 'query', 'artist')})
-            return self.bridge.application_action(current)
+            from .media import near_match, split_artist
+            query, artist = proposal['query'], proposal['artist']
+            current = self.authorize_action({'type': 'play_media', 'query': query, 'artist': artist})
+            result = self.bridge.application_action(current)
+            split = split_artist(query, artist)
+            if result.get('outcome') == 'not_found' and split != (query, artist):
+                # "Last Christmas by Wham": the whole title is tried first ("Stand by Me"
+                # must stay one title), then title and artist separately.
+                query, artist = split
+                result = self.bridge.application_action(self.authorize_action({'type': 'play_media', 'query': query, 'artist': artist}))
+            match = near_match(result, query, artist)
+            if match:
+                # The library has exactly one track with this title plus credits or a
+                # version tag ("Far Away (feat. …)"): play that exact track.
+                retry = self.authorize_action({'type': 'play_media', 'query': match[0], 'artist': match[1]})
+                result = dict(self.bridge.application_action(retry), matched_title=match[0])
+            return result
         if proposal['type'] == 'browse_url':
             result = self.bridge.application_action(self.authorize_browser(proposal))
             if not result.get('submitted'):

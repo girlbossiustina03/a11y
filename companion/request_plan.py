@@ -228,6 +228,10 @@ def preserve_desktop_goal(plan, request):
         # Small models often echo the request, or put a reply here, for operations that have no
         # follow-up step; that is not additional work and must not be reported as pending.
         plan = dict(plan, remaining_request='')
+    if plan['operation'] == 'inspect_media' and not re.search(
+            r'\b(play(?:ing|s|ed)?|song|music|track|listen(?:ing)?|album|artist|paused|audio|spotify|podcast)\b', request, re.I):
+        # Live: "what time is it" was answered with Music's playback state.
+        plan = dict(plan, operation='answer', app_name='', target='')
     from .web_lookup import plain_question
     if (plan['operation'] in ('browser_search', 'browser_open') and not plan.get('remaining_request', '').strip()
             and plain_question(request)):

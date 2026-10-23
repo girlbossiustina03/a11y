@@ -339,8 +339,9 @@ class Companion:
             return None
 
     def prepare_request(self, request):
-        from .arithmetic import answer as arithmetic_answer
+        from .arithmetic import answer as arithmetic_answer, clock_answer
         computed = arithmetic_answer(request) if not re.search(r'\bcalculator\b', request, re.I) else None
+        computed = computed or clock_answer(request)
         if computed:
             # "5 + 5?" is answered in code: no model call, no app, no computer task.
             self.last_request_plan = {'operation': 'answer', 'app_name': '', 'target': '', 'reply': computed}
@@ -403,7 +404,20 @@ class Companion:
                     result.update({key: current[key] for key in ('player_state', 'track') if key in current})
                 except RuntimeError:
                     result['player_state'] = 'unknown'
-            return {'desktop_action': None, 'target': None, 'workflow': None, 'sources': [],
+            offer = None
+            if result.get('outcome') == 'not_found' and receipt.get('query') and self.desktop_context:
+                # Not in the library: open Apple Music search in the Music app (code), then
+                # let a task play the top song result from what is on screen.
+                wanted = receipt['query']+(' '+receipt['artist'] if receipt.get('artist') else '')
+                try:
+                    self.desktop_context.application_action({'type': 'music_search', 'query': wanted})
+                except (RuntimeError, ValueError):
+                    pass  # The library result below still explains what happened.
+                else:
+                    offer = {'type': 'start_task', 'goal': 'Music is showing Apple Music search results for “'+wanted+'”. Play the top song result.',
+                             'goal_mode': 'inspect'}
+                    result = dict(result, apple_music_search=True)
+            return {'desktop_action': offer, 'target': None, 'workflow': None, 'sources': [],
                     'message': describe_play_result(result), 'effective': self.adaptation.effective(self.identity)}
         if mode == 'verify' and (self.last_action_result or {}).get('type') == 'launch_app':
             receipt = self.last_action_result
@@ -536,8 +550,13 @@ class Companion:
                 elif not request_plan['target'].strip():
                     prebuilt = {'request_kind': 'answer', 'message': 'Which song title and artist should I look for in your Music library?', 'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
                 else:
+                    query, artist = request_plan['target'], request_plan.get('media_artist', '')
+                    by = re.match(r'^\s*by\s+(.+)$', request_plan.get('remaining_request', ''), re.I)
+                    if by:
+                        artist = artist or by.group(1).strip()
+                        request_plan = dict(request_plan, remaining_request='')  # "by Wham" is the artist, not pending work
                     prebuilt = {'request_kind': 'play_media', 'message': 'Finding the requested library track…', 'source_ids': [], 'workflow': None, 'target': None,
-                        'desktop_action': {'type': 'play_media', 'query': request_plan['target'], 'artist': request_plan.get('media_artist', '')}}
+                        'desktop_action': {'type': 'play_media', 'query': query, 'artist': artist}}
             elif operation in INPUT_TYPES:
                 if not desktop.get('enabled'):
                     action = {'type': 'request_app_access'}

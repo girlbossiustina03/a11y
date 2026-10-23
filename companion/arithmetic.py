@@ -107,3 +107,19 @@ def find_key(key, controls):
         if label in names and control.get('enabled', True):
             return control
     return None
+
+
+TIME_QUESTION = re.compile(r"\b(what(?:'s| is)? the time|what time is it|current time|time (?:is it )?now|tell me the time)\b", re.I)
+DATE_QUESTION = re.compile(r"\b(what(?:'s| is)? (?:the |today'?s )?date|what day is (?:it|today)|today'?s date|what(?:'s| is) today)\b", re.I)
+
+
+def clock_answer(text, now=None):
+    """Time/date questions answered from the system clock, else None."""
+    import datetime
+    now = now or datetime.datetime.now()
+    if TIME_QUESTION.search(text):
+        hour = now.hour % 12 or 12
+        return 'It’s %d:%02d %s.' % (hour, now.minute, 'AM' if now.hour < 12 else 'PM')
+    if DATE_QUESTION.search(text):
+        return 'Today is %s, %d %s %d.' % (now.strftime('%A'), now.day, now.strftime('%B'), now.year)
+    return None

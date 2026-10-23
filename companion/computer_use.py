@@ -44,7 +44,8 @@ class ComputerUse:
         if (kind not in ('launch_app', 'browse_url', 'click_point', 'play_media') and not (kind == 'new_window' and proposal.get('bundle_id') == 'com.apple.Safari') and not self.desktop.enabled) or self.desktop.generation != generation:
             raise RuntimeError('The action may have been submitted, but app awareness was paused. Check the app before trying again.')
         after = self.desktop.context()
-        return {'type': kind, 'native_result': native_result, 'remaining_request': proposal.get('remaining_request', ''), 'requested_url': proposal.get('url'), 'bundle_id': proposal.get('bundle_id'), 'label': proposal.get('label', ''), 'status': 'submitted',
+        return {'type': kind, 'native_result': native_result, 'remaining_request': proposal.get('remaining_request', ''), 'requested_url': proposal.get('url'),
+                **({'query': proposal.get('query', ''), 'artist': proposal.get('artist', '')} if kind == 'play_media' else {}), 'bundle_id': proposal.get('bundle_id'), 'label': proposal.get('label', ''), 'status': 'submitted',
                 'before': self.summary(before, proposal.get('bundle_id')), 'after': self.summary(after, proposal.get('bundle_id')),
                 'verification': 'Observe the result; API acceptance does not prove task completion.',
                 'application_state': self.desktop.app_state(proposal['bundle_id']) if proposal.get('bundle_id') else {},

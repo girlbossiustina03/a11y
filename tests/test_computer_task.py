@@ -342,5 +342,5 @@ class PlaybackTests(unittest.TestCase):
         self.assertIn('playing Last Christmas by Wham!', describe_play_result(result))
         result['track']['id'] = 'OTHER'
         self.assertIn('not confirmed', describe_play_result(result))
-        self.assertIn('Nothing was played', describe_play_result({'outcome': 'not_found'}))
+        self.assertIn('nothing was played', describe_play_result({'outcome': 'not_found'}).casefold())
         self.assertIn('Nothing was played', describe_play_result({'outcome': 'ambiguous'}))
