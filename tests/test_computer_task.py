@@ -97,8 +97,7 @@ class TaskTests(unittest.TestCase):
         self.task.propose(self.desktop, self.vision, self.provider, {'x': 0, 'y': 0},
                           progress=lambda message: events.append(message))
         # A completion reported before anything ran is rechecked once.
-        self.assertEqual(events, ['Choosing the next action with the local model…', 'model',
-                                  'Rechecking the next action with the local model…', 'model'])
+        self.assertEqual(events, ['Deciding the next step…', 'model', 'Double-checking…', 'model'])
 
     def enable_ocr(self):
         capture = self.vision.capture.side_effect
@@ -252,7 +251,7 @@ class TaskTests(unittest.TestCase):
         self.provider.complete_structured.return_value = {'status': 'done', 'message': 'Click.', 'risk': 'navigation',
                                                          'action': {'type': 'click_point', 'x': .2, 'y': .3, 'label': 'Battery'}}
         def progress(message):
-            if message.startswith('Rechecking'):
+            if message.startswith('Double-checking'):
                 self.task.stop()
         with self.assertRaisesRegex(ValueError, 'stopped'):
             self.task.propose(self.desktop, self.vision, self.provider, {'x': 0, 'y': 0}, progress=progress)

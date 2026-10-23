@@ -93,6 +93,9 @@ visible. A highlight can move the companion beside it after the user's confirmat
 """
 
 SYSTEM = '''You are A11y, a practical, friendly desktop companion. Match the user's language.
+Write plain text only: no markdown, asterisks, headings or decorative dashes. Be precise
+and brief: answer first in one to three short sentences; use a short numbered list only
+for real steps. Do not invent facts about the user, their employer or their needs.
 In mode=verify, inspect the current screenshot/desktop metadata after last_action_result.
 Report observed changes and uncertainty. Do not output actions, targets or workflows.
 Never treat API submission or a changed window as proof the user's task is complete.
@@ -173,6 +176,32 @@ Return ONLY a JSON object with these fields, including desktop_action (null when
  "target":null or {"label":"what to do and where", "x":0.1,"y":0.2,"width":0.1,"height":0.05},
  "desktop_action":null or an allowed desktop_action object described below}
 Do not include markdown code fences or additional action types.'''
+
+
+def drop_unknown_citations(raw, allowed):
+    """Remove invented source IDs instead of rejecting a whole answer (seen live).
+
+    Only IDs of freshly retrieved, authorized chunks can remain, so citations stay
+    trustworthy; a company workflow step left without a source still fails validation."""
+    if not isinstance(raw, dict):
+        return raw
+    raw = dict(raw)
+    if isinstance(raw.get('source_ids'), list):
+        raw['source_ids'] = [item for item in raw['source_ids'] if item in allowed]
+    workflow = raw.get('workflow')
+    if isinstance(workflow, dict) and isinstance(workflow.get('steps'), list):
+        raw['workflow'] = dict(workflow, steps=[dict(step, source_ids=[item for item in step['source_ids'] if item in allowed])
+            if isinstance(step, dict) and isinstance(step.get('source_ids'), list) else step for step in workflow['steps']])
+    return raw
+
+
+def plain_text(message):
+    """Replies are shown and spoken as plain text: drop markdown emphasis/headings."""
+    message = re.sub(r'\*\*|__|`', '', message)
+    message = re.sub(r'(?m)^\s{0,3}#{1,6}\s+', '', message)
+    message = re.sub(r'(?m)^\s*[-*•]\s+', '• ', message)
+    message = re.sub(r'\s+--\s+', ' – ', message)
+    return re.sub(r'\n{3,}', '\n\n', message).strip()
 
 
 def geometric_destination(phrase):
@@ -562,6 +591,10 @@ class Companion:
                     schema=cite_only(schema or RESPONSE_SCHEMA, {s['id'] for s in sources}))
             else:
                 raw = self.provider.complete(system, messages, image_data=image_data)
+            if not sources:
+                # No company documents were involved, so an invented citation is noise.
+                # With retrieved sources it still rejects the answer (uncited company claims).
+                raw = drop_unknown_citations(raw, set())
             try:
                 response = validate_response(raw, {s['id'] for s in sources},
                     planning=mode in ('plan', 'assist'), has_screen=bool(image_data),
@@ -584,6 +617,7 @@ class Companion:
                     'and ask a clarification with no target/action.')
                 messages = [{'role': 'user', 'content': json.dumps(dict(context, correction=correction), ensure_ascii=False)},
                             {'role': 'user', 'content': request}]
+        response['message'] = plain_text(response['message'])
         action = response.get('desktop_action') or {}
         if action.get('type') in ('launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'press_control', 'browse_url', 'click_point', 'play_media', 'type_text', 'press_key', 'scroll'):
             label = action.get('confirmation_label', action['label'])

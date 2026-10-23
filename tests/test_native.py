@@ -296,7 +296,7 @@ class NativeTests(unittest.TestCase):
             self.assertEqual(capture.call_count, 5)
             self.assertEqual(self.window.computer_task.status, 'done')
             self.assertEqual(len(self.window.computer_task.receipts), 4)
-            self.assertIn('model reports completion', self.window.mascot.bubble.toPlainText())
+            self.assertIn('Looks done', self.window.mascot.bubble.toPlainText())
             for call in self.service.provider.complete_structured.call_args_list:
                 self.assertIn('Find accessibility help', call.args[1][0]['content'])
                 self.assertIsNone(call.kwargs['image_data'])
@@ -424,6 +424,58 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(next_step.call_count, 2)  # two fresh looks, then the task stops
         self.assertEqual(task.status, 'blocked')
         self.assertFalse(task.receipts)
+
+    def test_companion_waits_beside_a_target_without_covering_it(self):
+        from PyQt6.QtCore import QRect
+        screen = QRect(0, 0, 1440, 900)
+        size = self.window.mascot.size()
+        for x in range(0, 1440, 60):
+            for y in range(0, 900, 60):
+                target = QPoint(x, y)
+                spot = self.window.companion_spot(target, screen)
+                if spot is not None:
+                    covered = QRect(spot, size).adjusted(-24, -24, 24, 24)
+                    self.assertFalse(covered.contains(target), (x, y))
+                    self.assertTrue(screen.contains(QRect(spot, size)), (x, y))
+
+    def test_task_action_waits_for_the_glide_and_stop_during_glide_sends_nothing(self):
+        from companion.computer_task import ComputerTask
+        area = self.window.mascot.screen().geometry()
+        def step(task):
+            action = {'type': 'press_control', 'control_id': 'control-0', 'label': 'Activity',
+                      'bounds': {'x': area.x()+700, 'y': area.y()+300, 'width': 80, 'height': 30}}
+            task.pending = action
+            return {'status': 'action', 'message': 'Open Activity.', 'review': False, 'action': action, 'visual_capture': None}
+        for stop_midway in (False, True):
+            self.window.mascot.move(area.topLeft())  # start away from the target each round
+            task = self.window.computer_task = ComputerTask('Find help', automatic=True)
+            with patch.object(self.window, 'execute_desktop_action') as execute:
+                self.window.receive_computer_step(task, step(task))
+                QTest.qWait(60)
+                self.qt.processEvents()
+                execute.assert_not_called()  # still hopping
+                if stop_midway:
+                    self.window.mascot_action('computer:stop')
+                deadline = time.monotonic()+3
+                while time.monotonic() < deadline and not execute.called:
+                    QTest.qWait(20)
+                    self.qt.processEvents()
+                self.assertEqual(execute.called, not stop_midway)
+
+    def test_reduced_motion_disables_glides_lean_and_hops(self):
+        character = self.window.mascot.character
+        character.set_reduced_motion(True)
+        character.last_owner_pos = QPoint(0, 0)
+        character.owner_moved(QPoint(200, 0))
+        character.hop()
+        self.assertEqual(character.motion(), (0.0, 1.0, 1.0, 0.0))
+        with patch.object(self.service.adaptation, 'effective', return_value={'reduced_motion': True}):
+            done = []
+            self.window.animate_companion_to(self.window.mascot.pos()+QPoint(300, 0), finished=lambda: done.append(1))
+            self.qt.processEvents()
+            QTest.qWait(10)
+            self.qt.processEvents()
+        self.assertEqual(done, [1])
 
     def test_stop_cancels_an_automatic_step_queued_for_execution(self):
         from companion.computer_task import ComputerTask
@@ -681,7 +733,7 @@ class NativeTests(unittest.TestCase):
     def test_prompt_is_compact_and_menu_controls_are_not_in_normal_chat(self):
         mascot = self.window.mascot
         self.assertTrue(mascot.compact)
-        self.assertEqual(mascot.width(), 240)
+        self.assertEqual(mascot.width(), 300)
         self.assertFalse(mascot.choice_area.isVisible())
         self.assertFalse(mascot.stage.isVisible())
         self.assertFalse(mascot.settings_button.isVisible())
@@ -751,7 +803,7 @@ class NativeTests(unittest.TestCase):
         card_pos, _ = bounds(mascot.card)
         character_pos, character_size = bounds(mascot.character)
         self.assertLess(card_pos.x()+mascot.card.width(), send_pos.x())
-        self.assertLessEqual(mascot.width()-mascot.character.width(), 90)
+        self.assertLessEqual(mascot.width()-mascot.character.width(), 150)  # 300-px compact surface
         self.assertEqual(mascot.send.parentWidget(), mascot.controls_row)
         self.assertEqual(mascot.prompt_settings.parentWidget(), mascot.controls_row)
         self.assertLess(character_pos.y()+character_size.height(), card_pos.y())

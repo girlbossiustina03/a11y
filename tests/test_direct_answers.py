@@ -74,5 +74,41 @@ class DirectAnswerServiceTests(CompanionFixture, unittest.TestCase):
         self.assertEqual(result['desktop_action']['type'], 'browse_url')
 
 
+class ReplyQualityTests(unittest.TestCase):
+    def test_markdown_is_removed_from_replies(self):
+        from companion.service import plain_text
+        self.assertEqual(plain_text('## First day\n\n1. **Arrive on time** -- greet your team.\n- Ask `questions`'),
+                         'First day\n\n1. Arrive on time – greet your team.\n• Ask questions')
+
+    def test_invented_citations_are_dropped_not_fatal(self):
+        from companion.service import drop_unknown_citations
+        raw = {'message': 'x', 'source_ids': ['real', 'invented'], 'workflow': {'title': 't', 'steps': [
+            {'instruction': 'i', 'application': '', 'keyboard_hint': '', 'source_ids': ['invented']}]}}
+        cleaned = drop_unknown_citations(raw, {'real'})
+        self.assertEqual(cleaned['source_ids'], ['real'])
+        self.assertEqual(cleaned['workflow']['steps'][0]['source_ids'], [])
+        self.assertEqual(raw['source_ids'], ['real', 'invented'])  # input untouched
+
+
+class InspectionChangeTests(unittest.TestCase):
+    def test_turning_on_notifications_is_a_change_not_inspection(self):
+        # Live: "see if I have notifications" clicked "Turn on desktop notifications".
+        from companion.computer_task import needs_review
+        self.assertTrue(needs_review({'type': 'click_point', 'label': 'Turn on desktop notifications'}, 'navigation'))
+        self.assertFalse(needs_review({'type': 'click_point', 'label': 'Activity'}, 'navigation'))
+
+
+class CitationPolicyServiceTests(CompanionFixture, unittest.TestCase):
+    def test_invented_citation_on_a_general_question_does_not_fail_the_answer(self):
+        # Live: "tell me where china is directly" failed with "cited a source outside the retrieved documents".
+        self.app.provider = Mock()
+        self.app.provider.complete_structured.return_value = {'request_kind': 'answer', 'message': 'China is in East Asia.',
+            'source_ids': ['made-up'], 'workflow': None, 'target': None, 'desktop_action': None}
+        with patch.object(self.app.knowledge, 'retrieve', return_value=[]):
+            result = self.app.ask('tell me where china is directly')
+        self.assertEqual(result['message'], 'China is in East Asia.')
+        self.assertEqual(result['sources'], [])
+
+
 if __name__ == '__main__':
     unittest.main()

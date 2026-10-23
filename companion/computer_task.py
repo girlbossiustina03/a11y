@@ -142,7 +142,7 @@ def needs_review(action, risk):
     if action.get('type') == 'press_key' and action.get('key') in ('enter', 'cmd_w'):
         return True
     import re
-    return bool(re.search(r'\b(send|post|delete|remove|buy|pay|purchase|subscribe|install|download|upload|allow|permission|password|sign.?in|submit)\b', action.get('label', ''), re.I))
+    return bool(re.search(r'\b(send|post|delete|remove|buy|pay|purchase|subscribe|install|download|upload|allow|permission|password|sign.?in|submit|turn on|turn off|enable|disable|accept|block|unsubscribe)\b', action.get('label', ''), re.I))
 
 
 def screen_text(visual, snapshot):
@@ -275,7 +275,7 @@ def validate_step(raw, desktop, snapshot, *, goal_mode=None, screen=None, text_r
                     labels.append(control.get('label', ''))
         import re
         if action['type'] in ('click_point', 'press_control') and any(re.search(
-                r'\b(post|send|reply|compose|delete|remove|buy|pay|purchase|subscribe|install|download|upload|allow|permission|password|sign.?in|submit)\b|\bnew message\b', label, re.I) for label in labels):
+                r'\b(post|send|reply|compose|delete|remove|buy|pay|purchase|subscribe|install|download|upload|allow|permission|password|sign.?in|submit|turn on|turn off|enable|disable|accept|block|unsubscribe)\b|\bnew message\b', label, re.I) for label in labels):
             raise ValidationError('This is an inspection-only goal. Do not open a composer, post/send, or change anything. Choose a reading/navigation target, or report a genuine blocker with action=null.')
         if raw['risk'] == 'change':
             raise ValidationError('This goal only authorizes inspection. Choose a navigation action or pause with action=null; do not propose a change.')
@@ -421,7 +421,7 @@ class ComputerTask:
         stages['text_regions'] = len(regions)
         stages['controls'] = len(snapshot.get('controls') or [])
         if progress:
-            progress('Reading screen text and controls…' if fast_available else 'Choosing the next action with the local model…')
+            progress('Reading the screen…' if fast_available else 'Deciding the next step…')
         # Before/after snapshots in old receipts duplicate the current observation
         # and grow every turn. Keep only compact action outcomes in model context.
         history = []
@@ -456,7 +456,7 @@ class ComputerTask:
         for attempt in range(2):
             check_active()
             if attempt and progress:
-                progress('Inspecting image details…' if fast_available else 'Rechecking the next action with the local model…')
+                progress('Looking closer…' if fast_available else 'Double-checking…')
             check_active()
             inference_at = time.monotonic()
             fast_pass = fast_available and attempt == 0

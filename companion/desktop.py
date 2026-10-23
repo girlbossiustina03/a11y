@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import sys
 import time
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QByteArray, QBuffer, QIODevice, QPoint, QUrl, QRect, QPropertyAnimation, QEasingCurve
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QByteArray, QBuffer, QIODevice, QPoint, QUrl, QRect, QPropertyAnimation, QVariantAnimation, QEasingCurve
 from PyQt6.QtGui import QKeySequence, QShortcut, QDesktopServices
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
@@ -1030,18 +1030,62 @@ class CompanionWindow(QMainWindow):
                           max(usable.top()+16, min(top, usable.bottom()-self.mascot.height()-16)))
         self.animate_companion_to(position)
 
-    def animate_companion_to(self, position):
+    def animate_companion_to(self, position, *, finished=None):
+        """Hop to a position along a low arc; the character leans and stretches with the
+        window's speed. Reduced motion moves instantly."""
         if self.move_animation:
             self.move_animation.stop()
-        if self.service.adaptation.effective(self.service.identity)['reduced_motion']:
+        start = QPoint(self.mascot.pos())
+        distance = ((position.x()-start.x())**2+(position.y()-start.y())**2)**0.5
+        if self.service.adaptation.effective(self.service.identity)['reduced_motion'] or distance < 2:
             self.mascot.move(position)
-        else:
-            self.move_animation = QPropertyAnimation(self.mascot, b'pos', self)
-            self.move_animation.setDuration(450)
-            self.move_animation.setStartValue(self.mascot.pos())
-            self.move_animation.setEndValue(position)
-            self.move_animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
-            self.move_animation.start()
+            if finished:
+                QTimer.singleShot(0, finished)
+            return
+        arc = min(110.0, distance*0.22)
+        animation = QVariantAnimation(self)
+        animation.setStartValue(0.0)
+        animation.setEndValue(1.0)
+        animation.setDuration(int(max(380, min(1100, 260+distance*0.55))))
+        animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        def step(t):
+            x = start.x()+(position.x()-start.x())*t
+            y = start.y()+(position.y()-start.y())*t-arc*4*t*(1-t)
+            self.mascot.move(QPoint(round(x), round(y)))
+        animation.valueChanged.connect(step)
+        if finished:
+            animation.finished.connect(finished)
+        self.move_animation = animation
+        self.mascot.character.hop(duration=animation.duration(), height=0.0)  # crouch on take-off, squash on landing
+        animation.start()
+
+    @staticmethod
+    def action_point(action, visual):
+        """Desktop point an action will touch, if it has one."""
+        if action.get('type') == 'click_point' and visual and visual.get('screen'):
+            screen = visual['screen']
+            return QPoint(round(screen['x']+action['x']*screen['width']), round(screen['y']+action['y']*screen['height']))
+        bounds = action.get('bounds') if action.get('type') == 'press_control' else None
+        if bounds and all(key in bounds for key in ('x', 'y', 'width', 'height')):
+            return QPoint(round(bounds['x']+bounds['width']/2), round(bounds['y']+bounds['height']/2))
+        return None
+
+    def companion_spot(self, target, screen_rect):
+        """Where the companion waits beside a target point without covering it."""
+        size = self.mascot.size()
+        gap = 48
+        x = target.x()+gap if target.x() < screen_rect.center().x() else target.x()-gap-size.width()
+        y = target.y()-size.height()//2
+        x = max(screen_rect.left()+8, min(x, screen_rect.right()-size.width()-8))
+        y = max(screen_rect.top()+8, min(y, screen_rect.bottom()-size.height()-8))
+        spot = QRect(QPoint(x, y), size).adjusted(-24, -24, 24, 24)
+        if spot.contains(target):
+            # Squeezed at a screen edge: go above or below the target instead.
+            y = target.y()+gap if target.y() < screen_rect.center().y() else target.y()-gap-size.height()
+            y = max(screen_rect.top()+8, min(y, screen_rect.bottom()-size.height()-8))
+            if QRect(QPoint(x, y), size).adjusted(-24, -24, 24, 24).contains(target):
+                return None
+        return QPoint(x, y)
 
     def confirm_access(self, title, explanation, details, action):
         return AccessSheet(self, title, explanation, details, action).exec() == QDialog.DialogCode.Accepted
@@ -1209,7 +1253,7 @@ class CompanionWindow(QMainWindow):
             # The already-resolved first step (open the named app/site); see ComputerTask.take_opening.
             self.pending_desktop_action['opening'] = opening
         proposal = self.pending_desktop_action
-        self.say('Starting: '+goal, [('Stop task', 'computer:stop')], compact=True)
+        self.say('On it: '+goal, [('Stop', 'computer:stop')], compact=True, state='thinking')
         def begin():
             if self.pending_desktop_action is proposal:
                 self.start_computer_task(automatic=True)
@@ -1255,15 +1299,16 @@ class CompanionWindow(QMainWindow):
         self.pending_desktop_action = None
         self.clear_guidance()
         self.hide()
-        self.say(f'Working on it · step {len(task.receipts)+1}\nObserving the screen…', [('Stop task', 'computer:stop')], compact=True)
+        self.mascot.set_state('thinking')
+        self.say(f'Step {len(task.receipts)+1} · Looking at the screen…', [('Stop', 'computer:stop')], compact=True, state='thinking')
         self.set_busy(True)
         area = self.mascot.screen().geometry()
         worker = TaskStepWorker(task, self.desktop_monitor, self.vision, self.service.provider,
                                 {'x': area.x(), 'y': area.y()}, self)
         self.worker = worker
         worker.progress.connect(lambda message: self.say(
-            f'Working on it · step {len(task.receipts)+1}\n{message}',
-            [('Stop task', 'computer:stop')], compact=True)
+            f'Step {len(task.receipts)+1} · {message}',
+            [('Stop', 'computer:stop')], compact=True, state='thinking')
             if self.computer_task is task and not task.cancelled.is_set() else None)
         worker.result.connect(lambda result: self.receive_computer_step(task, result))
         worker.failed.connect(lambda message: self.failed(message) if self.computer_task is task and not task.cancelled.is_set() else None)
@@ -1275,8 +1320,10 @@ class CompanionWindow(QMainWindow):
             return
         if step['status'] != 'action':
             task.stop(step['status'])
-            prefix = 'The model reports completion from the current screen: ' if step['status'] == 'done' else 'Task paused: '
+            prefix = 'Looks done: ' if step['status'] == 'done' else 'Paused: '  # the model's reading of the screen, not a verified result
             self.say(prefix+step['message'], compact=True)
+            if step['status'] == 'done':
+                self.mascot.character.hop(height=14.0)
             return
         response = {'message': step['message'], 'sources': [], 'workflow': None, 'target': None,
                     'desktop_action': step['action'], 'visual_capture': step['visual_capture'], 'task_step': True}
@@ -1289,10 +1336,20 @@ class CompanionWindow(QMainWindow):
             def apply():
                 if self.computer_task is task and not task.cancelled.is_set() and self.pending_desktop_action is proposal:
                     self.execute_desktop_action(proposal)
+            def go():
+                # Hop beside the target first so the user sees where it acts; the action
+                # waits for the landing, and the spot never covers the target.
+                point = self.action_point(proposal, step.get('visual_capture'))
+                screen = QApplication.screenAt(point) if point else None
+                spot = self.companion_spot(point, screen.availableGeometry()) if screen else None
+                if spot is not None:
+                    self.animate_companion_to(spot, finished=apply)
+                else:
+                    apply()
             if self.worker and self.worker.isRunning():
-                self.worker.finished.connect(lambda: QTimer.singleShot(0, apply))
+                self.worker.finished.connect(lambda: QTimer.singleShot(0, go))
             else:
-                QTimer.singleShot(0, apply)
+                QTimer.singleShot(0, go)
 
     def execute_desktop_action(self, proposal):
         if self.worker and self.worker.isRunning():
@@ -1303,7 +1360,7 @@ class CompanionWindow(QMainWindow):
         self.clear_guidance()
         self.hide()
         if task is not None:
-            self.say('Executing: '+proposal.get('label', proposal['type']), [('Stop task', 'computer:stop')], compact=True)
+            self.say(proposal.get('label', proposal['type'])+'…', [('Stop', 'computer:stop')], compact=True)
         else:
             self.mascot.collapse_chat()
         self.set_busy(True)
@@ -1313,8 +1370,8 @@ class CompanionWindow(QMainWindow):
         def submitted(observation):
             result.update(observation)
             self.service.last_action_result = observation
-            self.say('Action submitted: '+proposal.get('label', proposal['type'])+'. Checking the result.',
-                     [('Stop task', 'computer:stop')] if task else (), compact=True)
+            self.say('Sent: '+proposal.get('label', proposal['type'])+'. Checking the result…',
+                     [('Stop', 'computer:stop')] if task else (), compact=True)
         def finished():
             self.set_busy(False)
             self.mascot.show()
@@ -1339,7 +1396,7 @@ class CompanionWindow(QMainWindow):
                 task.pending = None
                 retry.append(True)
                 self.say('The screen changed before acting, so nothing was done. Looking again…',
-                         [('Stop task', 'computer:stop')], compact=True)
+                         [('Stop', 'computer:stop')], compact=True)
                 return
             self.failed(message)
         worker.result.connect(submitted)
@@ -1569,12 +1626,12 @@ class CompanionWindow(QMainWindow):
         self.mascot.footer.setText(message)
         self.record_companion_message(message)
 
-    def say(self, message, choices=(), **options):
+    def say(self, message, choices=(), *, state='idle', **options):
         self.record_companion_message(message)
         self.latest_response = message
         self.read_btn.setEnabled(self.tts is not None)
         self.mascot.present(message, choices, **options)
-        self.mascot.set_state('idle')
+        self.mascot.set_state(state)
 
     def show_setup_question(self):
         data = self.introduction.get()
@@ -1612,7 +1669,7 @@ class CompanionWindow(QMainWindow):
         elif self.pending_desktop_action:
             choices.append((self.pending_desktop_action.get('confirmation_label', self.pending_desktop_action['label']), 'desktop:apply'))
         if self.computer_task and not self.computer_task.cancelled.is_set():
-            choices.append(('Stop task', 'computer:stop'))
+            choices.append(('Stop', 'computer:stop'))
         self.say(message or 'What would you like help with?', choices, placeholder='Ask anything…', compact=True)
 
     def mascot_submit(self, request, action):

@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QApplication, QWidget, QFrame, QVBoxLayout, QHBoxLayout, QPushButton,
     QPlainTextEdit, QLineEdit, QLabel, QAbstractButton, QMenu, QScrollArea, QGraphicsDropShadowEffect)
 from PyQt6.QtCore import Qt, QTimer, QPoint, QPointF, QRectF, QElapsedTimer, pyqtSignal, QRect, QSize, QEvent
-from PyQt6.QtGui import QPainter, QPainterPath, QColor, QPen, QShortcut, QKeySequence, QPixmap, QFontMetrics
+from PyQt6.QtGui import QPainter, QPainterPath, QColor, QPen, QShortcut, QKeySequence, QPixmap, QFontMetrics, QCursor
 
 
 class RoundedMenu(QMenu):
@@ -46,15 +46,16 @@ class RoundControl(QPushButton):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        fill = '#0a84ff' if self.primary else '#343439'
+        # One accent for the primary action; secondary controls are quiet until hovered.
+        fill = QColor('#4c8dff') if self.primary else QColor(28, 28, 31, 235)
         if not self.isEnabled():
-            fill = '#3a3a40'
+            fill = QColor('#33333a')
         elif self.isDown():
-            fill = '#0766ca' if self.primary else '#29292f'
+            fill = QColor('#3b74d9') if self.primary else QColor('#2a2a2f')
         elif self.underMouse():
-            fill = '#2994ff' if self.primary else '#45454d'
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(fill))
+            fill = QColor('#6aa0ff') if self.primary else QColor('#2f2f35')
+        painter.setPen(Qt.PenStyle.NoPen if self.primary else QPen(QColor(255, 255, 255, 26), 1))
+        painter.setBrush(fill)
         painter.drawEllipse(QRectF(self.rect()).adjusted(.75, .75, -.75, -.75))
         if self.hasFocus():
             painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -243,8 +244,8 @@ class Mascot(QWidget):
         self.reply_panel = QFrame()
         self.reply_panel.setObjectName('replyPanel')
         self.reply_layout = QVBoxLayout(self.reply_panel)
-        self.reply_layout.setContentsMargins(16, 12, 16, 12)
-        self.reply_layout.setSpacing(8)
+        self.reply_layout.setContentsMargins(14, 10, 14, 10)
+        self.reply_layout.setSpacing(6)
         self.reply_panel.hide()
         self.reply_available = False
         layout.addWidget(self.reply_panel)
@@ -253,9 +254,9 @@ class Mascot(QWidget):
         layout.addWidget(self.controls_row)
         for surface in (self.card, self.reply_panel):
             shadow = QGraphicsDropShadowEffect(surface)
-            shadow.setBlurRadius(12)
-            shadow.setOffset(0, 2)
-            shadow.setColor(QColor(0, 0, 0, 40))
+            shadow.setBlurRadius(18)
+            shadow.setOffset(0, 4)
+            shadow.setColor(QColor(0, 0, 0, 55))
             surface.setGraphicsEffect(shadow)
         self.setFixedWidth(420)
         self.setStyleSheet(MASCOT_STYLE)
@@ -306,7 +307,7 @@ class Mascot(QWidget):
     def present(self, message, choices=(), *, placeholder=None, value='', submit_action='chat', stage='', compact=False):
         draft = self.input.toPlainText() if compact and submit_action == self.submit_action and not value else value
         anchor = self.character.mapToGlobal(QPoint()) if self.isVisible() else None
-        self.expanded_width = 240 if compact else 420
+        self.expanded_width = 300 if compact else 420
         self.header_widget.setVisible(not compact)
         self.card.setProperty('promptOnly', compact)
         self.card.setProperty('inputFocused', False)
@@ -363,9 +364,12 @@ class Mascot(QWidget):
         for title, action in choices:
             choice = QPushButton(title)
             choice.setProperty('companion_action', action)
+            # Compact replies use small pills sized to their text; Stop reads as a stop.
+            choice.setObjectName('choicePill' if compact else '')
+            choice.setProperty('danger', action == 'computer:stop')
             choice.clicked.connect(lambda checked=False, a=action: self.action_requested.emit(a))
-            self.choice_layout.addWidget(choice)
-        self.choice_area.setFixedHeight(min(190, len(choices)*44))
+            self.choice_layout.addWidget(choice, 0, Qt.AlignmentFlag.AlignLeft if compact else Qt.AlignmentFlag.AlignJustify)
+        self.choice_area.setFixedHeight(min(190, len(choices)*(36 if compact else 44)))
         self.choice_area.setVisible(bool(choices))
         self.entry_row.setVisible(placeholder is not None or compact)
         self.submit_action = submit_action
@@ -384,7 +388,7 @@ class Mascot(QWidget):
     def size_message(self, message):
         metrics = QFontMetrics(self.bubble.font())
         rect = metrics.boundingRect(QRect(0, 0, self.expanded_width-56, 5000), Qt.TextFlag.TextWordWrap, message)
-        self.bubble.setFixedHeight(max(42 if getattr(self, 'compact', False) else 68, min(170 if getattr(self, 'compact', False) else 220, rect.height()+16)))
+        self.bubble.setFixedHeight(max(24 if getattr(self, 'compact', False) else 68, min(170 if getattr(self, 'compact', False) else 220, rect.height()+12)))
 
     def limit_input(self):
         value = self.input.toPlainText()
@@ -413,7 +417,13 @@ class Mascot(QWidget):
             choice = self.choice_layout.itemAt(index).widget()
             choice.setEnabled(not self.busy or choice.property('companion_action') in ('computer:stop', 'settings', 'stop_speech'))
 
+    def moveEvent(self, event):
+        self.character.owner_moved(self.pos())
+        super().moveEvent(event)
+
     def set_state(self, state, message=None):
+        if state == 'celebrate' and self.state != 'celebrate':
+            self.character.hop(height=14.0)
         self.state = state
         self.character.state = state
         self.status.setText({'thinking':'Thinking…', 'speaking':'Speaking', 'guiding':'Next step',
@@ -552,6 +562,14 @@ class CharacterButton(QAbstractButton):
         self.cloud = cloud_path()
         self.clock = QElapsedTimer()
         self.clock.start()
+        # Motion: the window's movement drives a lean/stretch spring, and one-shot
+        # hops (take-off/landing squash, celebration) play on top of the float.
+        self.velocity = QPointF(0, 0)
+        self.lean = 0.0
+        self.last_owner_pos = None
+        self.hop_started = None
+        self.hop_length = 0
+        self.hop_height = 0.0
         # ~30 fps pentru plutire și clipit fluide
         self.anim_timer = QTimer(self)
         self.anim_timer.timeout.connect(self.update)
@@ -561,9 +579,62 @@ class CharacterButton(QAbstractButton):
         self.reduced_motion = enabled
         if enabled:
             self.anim_timer.stop()
+            self.velocity, self.lean, self.hop_started = QPointF(0, 0), 0.0, None
         else:
             self.anim_timer.start(33)
         self.update()
+
+    def owner_moved(self, position):
+        """Feed window movement into the lean/stretch spring (pixels per frame)."""
+        if self.last_owner_pos is not None and not self.reduced_motion:
+            delta = QPointF(position-self.last_owner_pos)
+            self.velocity = self.velocity*0.5+delta*0.5
+        self.last_owner_pos = QPoint(position)
+
+    def hop(self, duration=900, height=10.0):
+        """One squash-hop-land cycle, e.g. for a finished task."""
+        if self.reduced_motion:
+            return
+        self.hop_started, self.hop_length, self.hop_height = self.clock.elapsed(), duration, height
+
+    def motion(self):
+        """(lean degrees, x stretch, y stretch, extra lift) for this frame."""
+        if self.reduced_motion:
+            return 0.0, 1.0, 1.0, 0.0
+        speed = math.hypot(self.velocity.x(), self.velocity.y())
+        target = max(-9.0, min(9.0, self.velocity.x()*0.6))
+        self.lean += (target-self.lean)*0.25
+        self.velocity *= 0.82  # decays once the window stops moving
+        stretch = min(0.08, speed*0.004)
+        sx, sy, lift = 1.0+stretch, 1.0-stretch*0.8, 0.0
+        if self.hop_started is not None:
+            t = (self.clock.elapsed()-self.hop_started)/max(1, self.hop_length)
+            if t >= 1:
+                self.hop_started = None
+            elif t < 0.18:  # crouch
+                squash = math.sin(t/0.18*math.pi)*0.12
+                sx, sy = sx+squash, sy-squash
+            elif t < 0.82:  # flight
+                lift = math.sin((t-0.18)/0.64*math.pi)*self.hop_height
+                sx, sy = sx-0.04, sy+0.06
+            else:  # landing squash
+                squash = math.sin((t-0.82)/0.18*math.pi)*0.1
+                sx, sy = sx+squash, sy-squash
+        return self.lean, sx, sy, lift
+
+    def gaze(self):
+        """Pupil offset toward the pointer, in design units (max ~3)."""
+        if self.reduced_motion:
+            return QPointF(0, 0)
+        if self.state == 'thinking':
+            t = self.clock.elapsed()/900
+            return QPointF(2.5*math.sin(t), -2.5)
+        delta = QPointF(QCursor.pos()-self.mapToGlobal(self.rect().center()))
+        distance = math.hypot(delta.x(), delta.y())
+        if distance < 1:
+            return QPointF(0, 0)
+        reach = min(3.0, distance/60)
+        return QPointF(delta.x()/distance*reach, delta.y()/distance*reach)
 
     def mousePressEvent(self, event):
         self.press_position = event.globalPosition().toPoint()
@@ -611,6 +682,7 @@ class CharacterButton(QAbstractButton):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         phase = self.float_phase()
+        lean, stretch_x, stretch_y, hop_lift = self.motion()
         lift = self.FLOAT_HEIGHT * self.SCALE * phase
 
         if not self.artwork.isNull():
@@ -619,7 +691,7 @@ class CharacterButton(QAbstractButton):
             return
 
         # Norul e centrat pe orizontală (mijlocul lui e la x=102 în design)
-        painter.translate(self.width()/2 - 102*self.SCALE, 14 - 32*self.SCALE)
+        painter.translate(self.width()/2 - 102*self.SCALE, 20 - 32*self.SCALE)  # headroom for float, lean and hops
         painter.scale(self.SCALE, self.SCALE)
 
         # 1. Umbra de sub nor (se strânge când norul urcă)
@@ -629,7 +701,12 @@ class CharacterButton(QAbstractButton):
         painter.drawEllipse(QRectF(100 - shadow_w/2, 138, shadow_w, 12))
 
         # 2. Corpul norului: umbră internă, corp alb, contur
-        painter.translate(0, -self.FLOAT_HEIGHT*phase)
+        painter.translate(0, -self.FLOAT_HEIGHT*phase-hop_lift)
+        # Lean into the direction of travel; stretch while moving, squash on take-off/landing.
+        painter.translate(102, 84)  # pivot at the cloud's centre so the outline stays inside
+        painter.rotate(lean)
+        painter.scale(stretch_x, stretch_y)
+        painter.translate(-102, -84)
         painter.setBrush(CLOUD_SHADE)
         painter.drawPath(self.cloud)
         painter.save()
@@ -645,16 +722,23 @@ class CharacterButton(QAbstractButton):
 
         # 3. Ochii deschiși, cu clipit
         blink = self.blink_scale()
+        look = self.gaze()
         painter.setPen(Qt.PenStyle.NoPen)
         for cx in (82, 118):
             painter.save()
-            painter.translate(cx, 87)
+            painter.translate(cx+look.x(), 87+look.y())
             painter.scale(1, blink)
             painter.setBrush(CLOUD_INK)
             painter.drawEllipse(QPointF(0, 0), 8, 10.5)
             painter.setBrush(CLOUD_BODY)
             painter.drawEllipse(QPointF(3, -4), 2.8, 2.8)
             painter.restore()
+        if self.state == 'thinking' and not self.reduced_motion:
+            # Three dots rising and fading above the head while the model works.
+            for index in range(3):
+                t = ((self.clock.elapsed()/1200)+index/3) % 1
+                painter.setBrush(QColor(201, 214, 230, int(255*math.sin(t*math.pi))))
+                painter.drawEllipse(QPointF(150+index*11, 40-14*t), 4.2, 4.2)
 
         # 4. Zâmbet
         smile = QPainterPath(QPointF(93, 104))
