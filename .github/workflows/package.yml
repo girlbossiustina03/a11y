@@ -2,6 +2,11 @@ name: Package apps
 
 on:
   workflow_dispatch:
+    inputs:
+      release:
+        description: 'Publish a release with this tag, e.g. v0.9.1 (leave empty to only build)'
+        required: false
+        default: ''
   push:
     branches: [main]
     tags: ['v*']
@@ -78,7 +83,7 @@ jobs:
 
   release:
     name: Publish release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(inputs.release, 'v')
     needs: [macos, windows]
     runs-on: ubuntu-latest
     steps:
@@ -88,4 +93,7 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" artifacts/*/* --repo "$GITHUB_REPOSITORY" --generate-notes
+          # A pushed v* tag, or the tag named when the workflow is started by hand
+          # (the tag is then created on the commit that was just built and tested).
+          TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release }}
+        run: gh release create "$TAG" artifacts/*/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "A11y $TAG" --generate-notes
