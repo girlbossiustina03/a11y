@@ -91,14 +91,21 @@ class NativeTests(unittest.TestCase):
                 execute.assert_called_once_with(action)
             self.assertIsNone(self.window.pending_desktop_action)
 
-    def test_closing_window_still_waits_for_confirmation(self):
+    def test_closing_runs_at_once_but_model_selected_presses_wait(self):
+        # The user asked for app open/close/quit without a confirmation step.
         action = {'type': 'close_window', 'window_id': 'test:0', 'label': 'Close window'}
         with patch.object(self.window, 'execute_desktop_action') as execute:
-            self.window.received({'message': 'Ready to close.', 'sources': [], 'workflow': None,
+            self.window.received({'message': 'Close window…', 'sources': [], 'workflow': None,
                                   'target': None, 'desktop_action': action})
             self.qt.processEvents()
+            execute.assert_called_once_with(action)
+        press = {'type': 'press_control', 'control_id': 'control-0', 'label': 'Delete'}
+        with patch.object(self.window, 'execute_desktop_action') as execute:
+            self.window.received({'message': 'Ready to press Delete. Confirm below.', 'sources': [], 'workflow': None,
+                                  'target': None, 'desktop_action': press})
+            self.qt.processEvents()
             execute.assert_not_called()
-        self.assertEqual(self.window.pending_desktop_action, action)
+        self.assertEqual(self.window.pending_desktop_action, press)
 
     def test_visual_click_only_outlines_an_actual_target_rectangle(self):
         area = self.window.mascot.screen().geometry()

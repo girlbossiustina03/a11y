@@ -1,0 +1,2 @@
+faster-whisper>=1.0,<2
+kokoro-onnx>=0.4,<1

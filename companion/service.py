@@ -14,7 +14,7 @@ from .app_names import resolve_app
 from .media import describe_music, describe_play_result
 from .input_actions import INPUT_TYPES
 from urllib.parse import urlencode, urlsplit
-from .request_plan import response_schema, enforce_operation, VERIFY_SYSTEM, VERIFY_SCHEMA, GROUNDING_SYSTEM, validate_plan, preserve_desktop_goal
+from .request_plan import response_schema, enforce_operation, VERIFY_SYSTEM, VERIFY_SCHEMA, GROUNDING_SYSTEM, validate_plan, preserve_desktop_goal, simple_app_command
 
 DESKTOP_INSTRUCTIONS = """
 A running app or window title NEVER proves media is playing, a song is selected,
@@ -348,6 +348,16 @@ class Companion:
         interpreter = getattr(self.provider, 'interpret_request', None)
         if interpreter is None or self.desktop_context is None:
             return None
+        fast = simple_app_command(request)
+        if fast is not None and fast['operation'] != 'launch_app':
+            observed = self.desktop_context.context()
+            running = {app['bundle_id']: app for app in observed.get('available_apps', [])}
+            for window in observed.get('app_windows', []):
+                running.setdefault(window['bundle_id'], {'name': window['name'], 'bundle_id': window['bundle_id']})
+            if len(resolve_app(fast['app_name'], list(running.values()))) == 1:
+                # "Close/quit/switch to X" with one known running app: no model call needed.
+                self.last_request_plan = fast
+                return fast
         from .quick_open import plan as quick_plan
         try:
             quick = quick_plan(request, self.desktop_context.installed_apps())
@@ -402,11 +412,24 @@ class Companion:
                 state = self.desktop_context.app_state(receipt['bundle_id']) or state
             if isinstance(state.get('running'), bool):
                 name = receipt.get('label', 'Open the app').removeprefix('Open ')
-                message = (name+' is running'+(' and active.' if state.get('active') else '.')) if state['running'] else ('macOS accepted the launch request, but I could not confirm that '+name+' stayed running.')
+                message = (name+' is running'+(' and active.' if state.get('active') else '.')) if state['running'] else ('The system accepted the launch request, but I could not confirm that '+name+' stayed running.')
                 if receipt.get('remaining_request'):
                     message += ' Still pending: '+receipt['remaining_request']+'; it has not been executed.'
                 return {'desktop_action': None, 'target': None, 'workflow': None, 'sources': [], 'message': message,
                         'effective': self.adaptation.effective(self.identity)}
+        if mode == 'verify' and (self.last_action_result or {}).get('type') in ('close_window', 'quit_app') and self.desktop_context:
+            receipt = self.last_action_result
+            label = receipt.get('label', '')
+            name = label.split(' — ')[0].removeprefix('Close ').removeprefix('Quit ') or 'The app'
+            after = receipt.get('after', {})
+            if receipt['type'] == 'quit_app':
+                message = (name+' is still open. It may be asking you to save something first.' if receipt.get('application_state', {}).get('running')
+                           else 'Closed '+name+'.')
+            else:
+                message = ('Closed '+name+'.' if after.get('window_count', 0) < receipt.get('before', {}).get('window_count', 1)
+                           else name+'’s window is still open. It may be asking you to save something first.')
+            return {'desktop_action': None, 'target': None, 'workflow': None, 'sources': [], 'message': message,
+                    'effective': self.adaptation.effective(self.identity)}
         if mode == 'verify' and (self.last_action_result or {}).get('type') == 'browse_url':
             receipt = self.last_action_result
             native = receipt.get('native_result', {})
@@ -488,7 +511,11 @@ class Companion:
         system = SYSTEM+DESKTOP_INSTRUCTIONS
         if request_plan:
             operation = request_plan['operation']
-            if operation == 'computer_task':
+            if operation == 'computer_task' and not getattr(getattr(self.desktop_context, 'bridge', None), 'supports_input', True):
+                prebuilt = {'request_kind': 'answer', 'message': 'Step-by-step tasks inside apps (clicking and typing for you) are not available on '
+                            'this system yet. I can open, switch to and close apps, answer questions, and read your screen when vision is on.',
+                            'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
+            elif operation == 'computer_task':
                 from .web_apps import web_opening
                 opening = None
                 if self.desktop_context:
@@ -572,7 +599,12 @@ class Companion:
                     elif not windows:
                         prebuilt = {'request_kind': 'answer', 'message': matches[0]['name']+' has no open window I can close.',
                                     'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
-                    # Several windows: the model picks one using the request's target description.
+                    elif (simple_app_command(request) or {}).get('operation') == 'close_window' and \
+                            resolve_app(simple_app_command(request)['app_name'], list(running.values())) == matches:
+                        # A plain "close Discord" with several windows and none described: close the app.
+                        prebuilt = {'request_kind': 'quit_app', 'message': 'Proposed.', 'source_ids': [], 'workflow': None, 'target': None,
+                                    'desktop_action': {'type': 'quit_app', 'bundle_id': matches[0]['bundle_id']}}
+                    # Several windows with a described one: the model picks it from the request.
             elif operation in ('move_object', 'highlight', 'inspect_screen', 'click_point') and not image_data:
                 prebuilt = {'request_kind': operation if operation != 'inspect_screen' else 'answer',
                     'message': 'I need a fresh look to identify that. Enable local screen vision below.',
@@ -627,7 +659,7 @@ class Companion:
         action = response.get('desktop_action') or {}
         if action.get('type') in ('launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'press_control', 'browse_url', 'click_point', 'play_media', 'type_text', 'press_key', 'scroll'):
             label = action.get('confirmation_label', action['label'])
-            response['message'] = label+'…' if action['type'] in ('launch_app', 'browse_url', 'focus_app', 'new_window', 'play_media') else 'Ready to '+label[0].lower()+label[1:]+'. Confirm below.'
+            response['message'] = label+'…' if action['type'] in ('launch_app', 'browse_url', 'focus_app', 'new_window', 'play_media', 'close_window', 'quit_app') else 'Ready to '+label[0].lower()+label[1:]+'. Confirm below.'
         if request_plan and request_plan.get('remaining_request'):
             response['message'] += ' Still pending: '+request_plan['remaining_request']+'; this part has not been executed.'
             if response.get('desktop_action'):

@@ -47,3 +47,21 @@ class AccessPreferences:
             value = json.loads(row['data']) if row else {}
             value.setdefault('approved', {})[feature] = True
             db.execute('INSERT OR REPLACE INTO desktop_access VALUES (?,?)', (self.store.owner(self.identity), json.dumps(value)))
+
+    def voice_enabled(self):
+        """Hands-free voice ("Hey Ally"), kept separately from the desktop-access choices above."""
+        import json
+        with self.store.employee() as db:
+            row = db.execute('SELECT data FROM desktop_access WHERE owner=?', (self.store.owner(self.identity),)).fetchone()
+        return (json.loads(row['data']) if row else {}).get('voice') is True
+
+    def set_voice(self, enabled):
+        if type(enabled) is not bool:
+            raise ValueError('Voice choice must be boolean.')
+        import json
+        with self.store.employee() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row = db.execute('SELECT data FROM desktop_access WHERE owner=?', (self.store.owner(self.identity),)).fetchone()
+            value = json.loads(row['data']) if row else {}
+            value['voice'] = enabled
+            db.execute('INSERT OR REPLACE INTO desktop_access VALUES (?,?)', (self.store.owner(self.identity), json.dumps(value)))

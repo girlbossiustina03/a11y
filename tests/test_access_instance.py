@@ -91,7 +91,7 @@ class InstanceTests(unittest.TestCase):
     def test_windows_byte_lock_backend_does_not_import_unix_fcntl(self):
         from types import SimpleNamespace
         from unittest.mock import Mock, patch
-        from companion.instance import _lock, _unlock
+        from companion.instance import LOCK_OFFSET, _lock, _unlock
         file = Mock()
         file.read.return_value = ''
         file.fileno.return_value = 42
@@ -101,7 +101,9 @@ class InstanceTests(unittest.TestCase):
             _unlock(file, windows=True)
         self.assertEqual(backend.locking.call_args_list[0].args, (42, 1, 1))
         self.assertEqual(backend.locking.call_args_list[1].args, (42, 0, 1))
-        file.write.assert_called_once_with(' ')
+        # The lock sits past the metadata, which therefore stays readable and unmodified.
+        self.assertEqual([call.args for call in file.seek.call_args_list], [(LOCK_OFFSET,), (LOCK_OFFSET,)])
+        file.write.assert_not_called()
 
     def test_source_build_marker_is_short_and_stable(self):
         self.assertEqual(build_id(), build_id())
