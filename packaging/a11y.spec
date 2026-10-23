@@ -15,10 +15,15 @@ for name in ('desktop-bridge', 'screen-bridge'):
     if (helpers/name).exists():
         binaries.append((str(helpers/name), 'native/bin'))
 hiddenimports = []
+# Model-conversion and test tooling A11y never runs at runtime. Importing onnxruntime.quantization
+# during the build crashes PyInstaller's isolated child on Windows, so it is left out entirely.
+import re
+UNUSED = re.compile(r'^onnxruntime\.(quantization|transformers|tools)(\.|$)|(^|\.)tests?(\.|$)')
+UNUSED_MODULES = ['onnxruntime.quantization', 'onnxruntime.transformers', 'onnxruntime.tools']
 # Optional voice stack: bundled when installed in the build environment.
 for package in ('faster_whisper', 'ctranslate2', 'kokoro_onnx', 'onnxruntime', 'espeakng_loader', 'sounddevice', 'tokenizers'):
     try:
-        package_datas, package_binaries, package_imports = collect_all(package)
+        package_datas, package_binaries, package_imports = collect_all(package, filter_submodules=lambda name: not UNUSED.search(name))
     except Exception:
         continue
     datas += package_datas
@@ -29,7 +34,7 @@ if sys.platform == 'win32':
                       'winrt.windows.storage.streams', 'winrt.windows.foundation']
 
 analysis = Analysis([str(ROOT/'a11y_desktop.py')], pathex=[str(ROOT)], binaries=binaries, datas=datas,
-                    hiddenimports=hiddenimports, excludes=['tkinter', 'unittest', 'pydoc'], noarchive=False)
+                    hiddenimports=hiddenimports, excludes=['tkinter', 'unittest', 'pydoc']+UNUSED_MODULES, noarchive=False)
 pyz = PYZ(analysis.pure)
 exe = EXE(pyz, analysis.scripts, [], exclude_binaries=True, name='A11y', console=False,
           icon=str(ICONS/('A11y.ico' if sys.platform == 'win32' else 'A11y.icns')),

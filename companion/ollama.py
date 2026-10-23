@@ -3,6 +3,7 @@ import http.client
 import json
 import os
 import socket
+import sys
 import threading
 import time
 from urllib.parse import urlparse
@@ -149,10 +150,12 @@ class OllamaProvider:
                             pass
                         # Winsock does not wake a blocked recv on shutdown; closing the handle does.
                         # detach() first so the socket object never closes the handle a second time.
-                        try:
-                            socket.close(sock.detach())
-                        except OSError:
-                            pass
+                        # (Elsewhere shutdown alone wakes it; closing there can stall the reader.)
+                        if sys.platform == 'win32':
+                            try:
+                                socket.close(sock.detach())
+                            except OSError:
+                                pass
                     return
         watcher = threading.Thread(target=watch, daemon=True) if cancel is not None else None
         content, result, size = [], {}, 0

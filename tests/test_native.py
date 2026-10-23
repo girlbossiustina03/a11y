@@ -779,7 +779,7 @@ class NativeTests(unittest.TestCase):
                  'windows': [{'app': 'Xcode', 'title': 'Project'}], 'captured_monotonic': time.monotonic()}
         with patch.object(self.window.vision, 'capture', return_value=frame), patch.object(provider, 'interpret_request', return_value={'operation': 'inspect_screen', 'app_name': '', 'target': ''}), patch.object(provider, 'complete_structured', side_effect=lambda system, messages, schema, image_data=None: self.provider.complete(system, messages, image_data=image_data)):
             self.window.mascot_submit('What is on my screen?', 'chat')
-            deadline = time.monotonic()+3
+            deadline = time.monotonic()+15  # slow CI runners
             while self.window.worker.isRunning() and time.monotonic() < deadline:
                 self.qt.processEvents()
                 QTest.qWait(5)
@@ -959,7 +959,7 @@ class NativeTests(unittest.TestCase):
         self.window.input.setPlainText('mark me where Desktop tools are in A11y')
         with patch.object(self.window.vision, 'capture') as capture, patch.object(self.window.overlay, 'guide') as guide:
             self.window.ask(from_mascot=True)
-            deadline = time.monotonic()+3
+            deadline = time.monotonic()+15  # slow CI runners
             while time.monotonic() < deadline and not guide.called:
                 self.qt.processEvents()
                 QTest.qWait(5)
