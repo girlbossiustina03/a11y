@@ -78,8 +78,8 @@ class SetupDialog(QDialog):
         page.insertWidget(6, self.remember_access)
         self.access_status = description('')
         page.insertWidget(7, self.access_status)
-        page.insertWidget(8, description('Voice · Read-aloud is optional and uses your system voice. '
-                              'Native microphone input is not available yet, so no microphone permission is requested.'))
+        page.insertWidget(8, description('Voice · Optional. Turn on voice from the character’s right-click menu, then say “Hey Ally” '
+                              'and talk naturally. Speech is understood on this computer and never saved.'))
         page = self.add_page('You’re ready.', 'Click the character to talk. Enter sends; Shift+Enter adds a line. '
                              'Right-click the character for more actions. You stay in control of each task step.')
         self.summary = description('')

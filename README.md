@@ -65,6 +65,7 @@ Instead of unbounded autonomous execution or rigid scripted workflows, A11y oper
 - **Enterprise onboarding & cited retrieval** — Import internal Markdown or text handbooks (e.g. `examples/onboarding.md`). Generated onboarding steps must cite an exact chunk from the imported material; uncited claims are rejected by the validation pipeline.
 - **Adaptive accessibility profiling** — A11y adapts to how you work. Repeatedly asking for shorter answers triggers a suggestion in **Settings → Preferences** to permanently adopt a concise style. Explicit preferences always take precedence over learned ones.
 - **Prompt-only bar & speech balloon** — Normal conversation takes place in a minimalist 240px wide input bar. Replies appear in an auto-sizing speech balloon overhead with text-to-speech support and accessible contrast.
+- **Hands-free voice ("Hey Ally")** — Right-click the companion → **Turn on voice**. Say "Hey Ally" (or "Hey Ally, open Teams"), then talk naturally: every spoken request takes exactly the same path as typed text, replies are read aloud in a female system voice, and confirmations accept "yes" / "no". After a reply A11y listens again; "goodbye" or 30 s of silence returns to waiting for "Hey Ally". `Ctrl+Shift+Space` starts a conversation from the keyboard. Speech is recognized locally with faster-whisper (`tiny.en` for the wake phrase, `small.en` for requests); audio is never saved or sent anywhere, and the microphone pauses while A11y speaks or works.
 - **Multi-instance locking** — A process-lifetime lock in `%LOCALAPPDATA%\A11y` or `.data/` guarantees only one instance touches the SQLite stores at a time, displaying the active PID and git build ID if a collision occurs.
 
 ---
@@ -89,7 +90,19 @@ Run natively with Windows Python (WSLg cannot composite frameless transparent wi
    ```cmd
    run_windows.bat --panel --admin
    ```
-   *On first launch, the batch script detects Python, initializes a dedicated virtual environment in `%USERPROFILE%\.venvs\a11y`, and installs `requirements.txt`. Data is kept locally in `%LOCALAPPDATA%\A11y`.*
+   *On first launch, the batch script detects Python, initializes a dedicated virtual environment in `%USERPROFILE%\.venvs\a11y`, and installs `requirements.txt` plus the optional voice packages (`requirements-voice.txt`). Data is kept locally in `%LOCALAPPDATA%\A11y`. The first time voice is turned on, the speech models (about 550 MB) are downloaded once. Windows must allow desktop apps to use the microphone (Settings → Privacy & security → Microphone).*
+
+**Ollama on Windows: run it natively, not in WSL.** WSL gets only part of the RAM and no GPU; on a
+Ryzen 7 8840HS laptop the model was CPU-only, read prompts at ~67 tokens/s and was OOM-killed. Native
+Ollama for Windows with the Radeon 780M via Vulkan read prompts at 175–245 tokens/s (930+ with its prompt
+cache), so a chat reply takes seconds instead of minutes. Integrated GPUs are opt-in:
+```cmd
+winget install Ollama.Ollama
+setx OLLAMA_IGPU_ENABLE 1
+```
+Stop any Ollama inside WSL first (`sudo systemctl disable --now ollama`), because both use port 11434.
+A11y keeps the model loaded for 30 minutes (`A11Y_OLLAMA_KEEP_ALIVE`) and pre-reads its instructions at
+startup, so the first request is warm.
 
 ### macOS
 
@@ -101,12 +114,13 @@ Run natively with Windows Python (WSLg cannot composite frameless transparent wi
    ```bash
    python3 -m venv .venv
    .venv/bin/python -m pip install -r requirements.txt
+   .venv/bin/python -m pip install -r requirements-voice.txt   # optional: "Hey Ally" voice
    ```
 3. Launch the desktop companion:
    ```bash
    .venv/bin/python a11y_desktop.py --admin
    ```
-   *Grant macOS Accessibility and Screen Recording permissions when prompted.*
+   *Grant macOS Accessibility and Screen Recording permissions when prompted, and Microphone access when voice is turned on.*
 
 ### Linux / WSL2
 

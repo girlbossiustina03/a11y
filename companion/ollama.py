@@ -179,6 +179,16 @@ class OllamaProvider:
             raise ProviderError('Could not determine the task scope. No action was sent.')
         return result['mode']
 
+    def warm_up(self, systems):
+        """Load the model and read the stable instructions once, so the first real request reuses
+        Ollama's prompt cache instead of paying for a cold load and a full prompt read."""
+        for system in systems:
+            try:
+                self.complete(system, [{'role': 'user', 'content': '{}'}], response_schema={'type': 'object'},
+                              max_tokens=1, thinking=False)
+            except ProviderError:
+                pass  # a one-token reply is incomplete by design; the cache is filled either way
+
     def complete(self, system, messages, *, image_data=None, response_schema=None, max_tokens=3000, thinking=None):
         local_url(self.config.base_url)
         if not self.config.model:
@@ -201,7 +211,7 @@ class OllamaProvider:
         wire_schema = grammar_schema(schema)
         schema_key = (model, json.dumps(wire_schema, sort_keys=True))
         body = {'model': model, 'messages': [{'role': 'system', 'content': system}] + messages,
-            'stream': False, 'format': wire_schema, 'keep_alive': '5m',
+            'stream': False, 'format': wire_schema, 'keep_alive': os.getenv('A11Y_OLLAMA_KEEP_ALIVE', '30m'),
             'options': {'temperature': 0.2, 'num_ctx': context_length, 'num_predict': max_tokens}}
         requested_thinking = thinking
         thinking = os.getenv('A11Y_OLLAMA_THINKING', 'default').lower()

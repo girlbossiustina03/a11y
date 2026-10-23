@@ -29,6 +29,12 @@ if not exist "%VENV%\Scripts\python.exe" (
     "%VENV%\Scripts\python.exe" -m pip install -r requirements.txt || goto :failed
 )
 
+rem Optional voice support ("Hey Ally"); the app still works if this step fails.
+"%VENV%\Scripts\python.exe" -c "import faster_whisper" >nul 2>&1 || (
+    echo Installing voice support...
+    "%VENV%\Scripts\python.exe" -m pip install -r requirements-voice.txt
+)
+
 "%VENV%\Scripts\python.exe" a11y_desktop.py %*
 set "CODE=%ERRORLEVEL%"
 popd

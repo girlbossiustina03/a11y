@@ -6,15 +6,16 @@ import os
 from pathlib import Path
 
 
+# Windows byte locks are mandatory: other processes cannot even read a locked byte.
+# Lock one byte far past the JSON metadata so a second launch can still read the owner.
+LOCK_OFFSET = 1 << 20
+
+
 def _lock(file, *, windows=None):
     windows = os.name == 'nt' if windows is None else windows
     if windows:
         import msvcrt
-        file.seek(0)
-        if not file.read(1):
-            file.write(' ')
-            file.flush()
-        file.seek(0)
+        file.seek(LOCK_OFFSET)
         msvcrt.locking(file.fileno(), msvcrt.LK_NBLCK, 1)
     else:
         import fcntl
@@ -25,7 +26,7 @@ def _unlock(file, *, windows=None):
     windows = os.name == 'nt' if windows is None else windows
     if windows:
         import msvcrt
-        file.seek(0)
+        file.seek(LOCK_OFFSET)
         msvcrt.locking(file.fileno(), msvcrt.LK_UNLCK, 1)
     else:
         import fcntl

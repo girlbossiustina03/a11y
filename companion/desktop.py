@@ -1,6 +1,7 @@
 """Native PyQt6 desktop UI; shared services also power the browser fallback."""
 import base64
 import json
+import re
 from pathlib import Path
 import sys
 import time
@@ -26,6 +27,7 @@ from .access import AccessPreferences
 from .instance import build_id
 from .computer_task import ComputerTask
 from .models import text
+from .voice import VoiceListener, is_farewell, is_no, is_yes, match_choice, speakable
 
 
 class RequestWorker(QThread):
@@ -234,8 +236,13 @@ class CompanionWindow(QMainWindow):
             if engines:
                 self.tts = QTextToSpeech(engines[0], self)
                 self.tts.stateChanged.connect(self.speech_state)
+                self.choose_female_voice()
         except ImportError:
             pass
+        self.voice = None
+        self.voice_conversation = False
+        self.voice_announce = False
+        QShortcut(QKeySequence('Ctrl+Shift+Space'), self.mascot).activated.connect(lambda: self.voice_woke(''))
         self.read_btn.setEnabled(False)
         self.stop_btn.setEnabled(False)
         self.read_btn.setToolTip('Read aloud using an installed system speech engine.' if self.tts else 'No system speech engine is available.')
@@ -259,6 +266,8 @@ class CompanionWindow(QMainWindow):
         self.mascot.collapse_chat()
         if not self.introduction.get().get('access_setup_reviewed'):
             self.open_setup()
+        if self.access_preferences.voice_enabled():
+            QTimer.singleShot(0, self.start_voice)
 
     def set_remember_access(self, enabled):
         self.access_preferences.save(remember=bool(enabled), app_awareness=self.desktop_monitor.enabled,
@@ -395,7 +404,7 @@ class CompanionWindow(QMainWindow):
         row.addWidget(self.capture_btn)
         layout.addLayout(row)
         layout.addWidget(label('Screen analysis is optional. A preview requires approval before upload. '
-                               'Native voice input is not available in this pass; the browser UI offers optional speech input.'))
+                               'Voice: turn it on from the character’s right-click menu, then say “Hey Ally”.'))
         row = QHBoxLayout()
         self.highlight_btn = button('Show desktop highlight (minimize panel)', self.show_guidance)
         self.highlight_btn.setEnabled(False)
@@ -610,6 +619,8 @@ class CompanionWindow(QMainWindow):
 
     def set_busy(self, busy):
         self.mascot.set_busy(busy)
+        if self.voice:
+            self.voice.pause() if busy else QTimer.singleShot(0, self.voice_resume)
         for control in (self.ask_btn, self.plan_btn, self.capture_btn, self.confirm_btn):
             control.setEnabled(not busy)
         if not busy:
@@ -664,9 +675,9 @@ class CompanionWindow(QMainWindow):
                 self.overlay.hide()
             self.pointer.point_at(capture['geometry'], action['x'], action['y'], action['label'],
                 reduced_motion=self.service.adaptation.effective(self.service.identity)['reduced_motion'])
-        if not response.get('task_step') and self.pending_desktop_action and self.pending_desktop_action['type'] in ('launch_app', 'browse_url', 'focus_app', 'new_window', 'play_media'):
-            # The user's request already authorizes opening/focusing; destructive
-            # actions and model-selected presses still require target review.
+        if not response.get('task_step') and self.pending_desktop_action and self.pending_desktop_action['type'] in ('launch_app', 'browse_url', 'focus_app', 'new_window', 'play_media', 'close_window', 'quit_app'):
+            # The request itself authorizes opening, switching to and closing apps (apps keep
+            # their own "save changes?" prompts); model-selected presses still require review.
             proposal = self.pending_desktop_action
             self.pending_desktop_action = None
             if self.worker and self.worker.isRunning():
@@ -902,6 +913,159 @@ class CompanionWindow(QMainWindow):
         speaking = state.name == 'Speaking'
         self.stop_btn.setEnabled(speaking)
         self.mascot.set_state('speaking' if speaking else 'idle')
+        if state.name == 'Ready':
+            self.voice_resume()
+
+    def choose_female_voice(self):
+        """Prefer a female English voice (e.g. Microsoft Zira, Samantha) for everything A11y says."""
+        from PyQt6.QtTextToSpeech import QVoice
+        locales = sorted(self.tts.availableLocales(), key=lambda locale: (locale.name() != 'en_US', not locale.name().startswith('en')))
+        for locale in locales:
+            self.tts.setLocale(locale)
+            female = [voice for voice in self.tts.availableVoices() if voice.gender() == QVoice.Gender.Female]
+            if female:
+                self.tts.setVoice(female[0])
+                return female[0].name()
+        if locales:
+            self.tts.setLocale(locales[0])
+        return None
+
+    def tts_speaking(self):
+        return bool(self.tts) and self.tts.state().name in ('Speaking', 'Synthesizing')
+
+    # --- Voice conversation ("Hey Ally") ---
+    def toggle_voice(self):
+        if self.voice and self.voice.mode != 'off':
+            self.stop_voice()
+            self.access_preferences.set_voice(False)
+            self.mascot_home('Voice is off. I won’t use the microphone.')
+            return
+        if not self.access_preferences.voice_enabled() and not self.confirm_access('Talk to A11y with your voice',
+                'Say “Hey Ally”, then talk naturally. I answer out loud and keep listening until you say goodbye.',
+                ['Speech is understood on this computer. Audio is never saved or sent anywhere.',
+                 'The microphone pauses while I speak or work on a request.',
+                 'Turn voice off any time from the character’s right-click menu.'], 'Turn on voice'):
+            return
+        self.access_preferences.set_voice(True)
+        self.voice_announce = True
+        self.start_voice()
+
+    def start_voice(self):
+        if self.voice is None:
+            self.voice = VoiceListener(self)
+            self.voice.status.connect(self.voice_status)
+            self.voice.ready.connect(self.voice_ready)
+            self.voice.failed.connect(self.voice_failed)
+            self.voice.woke.connect(self.voice_woke)
+            self.voice.heard.connect(self.voice_heard)
+            self.voice.timed_out.connect(self.voice_timeout)
+        self.mascot.voice_on = True
+        self.voice.start()
+
+    def stop_voice(self):
+        self.voice_conversation = False
+        self.mascot.voice_on = False
+        if self.voice:
+            self.voice.stop()
+
+    def voice_ready(self):
+        if self.voice and self.voice.open_microphone() and self.voice_announce:
+            self.voice_announce = False
+            self.speak_now('Voice is on. Say Hey Ally whenever you need me.')
+
+    def voice_status(self, message):
+        self.mascot.footer.setText(message)
+        self.statusBar().showMessage(message)
+
+    def voice_failed(self, message):
+        self.stop_voice()
+        self.mascot.expand_chat()
+        self.mascot_home(message)
+        self.speak_now(message)
+
+    def speak_now(self, message):
+        if self.tts and message:
+            if self.voice:
+                self.voice.pause()
+            self.tts.enqueue(speakable(message))
+
+    def voice_say(self, message, choices):
+        """In a voice conversation, everything shown in the bubble is also spoken."""
+        if not self.voice_conversation or not self.tts or not message:
+            return
+        if message.startswith('Computer task · step'):
+            return  # step-by-step progress is shown, not read aloud; the start and the result are spoken
+        titles = [title for title, action in choices if title and action != 'computer:stop']
+        if any(action == 'computer:stop' for _, action in choices) and message.startswith('Starting: '):
+            message += ' Say stop to stop the task.'
+        if len(titles) == 1:
+            message += ' Say yes to '+titles[0][0].lower()+titles[0][1:]+', or no to cancel.'
+        elif titles:
+            message += ' You can say: '+', '.join(titles[:-1])+' or '+titles[-1]+'.'
+        self.speak_now(message)
+
+    def voice_resume(self):
+        """Listen again once A11y has finished speaking and working."""
+        if not self.voice or self.voice.source is None or self.tts_speaking() or (self.worker and self.worker.isRunning()):
+            return
+        if self.voice_conversation:
+            self.voice.listen()
+            self.mascot.set_state('listening')
+        else:
+            self.voice.wait_for_wake()
+
+    def current_choices(self):
+        layout = self.mascot.choice_layout
+        buttons = [layout.itemAt(index).widget() for index in range(layout.count())]
+        return [(button.text(), button.property('companion_action')) for button in buttons
+                if button is not None and button.isEnabled() and button.property('companion_action')]
+
+    def voice_woke(self, request):
+        if not self.voice or self.voice.source is None:
+            return
+        self.voice_conversation = True
+        self.mascot.expand_chat()
+        if request:
+            self.voice_heard(request)
+        else:
+            self.speak_now('Yes? I’m listening.')
+
+    def voice_heard(self, text):
+        text = text.strip()
+        if not text:
+            self.voice_resume()
+            return
+        if is_farewell(text):
+            self.voice_conversation = False
+            self.mascot.footer.setText('Say “Hey Ally” to talk again.')
+            self.speak_now('Okay. Say Hey Ally when you need me.')
+            return
+        self.mascot.footer.setText('You said: '+text)
+        if self.computer_task and not self.computer_task.cancelled.is_set() and re.match(r'^\W*(?:stop|cancel|halt)\b', text, re.I):
+            self.stop_computer_task()
+            return
+        # “Stop task” is handled above; a “yes” must never trigger it.
+        choices = [choice for choice in self.current_choices() if choice[1] != 'computer:stop']
+        if choices:
+            if is_no(text):
+                self.pending_desktop_action = None
+                self.pending_target = None
+                self.mascot_home('Okay, I won’t do that.')
+                return
+            picked = choices[0] if is_yes(text) and len(choices) == 1 else match_choice(text, choices)
+            if picked:
+                self.mascot_action(picked[1])
+                if not self.tts_speaking() and not (self.worker and self.worker.isRunning()):
+                    self.voice_resume()
+                return
+        self.mascot_submit(text, self.mascot.submit_action)
+        if not self.tts_speaking() and not (self.worker and self.worker.isRunning()):
+            self.voice_resume()
+
+    def voice_timeout(self):
+        self.voice_conversation = False
+        self.mascot.footer.setText('Say “Hey Ally” to talk again.')
+        self.speak_now('I’ll be here. Say Hey Ally when you need me.')
 
     def stop_speech(self):
         if self.tts:
@@ -1498,6 +1662,12 @@ class CompanionWindow(QMainWindow):
         if isinstance(self.service.provider, OllamaProvider) and not self.service.provider.config.model:
             self.select_local_model()
             self.connect_provider()
+        if isinstance(self.service.provider, OllamaProvider) and self.service.provider.config.model:
+            import threading
+            from .request_plan import INTENT_SYSTEM
+            from .service import DESKTOP_INSTRUCTIONS, SYSTEM
+            threading.Thread(target=self.service.provider.warm_up, args=([INTENT_SYSTEM, SYSTEM+DESKTOP_INSTRUCTIONS],),
+                             daemon=True).start()
 
     def select_local_model(self, index=None):
         model = self.local_models.currentData()
@@ -1545,6 +1715,7 @@ class CompanionWindow(QMainWindow):
         self.read_btn.setEnabled(self.tts is not None)
         self.mascot.present(message, choices, **options)
         self.mascot.set_state('idle')
+        self.voice_say(message, choices)
 
     def show_setup_question(self):
         data = self.introduction.get()
@@ -1621,6 +1792,9 @@ class CompanionWindow(QMainWindow):
             return
         if action == 'vision:toggle':
             self.toggle_screen_vision()
+            return
+        if action == 'voice:toggle':
+            self.toggle_voice()
             return
         if action == 'guide':
             self.show_guidance()
@@ -1723,6 +1897,9 @@ class CompanionWindow(QMainWindow):
         self.vision.set_enabled(False)
         self.context_timer.stop()
         self.stop_speech()
+        if self.voice:
+            self.voice.stop()
+            self.voice.executor.shutdown(wait=False, cancel_futures=True)
         self.overlay.close()
         self.pointer.close()
         self.mascot.close()

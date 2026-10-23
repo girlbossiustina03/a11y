@@ -80,7 +80,7 @@ class RequestPlanningTests(CompanionFixture, unittest.TestCase):
             provider.complete_structured.assert_not_called()
             self.assertEqual({k: result['desktop_action'][k] for k in expected}, expected)
             if operation != 'focus_app':
-                self.assertIn('Confirm below', result['message'])
+                self.assertNotIn('Confirm below', result['message'])   # the user asked for no confirmation step
         self.app.provider = StagedProvider('quit_app', 'Discord')
         result = self.app.ask('close discord')
         self.assertIsNone(result['desktop_action'])
@@ -103,7 +103,7 @@ class RequestPlanningTests(CompanionFixture, unittest.TestCase):
         result = self.app.ask('close the lower right terminal please')
         self.assertEqual(provider.complete_structured.call_count, 2)
         self.assertEqual(result['desktop_action']['type'], 'close_window')
-        self.assertIn('Confirm below', result['message'])
+        self.assertNotIn('Confirm below', result['message'])   # the user asked for no confirmation step
         first = provider.complete_structured.call_args_list[0]
         context = json.loads(first.args[1][-2]['content'])
         self.assertNotIn('history', context)
@@ -165,3 +165,67 @@ class IntentTransportTests(unittest.TestCase):
                      {'operation': 'launch_app', 'app_name': 123, 'target': ''}]:
             with self.assertRaises(ValidationError):
                 validate_plan(plan)
+
+
+class FastPathTests(unittest.TestCase):
+    def test_single_app_commands_skip_the_planner(self):
+        from companion.request_plan import simple_app_command
+        for request, operation, name in [('open discord', 'launch_app', 'discord'), ('Please open the Settings app', 'launch_app', 'Settings'),
+                                         ('Hey Ally, launch Microsoft Teams.', 'launch_app', 'Microsoft Teams'),
+                                         ('close spotify', 'close_window', 'spotify'), ('quit Notepad please', 'quit_app', 'Notepad'),
+                                         ('switch to outlook', 'focus_app', 'outlook')]:
+            plan = simple_app_command(request)
+            self.assertEqual((plan['operation'], plan['app_name']), (operation, name), request)
+            self.assertEqual(plan['remaining_request'], '')
+
+    def test_anything_more_than_one_app_goes_to_the_planner(self):
+        from companion.request_plan import simple_app_command
+        for request in ('open teams and check my tasks', 'open notepad then write a summary', 'open the report in excel',
+                        'open youtube.com', 'close the tab', 'how do I open settings?', 'open a new window for the quarterly budget review',
+                        'start the timer for five minutes', 'what is open right now'):
+            self.assertIsNone(simple_app_command(request), request)
+
+    def test_echoed_remaining_request_is_not_follow_up_work(self):
+        from companion.request_plan import preserve_desktop_goal
+        plan = {'operation': 'launch_app', 'app_name': 'Discord', 'target': '', 'browser_mode': 'default', 'remaining_request': 'Open Discord.'}
+        self.assertEqual(preserve_desktop_goal(plan, 'open discord')['operation'], 'launch_app')
+        plan['remaining_request'] = 'and check my messages'
+        self.assertEqual(preserve_desktop_goal(plan, 'open discord and check my messages')['operation'], 'computer_task')
+
+
+class FastPathServiceTests(CompanionFixture, unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        self.bridge = FakeBridge()
+        self.bridge.catalog = Mock(return_value=[{'name': 'Discord', 'bundle_id': 'discord.exe'},
+                                                {'name': 'Outlook (classic)', 'bundle_id': 'o1'}, {'name': 'Outlook (new)', 'bundle_id': 'o2'}])
+        self.app.desktop_context = DesktopContext(self.bridge, clock=lambda: 100)
+
+    def test_known_app_opens_without_any_model_call(self):
+        provider = self.app.provider = StagedProvider('answer')
+        result = self.app.ask('open discord')
+        provider.interpret_request.assert_not_called()
+        provider.complete_structured.assert_not_called()
+        self.assertEqual(result['desktop_action']['bundle_id'], 'discord.exe')
+        self.assertEqual(result['message'], 'Open Discord…')
+
+    def test_ambiguous_name_still_uses_the_planner(self):
+        provider = self.app.provider = StagedProvider('launch_app', 'Outlook')
+        self.app.ask('open outlook')
+        provider.interpret_request.assert_called_once()
+
+    def test_tasks_fail_fast_where_input_is_not_supported(self):
+        self.bridge.supports_input = False
+        self.app.provider = StagedProvider('computer_task', target='open notepad and write a summary')
+        result = self.app.ask('open notepad and write a summary')
+        self.assertIsNone(result['desktop_action'])
+        self.assertIn('not available on this system yet', result['message'])
+
+    def test_close_and_quit_results_are_reported_without_a_model_call(self):
+        provider = self.app.provider = StagedProvider('answer')
+        self.app.last_action_result = {'type': 'quit_app', 'label': 'Quit Discord', 'application_state': {'running': False}}
+        self.assertEqual(self.app.ask('quit discord', mode='verify')['message'], 'Closed Discord.')
+        self.app.last_action_result = {'type': 'close_window', 'label': 'Close Discord — Friends', 'before': {'window_count': 1},
+                                       'after': {'window_count': 1}}
+        self.assertIn('still open', self.app.ask('close discord', mode='verify')['message'])
+        provider.complete_structured.assert_not_called()

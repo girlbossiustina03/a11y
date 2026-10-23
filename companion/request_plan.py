@@ -1,5 +1,6 @@
 """Small semantic request planner, separate from screen evidence and old assistant prose."""
 from copy import deepcopy
+import re
 from .models import RESPONSE_SCHEMA, ValidationError
 
 OPERATIONS = ('answer', 'plan', 'inspect_screen', 'move_object', 'move_geometry',
@@ -163,9 +164,18 @@ Current pixels override older metadata. If evidence is insufficient, ask a short
 clarification with request_kind=answer and no action/target. No shell commands.'''
 
 
+def _normalized(value):
+    return ''.join(character for character in value.casefold() if character.isalnum())
+
+
 def preserve_desktop_goal(plan, request):
     """Preserve follow-up work across app launches, browser and input shortcuts."""
     plan = validate_plan(plan)
+    if plan.get('remaining_request') and (_normalized(plan['remaining_request']) == _normalized(request) or plan['operation'] in
+            ('answer', 'plan', 'inspect_screen', 'inspect_media', 'computer_task', 'highlight', 'move_object', 'move_geometry')):
+        # Small models often echo the request, or put a reply here, for operations that have no
+        # follow-up step; that is not additional work and must not be reported as pending.
+        plan = dict(plan, remaining_request='')
     is_shortcut = plan['operation'] in ('browser_open', 'browser_search', 'new_window',
         'launch_app', 'focus_app', 'type_text', 'press_key', 'scroll', 'click_point', 'press_control')
     if plan['operation'] in ('click_point', 'press_control') or is_shortcut and plan.get('remaining_request', '').strip():
@@ -175,3 +185,24 @@ def preserve_desktop_goal(plan, request):
 
 
 preserve_browser_goal = preserve_desktop_goal  # Compatibility for existing integrations.
+
+
+# "open teams", "please close discord", "switch to outlook": one verb and one app name,
+# nothing else. Anything longer, or with a second clause, goes to the model planner.
+_SIMPLE_COMMAND = re.compile(
+    r"^\W*(?:(?:please|hey|ok(?:ay)?|ally|can you|could you|would you)\W+)*"
+    r"(open|launch|start|run|close|quit|exit|switch to|go to|focus|bring up)\s+"
+    r"(?:the\s+|my\s+)?(.+?)(?:\s+(?:app|application|program|window))?(?:\W+please)?\W*$", re.IGNORECASE)
+_SECOND_CLAUSE = re.compile(r"\b(?:and|then|in|on|with|to|for|from|into|tab|website|page|file|document|folder|after|while)\b|[,;:/]|https?|www\.|\w\.\w", re.IGNORECASE)
+_VERBS = {'open': 'launch_app', 'launch': 'launch_app', 'start': 'launch_app', 'run': 'launch_app', 'bring up': 'launch_app',
+          'close': 'close_window', 'quit': 'quit_app', 'exit': 'quit_app',
+          'switch to': 'focus_app', 'go to': 'focus_app', 'focus': 'focus_app'}
+
+
+def simple_app_command(request):
+    """Plan for a single-app command without a model call, or None when it is not that simple."""
+    match = _SIMPLE_COMMAND.match(request.strip())
+    if not match or _SECOND_CLAUSE.search(match.group(2)) or len(match.group(2).split()) > 4:
+        return None
+    return {'operation': _VERBS[match.group(1).casefold()], 'app_name': match.group(2).strip(), 'target': '',
+            'browser_mode': 'default', 'remaining_request': ''}

@@ -149,6 +149,9 @@ class _Win32:
 
 
 class WindowsDesktopBridge:
+    # Clicking, typing and control presses are not implemented on Windows yet.
+    supports_input = False
+
     def __init__(self, directory=None, *, win32=None):
         self.win32 = win32 or _Win32()
         self.own_pid = os.getpid()
