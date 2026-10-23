@@ -326,3 +326,37 @@ class MicrophonePermissionTests(unittest.TestCase):
         self.listener.check_microphone()
         self.assertIn('Microphone', self.errors[-1])
         self.assertIsNone(self.listener.source)
+
+
+@unittest.skipUnless(importlib.util.find_spec('PyQt6'), 'PyQt6 missing')
+class NaturalVoiceDownloadTests(unittest.TestCase):
+    """Setup and turning voice on downloaded the same file at once; one rename then failed."""
+    def test_simultaneous_downloads_fetch_each_file_once_and_both_succeed(self):
+        import tempfile, threading, time
+        from pathlib import Path
+        from unittest import mock
+        from companion import neural_voice
+        fetched, errors = [], []
+        def fake_retrieve(url, path, hook=None):
+            fetched.append(url.rsplit('/', 1)[1])
+            time.sleep(0.05)
+            Path(path).write_bytes(b'model')
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch('urllib.request.urlretrieve', side_effect=fake_retrieve):
+            folder = neural_voice.model_directory(directory)
+            folder.mkdir(parents=True)
+            (folder/'kokoro-v1.0.onnx.part').write_bytes(b'stale')
+            def run():
+                try:
+                    neural_voice.download_models(directory)
+                except Exception as error:
+                    errors.append(error)
+            threads = [threading.Thread(target=run) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            self.assertEqual(errors, [])
+            self.assertEqual(sorted(fetched), sorted([neural_voice.MODEL_FILE, neural_voice.VOICES_FILE]))
+            self.assertTrue(neural_voice.neural_voice_available(directory) or not importlib.util.find_spec('kokoro_onnx'))
+            self.assertEqual(sorted(p.name for p in folder.iterdir()), sorted([neural_voice.MODEL_FILE, neural_voice.VOICES_FILE]))

@@ -46,22 +46,38 @@ def neural_voice_available(data_directory):
     return (folder/MODEL_FILE).is_file() and (folder/VOICES_FILE).is_file()
 
 
+_download_lock = threading.Lock()
+
+
 def download_models(data_directory, progress=None):
     """Fetch the open model files once (about 340 MB), from setup or after voice is turned on.
-    progress(fraction or None) is called while downloading."""
+    progress(fraction or None) is called while downloading.
+
+    Setup and turning voice on can both ask for the files at the same time, so downloads run
+    one at a time, each into its own temporary file, and a file another download finished is
+    not fetched again."""
+    import os
     import urllib.request
     folder = model_directory(data_directory)
     folder.mkdir(parents=True, exist_ok=True)
-    for name in (VOICES_FILE, MODEL_FILE):
-        target = folder/name
-        if not target.is_file():
-            partial = target.with_suffix(target.suffix+'.part')
+    with _download_lock:
+        for stale in folder.glob('*.part'):  # left behind by an interrupted or older download
+            stale.unlink(missing_ok=True)
+        for name in (VOICES_FILE, MODEL_FILE):
+            target = folder/name
+            if target.is_file():
+                continue
+            partial = target.with_name('%s.%d.part' % (name, os.getpid()))
             hook = None
             if progress:
                 def hook(blocks, size, total):
                     progress(min(1.0, blocks*size/total) if total > 0 else None)
-            urllib.request.urlretrieve(MODEL_URL+name, partial, hook)
-            partial.replace(target)
+            try:
+                urllib.request.urlretrieve(MODEL_URL+name, partial, hook)
+                os.replace(partial, target)
+            finally:
+                if partial.exists():
+                    partial.unlink()
 
 
 class _State:
