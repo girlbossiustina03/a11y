@@ -199,3 +199,25 @@ class VoiceSetupTests(unittest.TestCase):
                 self.assertRaisesRegex(installer.SetupError, 'cancelled'):
             installer.prepare_voice(lambda *a: None, cancel, '/data')
         self.assertEqual(downloaded, [])
+
+
+class CertificateTests(unittest.TestCase):
+    """Packaged app downloads failed with CERTIFICATE_VERIFY_FAILED (no system CA store)."""
+    def test_packaged_app_uses_certifi_and_keeps_verification(self):
+        import certifi
+        import ssl
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(paths, 'frozen', return_value=True):
+            self.assertEqual(paths.use_bundled_certificates(), certifi.where())
+            self.assertEqual(os.environ['SSL_CERT_FILE'], certifi.where())
+            context = ssl.create_default_context()
+            self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+            self.assertGreater(len(context.get_ca_certs()), 50)
+
+    def test_user_certificate_setting_and_source_runs_are_left_alone(self):
+        with mock.patch.dict(os.environ, {'SSL_CERT_FILE': '/company/ca.pem'}, clear=True), \
+                mock.patch.object(paths, 'frozen', return_value=True):
+            self.assertIsNone(paths.use_bundled_certificates())
+            self.assertEqual(os.environ['SSL_CERT_FILE'], '/company/ca.pem')
+        with mock.patch.dict(os.environ, {}, clear=True), mock.patch.object(paths, 'frozen', return_value=False):
+            self.assertIsNone(paths.use_bundled_certificates())
+            self.assertNotIn('SSL_CERT_FILE', os.environ)

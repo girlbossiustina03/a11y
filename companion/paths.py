@@ -58,3 +58,19 @@ def save_ai_settings(**values):
     directory.mkdir(parents=True, exist_ok=True)
     (directory/'ai.json').write_text(json.dumps(current, indent=2))
     return current
+
+
+def use_bundled_certificates():
+    """Point HTTPS checks at certifi's CA list inside a packaged app.
+
+    PyInstaller's Python does not read the macOS keychain or Windows certificate store, so
+    every urllib download (Ollama, the natural voice) failed with CERTIFICATE_VERIFY_FAILED.
+    Verification stays on; an SSL_CERT_FILE the user set (e.g. a company proxy CA) wins."""
+    if not frozen() or os.getenv('SSL_CERT_FILE'):
+        return None
+    try:
+        import certifi
+    except ImportError:
+        return None
+    os.environ['SSL_CERT_FILE'] = certifi.where()
+    return os.environ['SSL_CERT_FILE']

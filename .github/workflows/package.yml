@@ -44,6 +44,11 @@ jobs:
           kill -0 $pid
           kill $pid
           grep "A11y desktop build" "$RUNNER_TEMP/a11y-data/a11y.log"
+      - name: Self-test the packaged app (HTTPS, voice, Qt, helpers)
+        run: |
+          A11Y_DATA_DIR="$RUNNER_TEMP/a11y-selftest" dist/A11y.app/Contents/MacOS/A11y --self-test "$RUNNER_TEMP/self-test.json" || status=$?
+          cat "$RUNNER_TEMP/self-test.json"
+          exit ${status:-0}
       - uses: actions/upload-artifact@v4
         with:
           name: A11y-macOS
@@ -76,6 +81,14 @@ jobs:
           if ($process.HasExited) { throw "A11y exited with code $($process.ExitCode)" }
           Stop-Process -Id $process.Id
           Select-String -Path (Join-Path $env:A11Y_DATA_DIR 'a11y.log') -Pattern 'A11y desktop build'
+      - name: Self-test the packaged app (HTTPS, voice, Qt)
+        shell: pwsh
+        run: |
+          $env:A11Y_DATA_DIR = Join-Path $env:RUNNER_TEMP 'a11y-selftest'
+          $result = Join-Path $env:RUNNER_TEMP 'self-test.json'
+          $process = Start-Process -FilePath dist/A11y/A11y.exe -ArgumentList '--self-test', $result -Wait -PassThru
+          Get-Content $result
+          if ($process.ExitCode -ne 0) { throw "Self-test failed with code $($process.ExitCode)" }
       - uses: actions/upload-artifact@v4
         with:
           name: A11y-Windows

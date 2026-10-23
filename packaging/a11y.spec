@@ -51,6 +51,10 @@ for package in ['faster_whisper', 'ctranslate2', 'espeakng_loader', 'sounddevice
     datas += package_datas
     binaries += package_binaries
     hiddenimports += package_imports
+# CA certificates for HTTPS downloads (see paths.use_bundled_certificates).
+cert_datas, cert_binaries, cert_imports = collect_all('certifi')
+datas += cert_datas
+hiddenimports += cert_imports+['certifi']
 if sys.platform == 'win32':
     hiddenimports += ['comtypes', 'comtypes.client', 'winrt.windows.media.ocr', 'winrt.windows.graphics.imaging',
                       'winrt.windows.storage.streams', 'winrt.windows.foundation']
@@ -67,7 +71,7 @@ if sys.platform == 'darwin':
     app = BUNDLE(collected, name='A11y.app', icon=str(ICONS/'A11y.icns'), bundle_identifier='com.a11y.companion',
                  info_plist={
                      'CFBundleName': 'A11y', 'CFBundleDisplayName': 'A11y',
-                     'CFBundleShortVersionString': '0.9.2', 'CFBundleVersion': '0.9.2',
+                     'CFBundleShortVersionString': '0.9.3', 'CFBundleVersion': '0.9.3',
                      'LSMinimumSystemVersion': '14.0', 'NSHighResolutionCapable': True,
                      'NSMicrophoneUsageDescription': 'A11y listens for “Hey Ally” and your spoken requests when you turn voice on. Audio is processed on this Mac and never saved.',
                      'NSAppleEventsUsageDescription': 'A11y controls Music and Safari only when you ask it to play a song or open a page.',

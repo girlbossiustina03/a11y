@@ -7,8 +7,13 @@ def main():
     parser = argparse.ArgumentParser(description='A11y adaptive workplace companion')
     parser.add_argument('--panel', action='store_true', help='Also open the settings panel at launch')
     parser.add_argument('--admin', action='store_true', help='Enable local company document management')
+    parser.add_argument('--self-test', metavar='RESULT_JSON', help='Check the packaged app (HTTPS, voice, Qt, helpers) and exit')
     args = parser.parse_args()
-    from companion.paths import data_dir, frozen
+    from companion.paths import data_dir, frozen, use_bundled_certificates
+    use_bundled_certificates()
+    if args.self_test:
+        from companion.self_test import run
+        return run(args.self_test)
     if frozen():
         # A double-clicked app has no terminal: keep the timing/diagnostic log in its data folder.
         directory = data_dir()
