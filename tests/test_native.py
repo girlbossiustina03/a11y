@@ -888,6 +888,12 @@ class NativeTests(unittest.TestCase):
         self.assertIn('Xcode is open on Project.', self.window.mascot.bubble.toPlainText())
         self.assertTrue(self.window.mascot.compact)
 
+    def test_a_finished_task_answer_is_remembered_for_follow_ups(self):
+        from companion.computer_task import ComputerTask
+        task = self.window.computer_task = ComputerTask('check my Teams notifications', automatic=True)
+        self.window.receive_computer_step(task, {'status': 'done', 'message': 'Ana mentioned you in General.', 'action': None})
+        self.assertEqual(self.service.conversation[-1]['content'], 'Ana mentioned you in General.')
+
     def test_capture_failure_does_not_ask_model_to_guess(self):
         self.window.vision.set_enabled(True)
         with patch.object(self.window.vision, 'capture', side_effect=RuntimeError('Screen recording permission denied')):

@@ -404,6 +404,18 @@ def build_cases(eval_window):
             return 'reply “'+message[:100]+'” ≠ “'+expected[:100]+'”'
         return None
 
+    def remembered_check(state, events):
+        message = final_message(events)
+        if not re.search(r'\b14\b|fourteen', message, re.I):
+            return 'reply: '+message[:160]
+        return None
+
+    def name_check(state, events):
+        message = final_message(events)
+        if 'Ana' not in message:
+            return 'reply: '+message[:160]
+        return None
+
     def teams_neutral():
         eval_window.ensure(NEUTRAL)
         activate('Finder')
@@ -426,6 +438,11 @@ def build_cases(eval_window):
         Case('what do I have to do today', reminders_check, timeout=60),
         Case('open the calculator and add 12 and 30', calculator_check, setup=lambda app: activate('Finder'), timeout=120),
         Case('what about tomorrow?', follow_up_check, setup=lambda app: app.run("what's on my calendar today", 60), timeout=60),
+        # A conversation, as reported: Teams just opened, then a question that does not name it.
+        Case('are there any notifications that require my attention', activity_check,
+             setup=lambda app: (teams_view(eval_window, 2), app.run('open teams in a new safari window', 60)), timeout=180),
+        Case('what number did I just say', remembered_check, setup=lambda app: app.run('14', 60), timeout=60),
+        Case('my name is Ana. what is my name?', name_check, timeout=60),
     ]
 
 

@@ -92,6 +92,11 @@ app_name Terminal, not movement. "open Stremio" is launch_app, app_name Stremio,
 never Terminal. "open a new terminal" is new_window, app_name Terminal. "open a new Safari
 window" is new_window, app_name Safari, never a website.
 A complaint such as "you did not close it" is answer; do not repeat an action.
+Questions about the user themselves ("what is my name", "what do I do for work", "what's my
+role") are answer from user_profile and the conversation, never reminders or calendar.
+Something the user tells you rather than asks ("14", "my name is Ana", "I'm flying to Paris on
+Friday", "ok", "thanks") is answer: acknowledge it in reply. It is never type_text,
+inspect_screen or another action; type_text needs an explicit request to type or write.
 goal_mode classifies the requested outcome: inspect means opening, navigating,
 searching, reading, checking information (including activity/tasks) or calculator
 arithmetic; draft means explicitly writing or composing local text without sending
@@ -107,6 +112,9 @@ user_profile only when relevant and never invent facts about the user or employe
 reply empty for questions about the user's company, its policies, tools or
 procedures (the app looks those up in company documents with citations), and for
 every operation other than answer. Never claim to have done anything on the computer.
+front_app is the app and window the user is looking at now. A question that names no app
+("any notifications for me?", "anything new here?", "what does this say?") is about front_app:
+computer_task for checking notifications, messages or activity in it.
 Use earlier USER requests only to resolve explicit pronouns. No old assistant replies
 are supplied because they are not instructions. Never invent a multi-app workaround.'''
 VERIFY_SCHEMA = {'type': 'object', 'additionalProperties': False, 'required': ['message'],

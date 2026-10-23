@@ -93,7 +93,7 @@ class RequestWorker(QThread):
                 if action.get('type') == 'click_point':
                     action['capture_guard'] = self.vision.click_guard(self.options['image_data'], visual, action)
             elif visual:
-                self.service.desktop_session.clear()
+                self.service.forget_desktop()
                 response['target'] = None
                 response['desktop_action'] = None
             self.result.emit(response)
@@ -1452,7 +1452,7 @@ class CompanionWindow(QMainWindow):
             self.retry_after_vision = False
             self.vision.set_enabled(False)
             self.access_preferences.save(screen_vision=False)
-            self.service.desktop_session.clear()
+            self.service.forget_desktop()
             self.mascot.vision_button.setText('Screen off')
             self.mascot.vision_button.setAccessibleName('Screen vision is off. Activate to enable.')
             self.mascot_home('Screen vision paused. I will not capture your screen.')
@@ -1617,7 +1617,7 @@ class CompanionWindow(QMainWindow):
         self.switch_app_btn.setEnabled(bool(self.running_apps.count()))
         self.control_highlight_btn.setEnabled(bool(self.observed_controls.count()))
 
-    def offer_computer_task(self, goal, goal_mode=None, opening=None):
+    def offer_computer_task(self, goal, goal_mode=None, opening=None, looking_at=None):
         goal = text(goal, 'computer task', 2000)
         self.stop_computer_task(announce=False)
         self.pending_desktop_action = {'type': 'start_task', 'goal': goal, 'label': 'Start computer task'}
@@ -1626,6 +1626,8 @@ class CompanionWindow(QMainWindow):
         if opening:
             # The already-resolved first step (open the named app/site); see ComputerTask.take_opening.
             self.pending_desktop_action['opening'] = opening
+        if looking_at:
+            self.pending_desktop_action['looking_at'] = looking_at
         proposal = self.pending_desktop_action
         self.say('On it.', [('Stop', 'computer:stop')], compact=True, state='thinking')
         def begin():
@@ -1647,7 +1649,7 @@ class CompanionWindow(QMainWindow):
                      [('Settings', 'settings'), ('Try again', 'computer:start:auto' if automatic else 'computer:start:review'), ('Cancel', 'computer:stop')], compact=True)
             return
         self.computer_task = ComputerTask(proposal['goal'], automatic=automatic, goal_mode=proposal.get('goal_mode'),
-                                          opening=proposal.get('opening'))
+                                          opening=proposal.get('opening'), looking_at=proposal.get('looking_at'))
         self.pending_desktop_action = None
         self.next_computer_step()
 
@@ -1694,6 +1696,7 @@ class CompanionWindow(QMainWindow):
             return
         if step['status'] != 'action':
             task.stop(step['status'])
+            self.service.remember('assistant', step['message'], private=True)  # "what did it say?" can follow a task
             # The model's reading of the screen, not a verified result; kept to the point.
             # The answer itself, in plain words: no "Looks done. The goal … has been achieved."
             stopped = brief(step['message'])
@@ -1791,7 +1794,7 @@ class CompanionWindow(QMainWindow):
                 if self.desktop_monitor.enabled:
                     self.desktop_monitor.disable()
                     self.access_preferences.save(app_awareness=False)
-                    self.service.desktop_session.clear()
+                    self.service.forget_desktop()
                     self.service.last_action_result = None
                     self.pending_desktop_action = None
                 else:
@@ -1824,7 +1827,7 @@ class CompanionWindow(QMainWindow):
                 if not proposed:
                     return
                 if proposed['type'] == 'start_task':
-                    self.offer_computer_task(proposed['goal'], proposed.get('goal_mode'), proposed.get('opening'))
+                    self.offer_computer_task(proposed['goal'], proposed.get('goal_mode'), proposed.get('opening'), proposed.get('looking_at'))
                     return
                 if proposed['type'] == 'capture_once':
                     self.pending_desktop_action = None
@@ -2151,7 +2154,7 @@ class CompanionWindow(QMainWindow):
             if message:
                 self.record_companion_message(message)  # e.g. why a follow-up task starts
             self.offer_computer_task(self.pending_desktop_action['goal'], self.pending_desktop_action.get('goal_mode'),
-                                     self.pending_desktop_action.get('opening'))
+                                     self.pending_desktop_action.get('opening'), self.pending_desktop_action.get('looking_at'))
             return
         elif self.pending_desktop_action:
             choices.append((self.pending_desktop_action.get('confirmation_label', self.pending_desktop_action['label']), 'desktop:apply'))

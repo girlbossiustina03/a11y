@@ -232,9 +232,9 @@ class LiveTeamsLogTests(Harness):
         for _ in range(2):
             task.record({'type': 'click_point', 'label': 'Activity section with notification badge', 'status': 'submitted'})
         done = {'status': 'done', 'message': 'Activity lists 2 assignments due Friday.', 'risk': 'navigation', 'action': None}
-        self.provider.complete_structured.side_effect = [self.activity, done]
+        self.provider.complete_structured.side_effect = [self.activity, done, {'message': 'Two assignments are due Friday.'}]
         self.assertEqual(self.propose(task)['status'], 'done')
-        self.assertIn('already ran twice', self.provider.complete_structured.call_args.args[1][-1]['content'])
+        self.assertIn('already ran twice', self.provider.complete_structured.call_args_list[1].args[1][-1]['content'])
         self.provider.complete_structured.side_effect = [self.activity, self.activity]
         step = self.propose(task)
         self.assertEqual(step['status'], 'needs_user')
@@ -687,14 +687,15 @@ class InspectionAnswerTests(Harness):
     regions = TEAMS_REGIONS
 
     def test_an_inspection_ends_with_what_the_screen_shows_and_no_action(self):
-        task = ComputerTask('check if I have new notifications on Teams', automatic=True, goal_mode='inspect')
-        task.record({'type': 'click_point', 'label': 'Activity', 'status': 'submitted'})
+        task = ComputerTask('check whether I have tasks in Teams', automatic=True, goal_mode='inspect')
+        task.record({'type': 'click_point', 'label': 'Assignments', 'status': 'submitted'})
         change = {'status': 'action', 'message': 'Press it.', 'risk': 'change', 'action': {'type': 'press_control', 'control_id': 'control-0'}}
         self.provider.complete_structured.side_effect = [change, change,
-            {'status': 'done', 'message': 'Ana mentioned you in General.', 'risk': 'navigation', 'action': None}]
+            {'status': 'done', 'message': 'Ana mentioned you in General.', 'risk': 'navigation', 'action': None},
+            {'message': 'Ana mentioned you in General.'}]
         step = self.propose(task)
         self.assertEqual(step, {'status': 'done', 'message': 'Ana mentioned you in General.', 'action': None})
-        report = self.provider.complete_structured.call_args
+        report = self.provider.complete_structured.call_args_list[2]
         self.assertEqual(report.kwargs['schema']['properties']['action'], {'type': 'null'})
 
     def test_other_goals_still_stop_with_nothing_done(self):
@@ -705,3 +706,187 @@ class InspectionAnswerTests(Harness):
         with self.assertRaises(Exception):
             self.propose(task)
         self.assertEqual(self.provider.complete_structured.call_count, 2)
+
+
+class ScreenAnswerTests(Harness):
+    """Inspection answers were vague ("Notifications are visible; no further action is needed").
+    The finished answer is written from the screen's readable text, without the image."""
+    regions = [region('Activity', .02, .2), region('Ana Popescu mentioned you', .3, .3, .2), region('Demo is due at 11', .3, .34, .2)]
+
+    def test_the_answer_is_written_from_the_screen_text(self):
+        from companion.computer_task import ANSWER_SYSTEM
+        task = ComputerTask('check whether Ana wrote to me in Teams', automatic=True, goal_mode='inspect')
+        task.record({'type': 'click_point', 'label': 'Chat', 'status': 'submitted'})
+        self.provider.complete_structured.side_effect = [
+            {'status': 'done', 'message': 'Messages are visible.', 'risk': 'navigation', 'action': None},
+            {'message': 'Ana Popescu mentioned you: the demo is due at 11.'}]
+        self.assertEqual(self.propose(task)['message'], 'Ana Popescu mentioned you: the demo is due at 11.')
+        answer = self.provider.complete_structured.call_args
+        self.assertEqual(answer.args[0], ANSWER_SYSTEM)
+        self.assertIsNone(answer.kwargs.get('image_data'))
+        self.assertIn('Ana Popescu mentioned you', answer.args[1][0]['content'])
+
+    def test_a_failed_answer_keeps_the_first_reading(self):
+        from companion.provider import ProviderError
+        task = ComputerTask('check whether Ana wrote to me', automatic=True, goal_mode='inspect')
+        task.record({'type': 'click_point', 'label': 'Chat', 'status': 'submitted'})
+        self.provider.complete_structured.side_effect = [
+            {'status': 'done', 'message': 'Two mentions from Ana.', 'risk': 'navigation', 'action': None}, ProviderError('down')]
+        self.assertEqual(self.propose(task)['message'], 'Two mentions from Ana.')
+
+
+class ConversationTests(LiveRoutingTests):
+    """Reported transcript: "14" got no reply, "what number did I just say" got "I don't have access
+    to your previous spoken words", and "are there any notifications that require my attention" right
+    after opening Teams invented "You have 10 unread notifications. Click the bell icon"."""
+
+    def setUp(self):
+        super().setUp()
+        self.provider.complete_structured.return_value = {'message': 'Got it: 14.'}
+
+    def test_what_was_said_is_remembered_for_the_reply(self):
+        self.route('answer', reply='Okay.')
+        self.assertEqual(self.app.ask('14')['message'], 'Got it: 14.')
+        self.provider.complete_structured.return_value = {'message': "You said 14."}
+        self.provider.interpret_request.reset_mock()
+        self.assertEqual(self.app.ask('what number did I just say')['message'], 'You said 14.')
+        self.provider.interpret_request.assert_not_called()  # about this conversation: answered from memory
+        from companion.service import CHAT_SYSTEM
+        system, messages = self.provider.complete_structured.call_args.args
+        self.assertEqual(system, CHAT_SYSTEM)
+        self.assertEqual([m['content'] for m in messages[:2]], ['14', 'Got it: 14.'])
+
+    def test_routing_sees_the_front_app_but_replies_do_not(self):
+        self.app.desktop_context.enabled = True
+        self.app.desktop_context.bridge.value = dict(self.app.desktop_context.bridge.value, app={'name': 'Safari', 'bundle_id': 'com.apple.Safari'},
+                                                     window={'title': '(3) Activity | Microsoft Teams', 'bounds': {'x': 0, 'y': 0, 'width': 10, 'height': 10}})
+        self.app.desktop_context.collect_once()
+        self.route('answer', reply='Okay.')
+        self.app.prepare_request('ok')
+        self.assertEqual(self.provider.interpret_request.call_args.kwargs['context']['front_app'], 'Safari — Activity | Microsoft Teams')
+        self.assertNotIn('front_app', self.provider.complete_structured.call_args.args[1][-2]['content'])
+
+    def test_a_statement_is_never_typed_and_notifications_are_not_mail(self):
+        self.route('type_text', 'Ana')
+        plan = self.app.prepare_request('my name is Ana')
+        self.assertEqual(plan['operation'], 'answer')
+        self.route('type_text', 'hello')
+        self.assertEqual(self.app.prepare_request('type hello')['operation'], 'type_text')
+        self.route('read_mail', '1')
+        self.assertEqual(self.app.prepare_request('are there any notifications that require my attention')['operation'], 'computer_task')
+
+    def test_memory_keeps_no_email_text_and_no_revoked_company_answers(self):
+        self.app.remember('user', 'what is in the handbook', ['revoked-doc'])
+        self.app.remember('assistant', 'Secret policy text.', ['revoked-doc'])
+        with patch('companion.mail_reader.newest', return_value=('Ana <a@x>', 'Demo', 'Friday', 'The secret body.')):
+            self.app.ask('read my last email')
+        self.assertNotIn('secret body', json.dumps(list(self.app.conversation)))
+        self.assertIn('Demo', self.app.conversation[-1]['content'])
+        self.route('answer', reply='Okay.')
+        self.app.ask('ok')
+        self.assertNotIn('Secret policy text.', json.dumps(self.provider.complete_structured.call_args.args[1]))
+
+
+class ConversationPrivacyTests(ConversationTests):
+    """Review of the conversation memory: what it may keep and to whom it may go."""
+
+    def test_screen_and_app_content_is_forgotten_with_access_and_never_sent_to_a_cloud_model(self):
+        self.app.remember('user', 'check my notifications')
+        self.app.remember('assistant', 'Ana mentioned you in General.', private=True)
+        self.route('answer', reply='Okay.')
+        self.provider.cloud = True
+        self.app.ask('ok')
+        self.assertNotIn('Ana mentioned', json.dumps(self.provider.complete_structured.call_args.args[1]))
+        self.app.forget_desktop()
+        self.assertNotIn('Ana mentioned', json.dumps(list(self.app.conversation)))
+        self.assertIn('check my notifications', json.dumps(list(self.app.conversation)))
+
+    def test_company_answers_are_never_replayed_from_memory(self):
+        self.app.remember('user', 'what does the handbook say about leave', ['doc-1'])
+        self.app.remember('assistant', 'Leave needs two weeks notice.', ['doc-1'])
+        self.route('answer', reply='Okay.')
+        with patch.object(self.app, 'allowed_documents', return_value={'doc-1'}):
+            self.app.ask('ok')
+        self.assertNotIn('two weeks', json.dumps(self.provider.complete_structured.call_args.args[1]))
+
+    def test_a_request_that_mentions_the_conversation_still_acts(self):
+        self.app.remember('user', 'my mom is visiting Friday')
+        self.route('add_reminder', 'call mom', when='2026-10-30T09:00')
+        plan = self.app.prepare_request('remind me tomorrow about what I told you')
+        self.assertTrue(plan.get('app_write'))
+
+    def test_the_next_email_follows_a_mail_read(self):
+        with patch('companion.mail_reader.newest', return_value=('Ana <a@x>', 'Demo', 'Friday', 'Body')):
+            self.app.ask('read my last email')
+            self.route('read_mail', '2')
+            plan = self.app.prepare_request('read the next one')
+        self.assertTrue(plan.get('full_text'))
+        self.route('answer', reply='Okay.')
+        self.app.prepare_request('ok')
+        self.route('read_mail', '2')
+        self.assertEqual(self.app.prepare_request('read the next one')['operation'], 'computer_task')  # no mail just read
+
+
+class ScreenAnswerAccessTests(Harness):
+    regions = ScreenAnswerTests.regions
+
+    def test_no_answer_from_the_screen_after_access_is_paused(self):
+        task = ComputerTask('check whether Ana wrote to me in Teams', automatic=True, goal_mode='inspect')
+        task.record({'type': 'click_point', 'label': 'Chat', 'status': 'submitted'})
+        replies = [{'status': 'done', 'message': 'Messages are visible.', 'risk': 'navigation', 'action': None}]
+        def reply(*args, **kwargs):
+            if replies:
+                return replies.pop(0)
+            self.desktop.enabled = False  # paused while the final answer was being written
+            return {'message': 'Ana mentioned you.'}
+        self.provider.complete_structured.side_effect = reply
+        with self.assertRaises(ValueError):
+            self.propose(task)
+
+
+class NotificationLoopTests(Harness):
+    """"Are there any notifications that require my attention" alternated "Activity (1)" and "Bell
+    icon" clicks until the 24-step limit (164 s, live)."""
+    regions = ScreenAnswerTests.regions
+
+    def test_the_opened_activity_view_is_answered_from_its_text(self):
+        task = ComputerTask('are there any notifications that require my attention', automatic=True)
+        task.record({'type': 'click_point', 'label': 'Activity', 'status': 'submitted'})
+        self.provider.complete_structured.return_value = {'message': 'Ana Popescu mentioned you: the demo is due at 11.'}
+        step = self.propose(task)
+        self.assertEqual(step, {'status': 'done', 'message': 'Ana Popescu mentioned you: the demo is due at 11.', 'action': None})
+        self.assertEqual(self.provider.complete_structured.call_count, 1)
+        self.assertIsNone(self.provider.complete_structured.call_args.kwargs.get('image_data'))
+        self.provider.classify_task_goal.assert_not_called()
+
+    def test_alternating_clicks_on_the_same_targets_are_repeats(self):
+        task = ComputerTask('check my notifications', automatic=True, goal_mode='inspect')
+        for label in ('Activity (1)', 'Bell icon', 'Activity (2)', 'Bell icon'):
+            task.record({'type': 'click_point', 'label': label, 'status': 'submitted'})
+        self.assertEqual(task.repeats({'type': 'click_point', 'label': 'Activity'}), 2)
+        self.assertEqual(task.repeats({'type': 'click_point', 'label': 'Bell icon'}), 2)
+        self.assertEqual(task.repeats({'type': 'click_point', 'label': 'Calendar'}), 0)
+
+
+class LookingAtTests(ConversationTests):
+    """"Are there any notifications that require my attention" with Teams in front went to Mail twice
+    (live): a goal that names no app is about the app the user is looking at."""
+
+    def front(self):
+        self.app.desktop_context.enabled = True
+        self.app.desktop_context.bridge.value = dict(self.app.desktop_context.bridge.value, app={'name': 'Safari', 'bundle_id': 'com.apple.Safari'},
+                                                     window={'title': 'Activity | Microsoft Teams', 'bounds': {'x': 0, 'y': 0, 'width': 10, 'height': 10}})
+        self.app.desktop_context.collect_once()
+
+    def test_the_task_knows_what_the_user_was_looking_at(self):
+        self.front()
+        self.route('computer_task', 'are there any notifications that require my attention')
+        action = self.app.ask('are there any notifications that require my attention')['desktop_action']
+        self.assertEqual(action['looking_at'], 'Safari — Activity | Microsoft Teams')
+        self.route('computer_task', 'check Slack')
+        self.assertNotIn('looking_at', self.app.ask('any new messages in Slack?')['desktop_action'])
+
+    def test_the_task_prompt_carries_it(self):
+        task = ComputerTask('any notifications for me?', looking_at='Safari — Activity | Microsoft Teams')
+        self.assertEqual(task.looking_at, 'Safari — Activity | Microsoft Teams')
+        self.assertIn('user_was_looking_at', SYSTEM)

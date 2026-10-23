@@ -104,10 +104,12 @@ def validate_response(value, allowed_sources, *, planning=False, has_screen=Fals
             raise ValidationError('Desktop actions require enabled native desktop context.')
         action = value['desktop_action']
         if isinstance(action, dict) and action.get('type') == 'start_task':
-            keys(action, ('type', 'goal', 'goal_mode', 'opening'), ('type', 'goal'))
+            keys(action, ('type', 'goal', 'goal_mode', 'opening', 'looking_at'), ('type', 'goal'))
             if action.get('goal_mode', 'inspect') not in ('inspect', 'draft', 'change'):
                 raise ValidationError('Invalid task scope.')
             result['desktop_action'] = dict(action, goal=text(action['goal'], 'task goal', 2000), label='Start computer task')
+            if 'looking_at' in action:
+                result['desktop_action']['looking_at'] = text(action['looking_at'], 'task context', 300)
         elif isinstance(action, dict) and action.get('type') == 'app_write':
             # A change to Calendar/Reminders/Notes/Shortcuts, built in code from the user's
             # request (mac_apps.prepare) and run only after the user confirms it.
