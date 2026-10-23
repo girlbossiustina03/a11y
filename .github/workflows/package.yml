@@ -1,0 +1,91 @@
+name: Package apps
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: macOS app (.dmg)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -m pip install -r requirements.txt
+          python -m unittest discover -s tests -q
+      - name: Build A11y.app and dmg
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: packaging/build_macos.sh
+      - name: Smoke test the packaged app
+        run: |
+          test -x dist/A11y.app/Contents/Resources/native/bin/desktop-bridge || test -x dist/A11y.app/Contents/Frameworks/native/bin/desktop-bridge
+          QT_QPA_PLATFORM=offscreen A11Y_DATA_DIR="$RUNNER_TEMP/a11y-data" dist/A11y.app/Contents/MacOS/A11y & pid=$!
+          sleep 15
+          kill -0 $pid
+          kill $pid
+          grep "A11y desktop build" "$RUNNER_TEMP/a11y-data/a11y.log"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: A11y-macOS
+          path: dist/A11y-macOS.dmg
+
+  windows:
+    name: Windows app (.zip)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -m pip install -r requirements.txt
+          python -m unittest discover -s tests -q
+      - name: Build A11y
+        shell: pwsh
+        run: packaging/build_windows.ps1
+      - name: Smoke test the packaged app
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM = 'offscreen'
+          $env:A11Y_DATA_DIR = Join-Path $env:RUNNER_TEMP 'a11y-data'
+          $process = Start-Process -FilePath dist/A11y/A11y.exe -PassThru
+          Start-Sleep -Seconds 15
+          if ($process.HasExited) { throw "A11y exited with code $($process.ExitCode)" }
+          Stop-Process -Id $process.Id
+          Select-String -Path (Join-Path $env:A11Y_DATA_DIR 'a11y.log') -Pattern 'A11y desktop build'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: A11y-Windows
+          path: dist/A11y-Windows.zip
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" artifacts/*/* --repo "$GITHUB_REPOSITORY" --generate-notes

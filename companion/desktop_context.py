@@ -45,13 +45,17 @@ def default_browser_id():
 
 class MacDesktopBridge:
     def __init__(self, directory):
+        from .paths import bundled_helper
         self.source = Path(__file__).resolve().parent.parent / 'native' / 'DesktopBridge.swift'
-        self.binary = Path(directory).resolve() / 'desktop-bridge'
+        self.prebuilt = bundled_helper('desktop-bridge')  # packaged app: compiled at build time
+        self.binary = self.prebuilt or Path(directory).resolve() / 'desktop-bridge'
         self.lock = threading.Lock()
 
     def prepare(self):
         if sys.platform != 'darwin':
             raise RuntimeError('Live desktop context currently supports macOS.')
+        if self.prebuilt:
+            return
         with self.lock:
             if self.binary.exists() and self.binary.stat().st_mtime >= self.source.stat().st_mtime:
                 return

@@ -1,6 +1,7 @@
 """Actual Qt widget/controller tests, rendered offscreen; no desktop capture or AI network calls."""
 import importlib.util
 import os
+from pathlib import Path
 import tempfile
 import time
 import unittest
@@ -483,6 +484,25 @@ class NativeTests(unittest.TestCase):
             QTest.qWait(10)
             self.qt.processEvents()
         self.assertEqual(done, [1])
+
+    def test_setup_window_installs_only_after_set_up_and_then_uses_the_models(self):
+        from companion.readiness_ui import ReadinessDialog
+        status = {'ollama_installed': False, 'ollama_running': False, 'supported': True, 'text_model': 'qwen3:4b-instruct',
+                  'vision_model': 'qwen3-vl:4b-instruct', 'text_ready': False, 'vision_ready': False}
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {'A11Y_DATA_DIR': directory}), \
+                patch('companion.installer.prepare_everything', return_value=('qwen3:4b-instruct', 'qwen3-vl:4b-instruct')) as prepare:
+            dialog = ReadinessDialog(self.window, status)
+            dialog.show()
+            self.qt.processEvents()
+            prepare.assert_not_called()  # nothing is installed until Set up
+            dialog.start.click()
+            deadline = time.monotonic()+3
+            while dialog.isVisible() and time.monotonic() < deadline:
+                QTest.qWait(20)
+            prepare.assert_called_once()
+            self.assertEqual(self.service.provider.config.model, 'qwen3:4b-instruct')
+            self.assertEqual(self.service.provider.config.vision_model, 'qwen3-vl:4b-instruct')
+            self.assertIn('qwen3-vl:4b-instruct', (Path(directory)/'ai.json').read_text())
 
     def test_stop_cancels_an_automatic_step_queued_for_execution(self):
         from companion.computer_task import ComputerTask

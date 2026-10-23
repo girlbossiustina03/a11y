@@ -85,9 +85,13 @@ def grammar_schema(schema):
 
 class OllamaProvider:
     def __init__(self, config=None):
-        self.config = config or AIConfig(
-            base_url=os.getenv('A11Y_OLLAMA_URL', 'http://127.0.0.1:11434'),
-            model=os.getenv('A11Y_AI_MODEL', ''), vision_model=os.getenv('A11Y_VISION_MODEL', ''), timeout=120)
+        if config is None:
+            from .paths import saved_ai_settings
+            saved = saved_ai_settings()  # chosen in the setup window; environment wins
+            config = AIConfig(base_url=os.getenv('A11Y_OLLAMA_URL', 'http://127.0.0.1:11434'),
+                              model=os.getenv('A11Y_AI_MODEL', saved.get('model', '')),
+                              vision_model=os.getenv('A11Y_VISION_MODEL', saved.get('vision_model', '')), timeout=120)
+        self.config = config
         self.metadata = {}
         self.json_fallbacks = set()
 

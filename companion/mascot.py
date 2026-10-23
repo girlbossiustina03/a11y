@@ -492,7 +492,7 @@ class Mascot(QWidget):
                               ('Pause screen vision' if self.vision_button.text() == 'Screen on' else 'Enable screen vision…', 'vision:toggle'),
                               ('Turn off voice' if getattr(self, 'voice_on', False) else 'Turn on voice (“Hey Ally”)…', 'voice:toggle'),
                               ('Personalize and set up access…', 'setup:wizard'),
-                              ('Settings…', 'settings'), ('Quit companion', 'quit')]:
+                              ('Set up local AI…', 'readiness'), ('Settings…', 'settings'), ('Quit companion', 'quit')]:
             if action in ('vision:toggle', 'settings', 'quit'):
                 menu.addSeparator()
             item = menu.addAction(title)

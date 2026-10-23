@@ -239,7 +239,8 @@ class Companion:
         roles = tuple(r.strip() for r in os.getenv('A11Y_ROLES', 'employee,engineering').split(',') if r.strip())
         if admin:
             roles = tuple(set(roles) | {'admin'})
-        return cls(Store(Path(os.getenv('A11Y_DATA_DIR', '.data'))),
+        from .paths import data_dir
+        return cls(Store(data_dir()),
                    Identity(os.getenv('A11Y_COMPANY_ID', 'demo-company'),
                             os.getenv('A11Y_USER_ID', 'demo-employee'), roles))
 

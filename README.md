@@ -70,6 +70,33 @@ Instead of unbounded autonomous execution or rigid scripted workflows, A11y oper
 
 ---
 
+## Install the App
+
+Download the latest build from the repository's **Actions → Package apps** run (artifacts) or from a
+tagged **Release**:
+
+- **macOS 14+ (Apple Silicon):** open `A11y-macOS.dmg`, drag **A11y** to Applications. Builds without a
+  Developer ID are ad-hoc signed, so the first launch needs **right-click → Open** (or System Settings →
+  Privacy & Security → Open Anyway).
+- **Windows 10/11:** unzip `A11y-Windows.zip` and run `A11y\A11y.exe`.
+
+On first launch, **Get A11y ready** offers to install everything that is missing, only after you press
+**Set up**: Ollama (downloaded from ollama.com, signature verified before use) and two local models
+chosen for your RAM (`qwen3:4b-instruct` + `qwen3-vl:4b-instruct` on 16 GB or more, smaller models
+below). Reopen it any time from the mascot's right-click menu → **Set up local AI…**. Voice ("Hey Ally")
+is included; its speech model downloads once when you turn voice on.
+
+macOS asks for permissions as features need them: Accessibility (app awareness and control), Screen
+Recording (screen vision), Microphone (voice) and Automation (Music/Safari). Settings, data and the
+log live in `~/Library/Application Support/A11y` (`%LOCALAPPDATA%\A11y` on Windows); the log is `a11y.log`.
+
+**Build it yourself:** `packaging/build_macos.sh` on a Mac (needs Xcode Command Line Tools for the
+Swift helpers) or `packaging/build_windows.ps1` on Windows; output goes to `dist/`. To use your own
+icon artwork, save it as `packaging/icon-source.png` before building. The `Package apps` workflow
+builds both on every push to `main`; pushing a `v*` tag publishes a release. Optional secrets
+`MACOS_SIGN_IDENTITY`, `APPLE_ID`, `APPLE_TEAM_ID` and `APPLE_APP_PASSWORD` enable Developer ID
+signing and notarization.
+
 ## Run & Setup
 
 Python 3.10+ is required.

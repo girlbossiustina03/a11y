@@ -266,6 +266,7 @@ class CompanionWindow(QMainWindow):
         QTimer.singleShot(0, self.restore_access)
         if isinstance(self.service.provider, OllamaProvider):
             QTimer.singleShot(0, self.scan_ollama)
+            QTimer.singleShot(0, self.check_readiness)
         name = self.introduction.get()['answers'].get('display_name', '')
         self.mascot_home((f'Hey {name}!' if name else 'Hey!')+' What can I help you with?')
         self.mascot.hide_reply()
@@ -283,6 +284,33 @@ class CompanionWindow(QMainWindow):
                 control.blockSignals(True)
                 control.setChecked(bool(enabled))
                 control.blockSignals(False)
+
+    def check_readiness(self, *, always=False):
+        """Offer the setup window when Ollama or the chosen models are missing."""
+        from .readiness_ui import StatusWorker
+        config = self.service.provider.config
+        models = (config.model, config.vision_model or config.model) if config.model else None
+        worker = StatusWorker(models, self)
+        self.readiness_worker = worker
+        worker.result.connect(lambda status: self.show_readiness(status, always=always))
+        worker.start()
+
+    def show_readiness(self, status, *, always=False):
+        if status.get('ready') and not always:
+            return
+        from .readiness_ui import ReadinessDialog
+        self.readiness_dialog = ReadinessDialog(self, status)
+        self.readiness_dialog.show()
+
+    def models_ready(self, text, vision):
+        """Save and use the models the setup window installed."""
+        from .paths import save_ai_settings
+        save_ai_settings(model=text, vision_model=vision)
+        config = self.service.provider.config if isinstance(self.service.provider, OllamaProvider) else AIConfig()
+        self.service.provider = OllamaProvider(AIConfig(base_url=config.base_url if config.base_url.startswith('http://127.') else 'http://127.0.0.1:11434',
+                                                        model=text, vision_model=vision, timeout=120))
+        self.refresh()
+        self.mascot_home('All set. The local AI is ready. What can I help you with?')
 
     def restore_access(self):
         choice = self.access_preferences.get()
@@ -1824,7 +1852,10 @@ class CompanionWindow(QMainWindow):
             return
         self.service.provider = OllamaProvider(AIConfig(base_url=config.base_url, model=config.model, vision_model=config.vision_model, timeout=120)) if self.provider_choice.currentData() == 'ollama' else ChatProvider(config)
         self.connection_fields['key'].clear()
-        self.connection_status.setText('Connection settings applied for this session. Ask me a question to test the provider.')
+        if self.provider_choice.currentData() == 'ollama':
+            from .paths import save_ai_settings
+            save_ai_settings(model=config.model, vision_model=config.vision_model)
+        self.connection_status.setText('Model saved. Ask me a question to test it.')
         self.refresh()
         if not self.setup_active:
             self.mascot_home('Connection settings are ready. What would you like to work on?')
@@ -1943,6 +1974,11 @@ class CompanionWindow(QMainWindow):
         try:
             if action == 'quit':
                 self.request_quit()
+            elif action == 'readiness':
+                if isinstance(self.service.provider, OllamaProvider):
+                    self.check_readiness(always=True)
+                else:
+                    self.mascot_home('Local setup applies to Ollama. A compatible cloud provider is configured instead.')
             elif action in ('settings', 'history'):
                 self.tabs.setCurrentIndex(0 if action == 'history' else self.essentials_tab)
                 self.reveal()

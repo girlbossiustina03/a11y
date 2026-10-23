@@ -8,6 +8,15 @@ def main():
     parser.add_argument('--panel', action='store_true', help='Also open the settings panel at launch')
     parser.add_argument('--admin', action='store_true', help='Enable local company document management')
     args = parser.parse_args()
+    from companion.paths import data_dir, frozen
+    if frozen():
+        # A double-clicked app has no terminal: keep the timing/diagnostic log in its data folder.
+        directory = data_dir()
+        directory.mkdir(parents=True, exist_ok=True)
+        log = directory/'a11y.log'
+        if log.exists() and log.stat().st_size > 5_000_000:
+            log.replace(directory/'a11y.previous.log')
+        sys.stdout = sys.stderr = open(log, 'a', buffering=1, encoding='utf-8')
     try:
         from PyQt6.QtWidgets import QApplication
         from companion.desktop import CompanionWindow

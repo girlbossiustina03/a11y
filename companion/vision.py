@@ -12,7 +12,9 @@ from .ollama import OllamaProvider
 class ScreenVision:
     def __init__(self, directory):
         self.directory = Path(directory).resolve()
-        self.binary = self.directory/'screen-bridge'
+        from .paths import bundled_helper
+        self.prebuilt = bundled_helper('screen-bridge')  # packaged app: compiled at build time
+        self.binary = self.prebuilt or self.directory/'screen-bridge'
         self.source = Path(__file__).resolve().parent.parent/'native'/'ScreenBridge.swift'
         self.enabled = False
         self.generation = 0
@@ -25,6 +27,8 @@ class ScreenVision:
     def prepare(self):
         if sys.platform != 'darwin':
             raise RuntimeError('Native screen vision currently requires macOS 14 or later.')
+        if self.prebuilt:
+            return
         with self.lock:
             if self.binary.exists() and self.binary.stat().st_mtime >= self.source.stat().st_mtime:
                 return
