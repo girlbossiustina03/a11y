@@ -245,10 +245,13 @@ class Mascot(QWidget):
         self.reply_shown = False
         self.reply_window = None
         if self.native:
-            # A real window too, with a plain title strip (no buttons, no title text).
+            # A real window too: "reply" in its title bar, and the three buttons, red closing only
+            # the reply. Opened to her right they sit under her; to her left they show.
             self.reply_window = QWidget(None, Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint |
-                                        Qt.WindowType.CustomizeWindowHint | Qt.WindowType.WindowTitleHint)
-            self.reply_window.setWindowTitle('a11y reply')
+                                        Qt.WindowType.CustomizeWindowHint | Qt.WindowType.WindowTitleHint |
+                                        Qt.WindowType.WindowCloseButtonHint)
+            self.reply_window.setWindowTitle('reply')
+            self.reply_window.installEventFilter(self)
             self.reply_window.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
             self.reply_window.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
             self.reply_window.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
@@ -261,11 +264,12 @@ class Mascot(QWidget):
         self.reply_content = QWidget(self.reply_panel)
         reply = QVBoxLayout(self.reply_content)
         self.reply_layout = reply
-        reply.setContentsMargins(0, 0, 0, 12)
+        reply.setContentsMargins(0, 10 if self.native else 0, 0, 12)
         reply.setSpacing(8)
         self.reply_title = QLabel('reply')
         self.reply_title.setObjectName('replyTitle')
-        self.reply_title.setFixedHeight(TITLE_HEIGHT if not self.native else 24)
+        self.reply_title.setFixedHeight(TITLE_HEIGHT)
+        self.reply_title.setVisible(not self.native)  # on macOS the title is in the real title bar
         reply.addWidget(self.reply_title)
         self.bubble = QPlainTextEdit()
         self.bubble.setReadOnly(True)
@@ -546,7 +550,7 @@ class Mascot(QWidget):
             self.place_reply_window()
             self.reply_window.show()
             if not self.reply_window.property('prepared'):
-                self.reply_window.setProperty('prepared', mac_window.prepare_window(self.reply_window, buttons=False))
+                self.reply_window.setProperty('prepared', mac_window.prepare_window(self.reply_window))
                 self.place_reply_window()
             mac_window.keep_below(self, self.reply_window)
             self.apply_blur()
@@ -579,12 +583,25 @@ class Mascot(QWidget):
         else:
             self.reply_side = 'left'
 
+    def title_reply(self):
+        """macOS puts a title right after the buttons. Opened to her right those sit under her,
+        so the title is pushed along (em spaces) to start where the reply shows."""
+        if self.reply_window is None:
+            return
+        title = getattr(self, 'reply_heading', 'reply')
+        if self.reply_side == 'right':
+            metrics = QFontMetrics(QFontDatabase.systemFont(QFontDatabase.SystemFont.TitleFont))
+            gap = self.frame_width()-62  # from the end of the hidden buttons to her right edge, plus room
+            title = '\u2003'*max(0, -(-gap//max(1, metrics.horizontalAdvance('\u2003'))))+title
+        self.reply_window.setWindowTitle(title)
+
     def open_reply(self):
         """Show the reply window on the side with room, sliding out from under her."""
         if self.reply_shown:
             return
         anchor = self.character.mapToGlobal(QPoint())
         self.choose_reply_side()
+        self.title_reply()
         self.reply_open = 0.0
         self.set_reply_shown(True)
         self.fit_on_screen(anchor)
@@ -652,6 +669,15 @@ class Mascot(QWidget):
     # Conversation
 
     def eventFilter(self, watched, event):
+        if watched is self.reply_window and event.type() == QEvent.Type.Close:
+            # Its red button closes the reply only; the conversation and she stay.
+            if self.reply_shown:
+                self.reply_shown = False
+                self.reply_panel.hide()
+                mac_window.detach(self, self.reply_window)
+            return False
+        if not hasattr(self, 'entry_row'):
+            return super().eventFilter(watched, event)  # still being built
         if watched in (self.card, self.entry_row) and event.type() == QEvent.Type.MouseButtonPress:
             self.action_requested.emit('computer:interrupt')
             self.activateWindow()
@@ -692,7 +718,10 @@ class Mascot(QWidget):
             self.choice_layout.addWidget(choice, 0, Qt.AlignmentFlag.AlignLeft)
         self.choice_area.setFixedHeight(min(150, len(choices)*32))
         self.choice_area.setVisible(bool(choices))
-        self.reply_title.setText('working · esc to stop' if any(a == 'computer:stop' for _, a in choices) else 'reply')
+        working = any(a == 'computer:stop' for _, a in choices)
+        self.reply_title.setText('working · esc to stop' if working else 'reply')
+        self.reply_heading = 'working' if working else 'reply'
+        self.title_reply()
         self.submit_action = submit_action
         voice = getattr(self, 'voice_placeholder', '') if getattr(self, 'voice_on', False) else ''
         self.input.setPlaceholderText(placeholder if placeholder and placeholder != 'Ask anything…' else
