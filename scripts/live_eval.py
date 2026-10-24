@@ -488,6 +488,7 @@ class Case:
     def __init__(self, request, check, *, setup=None, timeout=120, routes=(), quiet=False):
         self.request, self.check, self.setup, self.timeout, self.routes = request, check, setup, timeout, routes
         self.quiet = quiet  # answered in place: opening or switching to anything is a failure
+        self.restore_after = True
 
 
 def build_answers(eval_window):
@@ -898,10 +899,24 @@ def route_of(state, events):
 
 
 def run_case(app, case, attempt):
+    """One request: setup, the request, its check; then everything the case or its setup
+    opened is closed again, even when the case fails or the harness errors."""
+    opened = snapshot()  # before setup, so the pages a setup opens are closed too
+    case.restore_after = True
+    try:
+        return run_case_steps(app, case, attempt, opened)
+    finally:
+        try:
+            if case.restore_after:
+                restore(opened)
+        except (RuntimeError, OSError, subprocess.SubprocessError):
+            pass
+
+
+def run_case_steps(app, case, attempt, opened):
     if case.setup:
         case.setup(app)
     before = safari_windows()
-    opened = snapshot()
     front_before = front_app()
     state, events, timed_out = app.run(case.request, case.timeout)
     asked = next((event['t'] for event in events if event['kind'] == 'ask'), None)
@@ -929,6 +944,7 @@ def run_case(app, case, attempt):
         app.call({'cmd': 'stop'})
     try:
         record['closed'] = restore(opened)
+        case.restore_after = False  # done; run_case need not do it again
     except (RuntimeError, subprocess.SubprocessError) as error:
         record['closed'] = ['error: '+str(error)[:100]]
     # The terminal driving the run (or A11y itself) coming forward is not something she opened.
@@ -973,7 +989,7 @@ def main():
     parser.add_argument('--only', action='append', help='run only requests containing this text (repeatable)')
     parser.add_argument('--out', default=str(ROOT/'.data'/'live_eval'))
     parser.add_argument('--compare', help='an earlier summary.json to show next to the results')
-    parser.add_argument('--suite', choices=('requests', 'navigation', 'varied', 'v2', 'answers', 'all'), default='requests',
+    parser.add_argument('--suite', choices=('requests', 'navigation', 'varied', 'v2', 'v3', 'answers', 'all'), default='requests',
                         help='requests: the reported requests; navigation: getting somewhere by clicking; '
                              'varied: new random tasks across many apps every run')
     parser.add_argument('--tasks', type=int, default=14, help='varied suite: how many random tasks')
@@ -985,8 +1001,9 @@ def main():
     print('build', build_id(), '→', out, flush=True)
     app = App(ROOT/'.data', out/'app.log')
     eval_window = EvalWindow()
-    if args.suite == 'v2':
-        return run_v2(app, eval_window, out, args.tasks, args.seed if args.seed is not None else int(time.time()) % 100000)
+    if args.suite in ('v2', 'v3'):
+        return run_v2(app, eval_window, out, args.tasks, args.seed if args.seed is not None else int(time.time()) % 100000,
+                      hard=args.suite == 'v3')
     seed = args.seed if args.seed is not None else int(time.time()) % 100000
     if args.suite in ('varied', 'all'):
         PANES[:] = settings_panes()
@@ -1025,12 +1042,17 @@ def main():
     print('\noverall %d/%d' % total)
 
 
-def run_v2(app, eval_window, out, count, seed):
-    """Harder, varied tasks, each once (scripts/live_tasks.py); writes runs.jsonl and report.md."""
+def run_v2(app, eval_window, out, count, seed, hard=False):
+    """Varied tasks, each once (scripts/live_tasks.py; with hard, scripts/live_hard.py: harder,
+    multi-step tasks plus the older ones that still fail); writes runs.jsonl and report.md."""
     import live_tasks
     PANES[:] = settings_panes()
-    tasks = live_tasks.build(eval_window, count, seed)
-    print('v2 seed', seed, '·', len(tasks), 'tasks', flush=True)
+    if hard:
+        import live_hard
+        tasks = live_hard.build(eval_window, count, seed)
+    else:
+        tasks = live_tasks.build(eval_window, count, seed)
+    print('v3' if hard else 'v2', 'seed', seed, '·', len(tasks), 'tasks', flush=True)
     app.shots = out/'shots'
     records = []
     app.launch()

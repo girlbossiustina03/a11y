@@ -122,7 +122,8 @@ def no_failure(state, events):
     return not le.failed_reply(answer(events)) and (state.get('task') or {}).get('status') not in ('blocked', 'stopped')
 
 
-def build(eval_window, count, seed):
+def build(eval_window, count, seed, only=None):
+    """count tasks from the families (only: just these family names)."""
     rng = random.Random(seed)
     pick = rng.choice
     have = installed()
@@ -431,7 +432,7 @@ def build(eval_window, count, seed):
     def site_search():
         thing = pick(['battery', 'AirDrop', 'Apple ID', 'storage', 'backup'])
         request = pick(['go to Apple Support and search for {t}', "search Apple's support site for {t}"]).format(t=thing)
-        return Task('site_search', request, [('support search', url(r'support\.apple\.com.*'+re.escape(thing.split()[0].lower())+'|support\.apple\.com/.*search'))], setup=web_setup)
+        return Task('site_search', request, [('support search', url(r'support\.apple\.com.*'+re.escape(thing.split()[0].lower())+r'|support\.apple\.com/.*search'))], setup=web_setup)
 
     @family
     def recipe():
@@ -464,7 +465,7 @@ def build(eval_window, count, seed):
         return Task('weather_now', request, [('a temperature', says(r'-?\d+\s*°|\d+\s*degrees')), ('no failure', no_failure)],
                     setup=web_setup, cleanup=['quit Weather'])
 
-    families = list(f.values())
+    families = [make for name, make in f.items() if only is None or name in only]
     rng.shuffle(families)
     tasks = []
     while len(tasks) < count:
