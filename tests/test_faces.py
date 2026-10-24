@@ -1,0 +1,89 @@
+import os
+import plistlib
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from companion import faces, terminal_theme
+
+
+def archived(objects):
+    """A minimal NSKeyedArchiver plist, as Terminal.app stores colours and fonts."""
+    return plistlib.dumps({'$archiver': 'NSKeyedArchiver', '$version': 100000,
+                           '$top': {'root': plistlib.UID(1)}, '$objects': ['$null', *objects]},
+                          fmt=plistlib.FMT_BINARY)
+
+
+def color(text, space=1):
+    return archived([{'NSRGB': text.encode()+b'\0', 'NSColorSpace': space, '$class': plistlib.UID(2)},
+                     {'$classname': 'NSColor', '$classes': ['NSColor', 'NSObject']}])
+
+
+class FaceTests(unittest.TestCase):
+    def test_every_face_is_a_clean_block_of_text(self):
+        for name, states in faces.SKINS.items():
+            columns, lines = faces.size(name)
+            self.assertLessEqual(columns, 22, name)   # fits her window at any terminal font size
+            self.assertLessEqual(lines, 7, name)
+            for state in faces.STATES:
+                self.assertIn(state, states, (name, state))
+                for frame in states[state]:
+                    self.assertEqual({len(line) for line in frame}, {columns}, (name, state, frame))
+                    self.assertFalse(any(slot in line for line in frame for slot in faces.SLOTS), (name, state))
+
+    def test_states_look_different_and_mascot_states_map_onto_them(self):
+        for name in faces.SKINS:
+            idle = faces.face(name, 'idle')
+            for state in ('blink', 'thinking', 'done', 'stuck', 'sleeping'):
+                self.assertNotEqual(faces.face(name, state), idle, (name, state))
+            self.assertEqual(faces.face(name, 'guiding'), faces.face(name, 'working'))
+            self.assertEqual(faces.face(name, 'celebrate'), faces.face(name, 'done'))
+        # A spinner turns while she thinks; she talks while speaking.
+        self.assertNotEqual(faces.face('blob', 'thinking', 0), faces.face('blob', 'thinking', 1))
+        self.assertNotEqual(faces.face('blob', 'speaking', 0), faces.face('blob', 'speaking', 1))
+        self.assertEqual(faces.face('no-such-skin', 'idle'), faces.face(faces.DEFAULT_SKIN, 'idle'))
+
+    def test_slot_sizes_are_checked(self):
+        with self.assertRaises(ValueError):
+            faces.fill(['[11]'], {'1': ['abc']})
+
+
+class TerminalThemeTests(unittest.TestCase):
+    def test_reads_colours_and_font_from_a_terminal_profile(self):
+        profile = {'BackgroundColor': color('0.0984 0.1139 0.1526 0.95'), 'TextColor': color('0.8776 0.8776 0.8776'),
+                   'ANSIGreenColor': color('0.4242 0.6673 0.4415', 2),
+                   'Font': archived([{'NSSize': 12.0, 'NSfFlags': 16, 'NSName': plistlib.UID(2), '$class': plistlib.UID(3)},
+                                     'JetBrainsMonoNF-SemiBold', {'$classname': 'NSFont', '$classes': ['NSFont', 'NSObject']}])}
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/'com.apple.Terminal.plist'
+            path.write_bytes(plistlib.dumps({'Default Window Settings': 'Clear Dark',
+                                             'Window Settings': {'Clear Dark': profile}}))
+            found = terminal_theme.terminal_app_palette(path)
+        self.assertEqual((found.name, found.background, found.text, found.green), ('Clear Dark', '#191D27', '#E0E0E0', '#6CAA71'))
+        self.assertAlmostEqual(found.opacity, 0.95)
+        self.assertEqual((found.font, found.font_size), ('JetBrainsMonoNF-SemiBold', 12.0))
+        self.assertTrue(found.dark)
+
+    def test_unreadable_preferences_fall_back(self):
+        with tempfile.TemporaryDirectory() as folder:
+            self.assertIsNone(terminal_theme.terminal_app_palette(Path(folder)/'missing.plist'))
+            broken = Path(folder)/'broken.plist'
+            broken.write_bytes(b'not a plist')
+            self.assertIsNone(terminal_theme.terminal_app_palette(broken))
+        with patch.object(terminal_theme, 'terminal_app_palette', return_value=None):
+            self.assertEqual(terminal_theme.palette('terminal'), terminal_theme.THEMES['clear_dark'])
+        self.assertEqual(terminal_theme.palette('no-such-theme'), terminal_theme.THEMES['clear_dark'])
+        self.assertFalse(terminal_theme.palette('catppuccin_latte').dark)
+
+    def test_appearance_is_saved_in_the_data_folder(self):
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {'A11Y_DATA_DIR': folder}):
+            self.assertEqual(terminal_theme.saved_appearance(), {'theme': 'terminal', 'face': 'blob'})
+            terminal_theme.save_appearance(face='cat', unknown='ignored')
+            self.assertEqual(terminal_theme.saved_appearance(), {'theme': 'terminal', 'face': 'cat'})
+            (Path(folder)/'appearance.json').write_text('{broken')
+            self.assertEqual(terminal_theme.saved_appearance()['face'], 'blob')
+
+
+if __name__ == '__main__':
+    unittest.main()

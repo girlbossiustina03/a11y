@@ -13,6 +13,8 @@ from PyQt6.QtWidgets import (
     QFileDialog, QMessageBox, QDialog, QDialogButtonBox, QFormLayout, QFrame, QListWidget)
 from .adaptation import CHOICES
 from .mascot import Mascot
+from .faces import SKIN_NAMES
+from .terminal_theme import THEME_NAMES, saved_appearance, save_appearance
 from .overlay import GuidanceOverlay, CompanionPointer
 from .onboarding import Introduction, QUESTIONS
 from .setup_ui import SetupDialog, AccessSheet
@@ -255,6 +257,7 @@ class CompanionWindow(QMainWindow):
         self.last_user_request = None
         self.retry_after_vision = False
         self.move_animation = None
+        self.move_target = None
         self.worker = None
         self.discovery = None
         self.capture_context = None
@@ -563,6 +566,23 @@ class CompanionWindow(QMainWindow):
                          'reduced_motion': 'Animation'}[key], control)
             self.pref_controls[key] = control
         layout.addLayout(form)
+        looks = QFormLayout()
+        appearance = saved_appearance()
+        self.theme_select = QComboBox()
+        self.theme_select.setAccessibleName('Companion colours')
+        for key, name in THEME_NAMES.items():
+            self.theme_select.addItem(name, key)
+        self.theme_select.setCurrentIndex(max(0, self.theme_select.findData(appearance['theme'])))
+        self.theme_select.currentIndexChanged.connect(lambda: self.set_appearance(theme=self.theme_select.currentData()))
+        looks.addRow('Colours', self.theme_select)
+        self.face_select = QComboBox()
+        self.face_select.setAccessibleName('Companion face')
+        for key, name in SKIN_NAMES.items():
+            self.face_select.addItem(name, key)
+        self.face_select.setCurrentIndex(max(0, self.face_select.findData(appearance['face'])))
+        self.face_select.currentIndexChanged.connect(lambda: self.set_appearance(face=self.face_select.currentData()))
+        looks.addRow('Face', self.face_select)
+        layout.addLayout(looks)
         self.learning = QCheckBox('Suggest ways to adapt to me')
         self.learning.setToolTip('Learn interaction preferences and suggest changes. Nothing is adopted without your approval.')
         layout.addWidget(self.learning)
@@ -1388,32 +1408,45 @@ class CompanionWindow(QMainWindow):
         self.animate_companion_to(position)
 
     def animate_companion_to(self, position, *, finished=None):
-        """Hop to a position along a low arc; the character leans and stretches with the
-        window's speed. Reduced motion moves instantly."""
+        """One big stretch: her window grows toward the destination, like resizing a window
+        by hand, then the trailing edge catches up and she settles at her normal size there.
+        Reduced motion moves instantly."""
         if self.move_animation:
             self.move_animation.stop()
-        start = QPoint(self.mascot.pos())
+            self.mascot.end_stretch(self.move_target)
+        start = QRect(self.mascot.geometry())
         distance = ((position.x()-start.x())**2+(position.y()-start.y())**2)**0.5
         if self.service.adaptation.effective(self.service.identity)['reduced_motion'] or distance < 2:
             self.mascot.move(position)
             if finished:
                 QTimer.singleShot(0, finished)
             return
-        arc = min(110.0, distance*0.22)
+        end = QRect(position, start.size())
+        reach = start.united(end)
+        grow, settle = QEasingCurve(QEasingCurve.Type.InOutCubic), QEasingCurve(QEasingCurve.Type.OutBack)
+        settle.setOvershoot(1.1)
+        def between(a, b, t):
+            return QRect(round(a.x()+(b.x()-a.x())*t), round(a.y()+(b.y()-a.y())*t),
+                         max(1, round(a.width()+(b.width()-a.width())*t)), max(1, round(a.height()+(b.height()-a.height())*t)))
+        def step(t):
+            if t < 0.5:
+                self.mascot.stretch_to(between(start, reach, grow.valueForProgress(t/0.5)))
+            else:
+                self.mascot.stretch_to(between(reach, end, settle.valueForProgress((t-0.5)/0.5)))
+        def done():
+            self.move_animation = None
+            self.mascot.end_stretch(position)
+            if finished:
+                finished()
         animation = QVariantAnimation(self)
         animation.setStartValue(0.0)
         animation.setEndValue(1.0)
-        animation.setDuration(int(max(380, min(1100, 260+distance*0.55))))
-        animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
-        def step(t):
-            x = start.x()+(position.x()-start.x())*t
-            y = start.y()+(position.y()-start.y())*t-arc*4*t*(1-t)
-            self.mascot.move(QPoint(round(x), round(y)))
+        animation.setDuration(int(max(420, min(1000, 300+distance*0.5))))
         animation.valueChanged.connect(step)
-        if finished:
-            animation.finished.connect(finished)
+        animation.finished.connect(done)
         self.move_animation = animation
-        self.mascot.character.hop(duration=animation.duration(), height=0.0)  # crouch on take-off, squash on landing
+        self.move_target = position
+        self.mascot.begin_stretch()
         animation.start()
 
     @staticmethod
@@ -2178,6 +2211,16 @@ class CompanionWindow(QMainWindow):
         except (ValueError, PermissionError) as e:
             self.note(str(e))
 
+    def set_appearance(self, **values):
+        """Save the companion's colours or face and redraw her."""
+        save_appearance(**values)
+        self.mascot.apply_appearance()
+        for select, key in ((getattr(self, 'theme_select', None), 'theme'), (getattr(self, 'face_select', None), 'face')):
+            if select is not None and key in values and select.currentData() != values[key]:
+                select.blockSignals(True)
+                select.setCurrentIndex(max(0, select.findData(values[key])))
+                select.blockSignals(False)
+
     def mascot_action(self, action):
         if action == 'computer:interrupt':
             if self.computer_task and not self.computer_task.cancelled.is_set():
@@ -2196,6 +2239,9 @@ class CompanionWindow(QMainWindow):
             return
         if action == 'reply':
             self.mascot.show_reply()
+            return
+        if action.startswith('face:') and action[5:] in SKIN_NAMES:
+            self.set_appearance(face=action[5:])
             return
         if action == 'vision:toggle':
             self.toggle_screen_vision()

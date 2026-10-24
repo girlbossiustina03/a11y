@@ -10,10 +10,13 @@ from unittest.mock import patch
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 HAS_QT = importlib.util.find_spec('PyQt6') is not None
 if HAS_QT:
-    from PyQt6.QtCore import Qt, QPoint
+    from PyQt6.QtCore import Qt, QPoint, QRect
     from PyQt6.QtTest import QTest
     from PyQt6.QtWidgets import QApplication, QPushButton
+    from companion import faces
     from companion.desktop import CompanionWindow
+    from companion.mascot import MARGIN, TITLE_HEIGHT, SLEEP_AFTER_MS
+    from companion.terminal_theme import saved_appearance
     from companion.models import Identity
     from companion.service import Companion
     from companion.storage import Store
@@ -558,10 +561,10 @@ class NativeTests(unittest.TestCase):
     def test_reduced_motion_disables_glides_lean_and_hops(self):
         character = self.window.mascot.character
         character.set_reduced_motion(True)
-        character.last_owner_pos = QPoint(0, 0)
-        character.owner_moved(QPoint(200, 0))
         character.hop()
-        self.assertEqual(character.motion(), (0.0, 1.0, 1.0, 0.0))
+        self.assertIsNone(character.hop_started)
+        self.assertFalse(character.anim_timer.isActive())
+        self.assertEqual(character.current_face(), faces.face(self.window.mascot.skin, 'idle', 0))
         with patch.object(self.service.adaptation, 'effective', return_value={'reduced_motion': True}):
             done = []
             self.window.animate_companion_to(self.window.mascot.pos()+QPoint(300, 0), finished=lambda: done.append(1))
@@ -791,8 +794,10 @@ class NativeTests(unittest.TestCase):
         mascot.collapse_chat()
         self.qt.processEvents()
         self.assertFalse(mascot.card.isVisible())
-        self.assertEqual(mascot.width(), mascot.character.width()+16)
-        self.assertLessEqual(mascot.height(), mascot.character.height()+20)
+        # Collapsed she is a small window: the title bar and the face, nothing else.
+        self.assertEqual(mascot.window_frame.width(), mascot.character.width())
+        self.assertEqual(mascot.width(), mascot.character.width()+2*MARGIN)
+        self.assertLessEqual(mascot.height(), mascot.character.height()+TITLE_HEIGHT+2*MARGIN+12)
         self.assertEqual(mascot.character.mapToGlobal(QPoint()), anchor)
         self.assertFalse(any(b.isVisible() for b in mascot.findChildren(QPushButton)))
         mascot.character.click()
@@ -806,7 +811,8 @@ class NativeTests(unittest.TestCase):
         mascot.present('A response arrived while you were working.', [('Continue', 'talk')], placeholder='Reply')
         self.qt.processEvents()
         self.assertFalse(mascot.card.isVisible())
-        self.assertEqual(mascot.width(), mascot.character.width()+16)
+        self.assertFalse(mascot.reply_panel.isVisible())
+        self.assertEqual(mascot.width(), mascot.character.width()+2*MARGIN)
         mascot.character.click()
         self.qt.processEvents()
         self.assertIn('A response arrived', mascot.bubble.toPlainText())
@@ -845,7 +851,8 @@ class NativeTests(unittest.TestCase):
     def test_prompt_is_compact_and_menu_controls_are_not_in_normal_chat(self):
         mascot = self.window.mascot
         self.assertTrue(mascot.compact)
-        self.assertEqual(mascot.width(), 300)
+        self.assertEqual(mascot.window_frame.width(), 300)
+        self.assertEqual(mascot.width(), 300+2*MARGIN)
         self.assertFalse(mascot.choice_area.isVisible())
         self.assertFalse(mascot.stage.isVisible())
         self.assertFalse(mascot.settings_button.isVisible())
@@ -916,62 +923,121 @@ class NativeTests(unittest.TestCase):
         self.assertFalse(self.window.mascot.card.isVisible())
         self.assertFalse(self.window.isVisible())
 
-    def test_character_opens_small_pill_with_both_buttons_inside(self):
+    def test_terminal_window_holds_face_last_prompt_and_input(self):
         mascot = self.window.mascot
         self.assertFalse(mascot.reply_panel.isVisible())
         self.assertFalse(mascot.header_widget.isVisible())
-        self.assertEqual(mascot.card.height(), mascot.PROMPT_HEIGHT)
-        self.assertEqual(mascot.send.width(), 32)
-        input_top = mascot.input.mapTo(mascot.card, QPoint()).y()
-        self.assertAlmostEqual(input_top+mascot.input.height()/2, mascot.card.height()/2, delta=1)
-        self.assertLessEqual(mascot.input.height()-mascot.input.fontMetrics().height(), 2)
-        self.assertGreaterEqual(mascot.input.viewport().height(), mascot.input.fontMetrics().height())
+        self.assertEqual(mascot.window_title.text(), 'a11y')
+        line = mascot.input.fontMetrics().lineSpacing()
+        self.assertLessEqual(abs(mascot.input.height()-line), 2)
         self.assertEqual(mascot.send.width(), mascot.send.height())
-        self.assertEqual(mascot.prompt_settings.width(), mascot.prompt_settings.height())
         def bounds(widget):
             return widget.mapTo(mascot, QPoint()), widget.size()
         send_pos, send_size = bounds(mascot.send)
-        settings_pos, settings_size = bounds(mascot.prompt_settings)
         input_pos, input_size = bounds(mascot.input)
-        card_pos, card_size = bounds(mascot.card)
+        entry_pos, entry_size = bounds(mascot.entry_row)
         character_pos, character_size = bounds(mascot.character)
-        # Text first, then send and settings, all inside the one pill.
+        frame = mascot.window_frame.geometry()
+        # Text, then send, inside the one input box, under the face.
         self.assertLess(input_pos.x()+input_size.width(), send_pos.x())
-        self.assertLess(send_pos.x(), settings_pos.x())
-        self.assertLessEqual(settings_pos.x()+settings_size.width(), card_pos.x()+card_size.width())
-        for pos, size in ((send_pos, send_size), (settings_pos, settings_size)):
-            self.assertGreaterEqual(pos.y(), card_pos.y())
-            self.assertLessEqual(pos.y()+size.height(), card_pos.y()+card_size.height())
-        self.assertLessEqual(mascot.width()-mascot.character.width(), 150)  # 300-px compact surface
-        self.assertLess(character_pos.y()+character_size.height(), card_pos.y())
-        self.assertAlmostEqual(character_pos.x()+character_size.width()/2, mascot.width()/2, delta=1)
-        self.assertAlmostEqual(send_pos.y()+send_size.height()/2, card_pos.y()+card_size.height()/2, delta=1)
-        self.assertEqual(len([b for b in mascot.findChildren(QPushButton) if b.isVisible()]), 2)
-        # Typing grows the pill upward behind the cloud, never taller than a box around it.
+        self.assertLessEqual(send_pos.x()+send_size.width(), entry_pos.x()+entry_size.width())
+        self.assertLess(character_pos.y()+character_size.height(), entry_pos.y())
+        self.assertAlmostEqual(character_pos.x()+character_size.width()/2, frame.center().x(), delta=1)
+        self.assertEqual(len([b for b in mascot.findChildren(QPushButton) if b.isVisible()]), 1)
+        # The input grows a line at a time, up to PROMPT_LINES, and back.
         height = mascot.height()
         mascot.input.setPlainText('Open Teams and read me every new notification in Activity, please. '*12)
         self.qt.processEvents()
-        card_pos, card_size = bounds(mascot.card)
-        self.assertEqual(card_size.height(), mascot.character.height()+mascot.PROMPT_HEIGHT+6)
-        self.assertLessEqual(card_pos.y(), character_pos.y())
-        self.assertEqual(mascot.height(), height)
-        self.assertIn('rgba(28,28,31,165)', mascot.card.styleSheet())
+        self.assertEqual(mascot.input.height(), mascot.PROMPT_LINES*line+2)
+        self.assertGreater(mascot.height(), height)
         mascot.input.clear()
         self.qt.processEvents()
-        self.assertEqual(mascot.card.height(), mascot.PROMPT_HEIGHT)
-        # Reported: one long word (a link) never wrapped, so the pill stayed one line.
+        self.assertEqual(mascot.height(), height)
+        # Reported: one long word (a link) never wrapped, so the box stayed one line.
         mascot.input.setPlainText('https://example.com/'+'a'*150)
         self.qt.processEvents()
-        self.assertGreater(mascot.card.height(), mascot.PROMPT_HEIGHT)
+        self.assertGreater(mascot.input.height(), line+2)
+        mascot.input.clear()
+        mascot.input.setPlainText('what is the weather like?')
+        QTest.keyClick(mascot.input, Qt.Key.Key_Return)
+        self.qt.processEvents()
+        self.assertTrue(mascot.last_prompt.isVisible())
+        self.assertIn('what is the weather like?', mascot.last_prompt.text())
+
+    def test_reply_window_lies_under_hers_and_shows_to_the_right(self):
+        mascot = self.window.mascot
         self.window.mascot_home('Here is an answer.')
         self.qt.processEvents()
         self.assertTrue(mascot.reply_panel.isVisible())
-        self.assertLess(mascot.reply_panel.geometry().bottom(), mascot.stack.geometry().top())
+        mine, reply = mascot.window_frame.geometry(), mascot.reply_panel.geometry()
+        self.assertEqual(reply.topLeft(), mine.topLeft())       # same top and left edges
+        self.assertGreater(reply.right(), mine.right())         # sticks out to her right
+        self.assertLess(reply.height(), mine.height())          # and is shorter
+        children = mascot.children()
+        self.assertLess(children.index(mascot.reply_panel), children.index(mascot.window_frame))  # drawn underneath
+        text = mascot.bubble.mapTo(mascot, QPoint())
+        self.assertGreater(text.x(), mine.right())              # text only in the part that shows
+        self.assertEqual(mascot.width(), 2*MARGIN+reply.width())
+        self.assertEqual(mascot.bubble.toPlainText(), 'Here is an answer.')
         mascot.collapse_chat()
         mascot.character.click()
         self.qt.processEvents()
         self.assertTrue(mascot.card.isVisible())
         self.assertFalse(mascot.reply_panel.isVisible())
+
+    def test_reply_types_out_but_its_whole_text_is_there_at_once(self):
+        mascot = self.window.mascot
+        mascot.set_reduced_motion(False)
+        message = 'Fourteen degrees and cloudy, with light rain after six.'
+        mascot.present(message, compact=True)
+        self.assertEqual(mascot.bubble.toPlainText(), message)  # screen readers get it all now
+        self.assertTrue(mascot.typing.isActive())
+        deadline = time.monotonic()+3
+        while mascot.typing.isActive() and time.monotonic() < deadline:
+            QTest.qWait(20)
+        self.assertEqual(mascot.typed, len(message))
+        mascot.set_reduced_motion(True)
+        mascot.present('Still.', compact=True)
+        self.assertFalse(mascot.typing.isActive())
+
+    def test_moving_stretches_toward_the_spot_then_settles_there(self):
+        mascot = self.window.mascot
+        mascot.collapse_chat()
+        self.qt.processEvents()
+        with patch.object(self.service.adaptation, 'effective', return_value={'reduced_motion': False}):
+            start = QRect(mascot.geometry())
+            target = mascot.pos()-QPoint(300, 0)
+            done, widest = [], [0]
+            self.window.animate_companion_to(target, finished=lambda: done.append(1))
+            deadline = time.monotonic()+3
+            while not done and time.monotonic() < deadline:
+                QTest.qWait(10)
+                widest[0] = max(widest[0], mascot.width())
+        self.assertEqual(done, [1])
+        self.assertGreaterEqual(widest[0], start.width()+250)  # one big stretch across
+        self.assertEqual(mascot.pos(), target)
+        self.assertEqual(mascot.size(), start.size())          # back to her normal size
+        self.assertFalse(mascot.stretching)
+
+    def test_face_can_be_changed_from_her_menu_and_is_remembered(self):
+        mascot = self.window.mascot
+        self.window.mascot_action('face:robot')
+        self.assertEqual(mascot.skin, 'robot')
+        self.assertEqual(saved_appearance()['face'], 'robot')
+        self.assertEqual(self.window.face_select.currentData(), 'robot')
+        columns, lines = faces.size('robot')
+        self.assertGreaterEqual(mascot.character.width(), columns*mascot.character.cell.width())
+        self.window.mascot_action('face:no-such-face')
+        self.assertEqual(mascot.skin, 'robot')
+
+    def test_she_falls_asleep_when_left_alone(self):
+        character = self.window.mascot.character
+        character.set_reduced_motion(False)
+        character.set_state('idle')
+        character.last_activity = -SLEEP_AFTER_MS-1
+        self.assertIn(character.current_face(), faces.SKINS[self.window.mascot.skin]['sleeping'])
+        self.window.mascot.expand_chat()
+        self.assertNotIn(character.current_face(), faces.SKINS[self.window.mascot.skin]['sleeping'])
 
     def test_unconfigured_ai_error_is_shown_inside_mascot(self):
         from companion.provider import AIConfig, ChatProvider
@@ -1172,7 +1238,7 @@ class NativeTests(unittest.TestCase):
         self.window.move_companion_to(.5, .5, mascot.screen())
         full = mascot.screen().geometry()
         self.assertAlmostEqual(mascot.x()+mascot.width()/2, full.center().x(), delta=1)
-        self.assertAlmostEqual(mascot.y()+mascot.height()/2, full.center().y(), delta=1)
+        self.assertAlmostEqual(mascot.y()+mascot.height()/2, full.center().y(), delta=2)
 
     def test_visual_point_response_uses_its_capture_and_rejects_expired_capture(self):
         self.service.adaptation.set_explicit(self.service.identity, {'reduced_motion': True}, False)

@@ -113,7 +113,7 @@ Windows capture) and are never written to disk.
 
 | Area | Files |
 |---|---|
-| Window, mascot, voice wiring, settings | `desktop.py`, `mascot.py`, `settings_ui.py`, `setup_ui.py`, `readiness_ui.py` |
+| Window, mascot, voice wiring, settings | `desktop.py`, `mascot.py`, `faces.py`, `terminal_theme.py`, `settings_ui.py`, `setup_ui.py`, `readiness_ui.py` |
 | Routing, schemas, validation | `service.py`, `request_plan.py`, `models.py`, `quick_open.py`, `app_names.py`, `web_apps.py` |
 | Models | `ollama.py` (default, local), `claude.py` (opt-in cloud), `provider.py` (OpenAI-compatible) |
 | Mac apps in code | `mac_apps.py`, `mail_reader.py`, EventKit in `native/DesktopBridge.swift` |
@@ -121,6 +121,19 @@ Windows capture) and are never written to disk.
 | Voice | `voice.py` (faster-whisper, tiny.en wake + small.en), `neural_voice.py` (Kokoro) |
 | Consent & storage | `access.py`, `storage.py`, `paths.py` (data dir, saved AI settings) |
 | Packaging | `packaging/a11y.spec`, `build_macos.sh`, `build_windows.ps1`, `entitlements.plist`, `self_test.py` |
+
+## The companion's look
+
+She is a small terminal window titled "a11y" (`mascot.py`): a text face, the last prompt and
+the input. Replies open in a shorter window lying under hers (same top and left edges, text
+only in the part that shows to her right); both are painted in one frameless window, so
+stacking never depends on the window manager. Faces are multi-line text skins in `faces.py`
+(slots `1` eyes, `2` mouth, `3` mark, per state; every line the same width, one cell per
+character). Colours and font come from the default Terminal.app profile (`terminal_theme.py`
+reads the archived NSColor/NSFont in Terminal's plist) or a built-in theme; the choice lives in
+`<data>/appearance.json`. Moving is one stretch toward the spot and a settle
+(`animate_companion_to` with `begin_stretch` / `stretch_to` / `end_stretch`); reduced motion
+jumps and stops typing, blinking and spinners.
 
 ## Models
 
