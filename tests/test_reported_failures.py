@@ -5,6 +5,7 @@ control flow and validation for each reported failure; they do not prove that a
 live model makes the right choice on a real desktop."""
 import os
 os.environ.setdefault('A11Y_WEB_ANSWERS', '0')  # tests never look things up online unless a test turns it on
+os.environ.setdefault('A11Y_ROUTES', '0')  # nor read routes a live run remembered
 from copy import deepcopy
 import importlib.util
 import json
@@ -1496,3 +1497,33 @@ class GoBackTests(unittest.TestCase):
             self.assertIsNotNone(match, goal)
             self.assertEqual((match.group('way'), match.group('count')), (way, count), goal)
         self.assertIsNone(HISTORY_GOAL.match('go back to the Teams tab and check my chat'))
+
+
+
+class RememberedRouteTests(unittest.TestCase):
+    def test_a_finished_route_is_offered_for_a_similar_goal_only(self):
+        import tempfile
+        from companion import routes
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {'A11Y_DATA_DIR': folder, 'A11Y_ROUTES': '1'}):
+            receipts = [{'type': 'browse_url', 'label': 'Open https://teams.microsoft.com in Safari', 'status': 'executed'},
+                        {'type': 'click_point', 'label': 'Activity', 'status': 'executed'},
+                        {'type': 'type_text', 'label': 'secret words', 'status': 'executed'},
+                        {'type': 'click_point', 'label': 'x'*80, 'status': 'executed'}]
+            self.assertTrue(routes.remember('check my Teams notifications', receipts))
+            hint = routes.recall('check my notifications in Teams please')
+            self.assertEqual(hint['steps'], ['browse_url Open https://teams.microsoft.com in Safari', 'click_point Activity'])
+            self.assertNotIn('secret', json.dumps(routes.load()))              # typed text is never kept
+            self.assertIsNone(routes.recall('check my Slack messages'))       # not similar enough
+            routes.remember('compute 812 times 7 on the calculator', [{'type': 'press_key', 'key': '8', 'status': 'executed'}])
+            self.assertIsNotNone(routes.recall('compute 40 times 3 on the calculator'))  # numbers differ, same route
+            routes.forget()
+            self.assertIsNone(routes.recall('check my Teams notifications'))
+
+    def test_a_task_gets_the_route_in_its_first_message(self):
+        import tempfile
+        from companion import routes
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {'A11Y_DATA_DIR': folder, 'A11Y_ROUTES': '1'}):
+            routes.remember('open the sound settings', [{'type': 'launch_app', 'label': 'Open System Settings', 'status': 'executed'},
+                                                        {'type': 'click_point', 'label': 'Sound', 'status': 'executed'}])
+            task = ComputerTask('open the sound settings for me', automatic=True)
+        self.assertEqual(task.worked_before['steps'][-1], 'click_point Sound')

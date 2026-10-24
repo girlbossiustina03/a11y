@@ -1,6 +1,7 @@
 """Reading Apple Mail in code: which message, its text, and nothing stored or sent to a model."""
 import os
 os.environ.setdefault('A11Y_WEB_ANSWERS', '0')  # tests never look things up online unless a test turns it on
+os.environ.setdefault('A11Y_ROUTES', '0')  # nor read routes a live run remembered
 import unittest
 from unittest.mock import Mock, patch
 from companion import mail_reader

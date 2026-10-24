@@ -1,5 +1,6 @@
 import os
 os.environ.setdefault('A11Y_WEB_ANSWERS', '0')  # tests never look things up online unless a test turns it on
+os.environ.setdefault('A11Y_ROUTES', '0')  # nor read routes a live run remembered
 import tempfile
 import unittest
 from companion.adaptation import Adaptation

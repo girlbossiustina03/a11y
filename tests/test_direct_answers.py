@@ -1,6 +1,7 @@
 """Questions are answered directly; optional background lookups replace browser searches."""
 import os
 os.environ.setdefault('A11Y_WEB_ANSWERS', '0')  # tests never look things up online unless a test turns it on
+os.environ.setdefault('A11Y_ROUTES', '0')  # nor read routes a live run remembered
 import unittest
 from unittest.mock import Mock, patch
 from companion.desktop_context import DesktopContext

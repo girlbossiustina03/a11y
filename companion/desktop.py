@@ -964,7 +964,9 @@ class CompanionWindow(QMainWindow):
             self.refresh()
 
     def reset_preferences(self):
+        from . import routes
         self.service.adaptation.reset_learned(self.service.identity)
+        routes.forget()  # remembered task routes are learned too
         self.refresh()
 
     def import_document(self):
@@ -1758,6 +1760,8 @@ class CompanionWindow(QMainWindow):
             self.voice_conversation = False
             if step['status'] == 'done':
                 self.mascot.character.hop(height=14.0)
+                from . import routes
+                routes.remember(task.goal, task.receipts)  # offered as a hint the next time
             return
         label = step['action'].get('label') or 'Working'
         response = {'message': label+'…', 'sources': [], 'workflow': None, 'target': None,

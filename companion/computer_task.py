@@ -137,7 +137,9 @@ If you propose a click or any other operation, status MUST be action. done and
 needs_user MUST have action=null. These are mutually exclusive response shapes.
 The user has ALREADY authorized opening named apps, creating the requested browser
 window/tab, navigation and reading toward this goal. Do not ask whether to launch
-Safari, open Teams, navigate to a website, or confirm the goal again. A closed or
+Safari, open Teams, navigate to a website, or confirm the goal again. worked_before, when
+given, is the route that reached a very similar goal last time: follow it while the screen
+matches it; it is a hint, never a reason to repeat a step that did not work. A closed or
 nonvisible app is not a blocker: use an installed launch_app or browse_url action.
 browse_url opens the specified browser itself; use browser_mode=window/tab as requested.
 When the goal names a website, use browse_url directly rather than spending a step
@@ -682,6 +684,8 @@ class ComputerTask:
         self.click = click_goal(self.goal)
         self.clicked_text = None
         self.plan = None
+        from . import routes
+        self.worked_before = routes.recall(self.goal)  # how a similar goal was reached last time
         # Primitive steps a tool still has to do (type after clicking a field, Enter after typing,
         # scrolling until something shows); code runs them without asking the model again.
         self.queue = []
@@ -1334,6 +1338,7 @@ class ComputerTask:
         messages = [{'role': 'user', 'content': json.dumps({'goal': self.goal, 'goal_mode': self.goal_mode,
                          **({'user_was_looking_at': self.looking_at} if self.looking_at else {}),
                          **({'plan': self.plan} if self.plan else {}),
+                         **({'worked_before': self.worked_before} if self.worked_before else {}),
                          'authorization': 'The user requested this goal. Opening apps and browser navigation toward it are already authorized.',
                          'installed_apps': self.app_names(desktop, snapshot)}, ensure_ascii=False, separators=(',', ':'))},
                     {'role': 'user', 'content': json.dumps({'actions_taken': history, 'desktop': model_desktop, 'visual_context': model_visual},
