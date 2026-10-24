@@ -122,6 +122,12 @@ class Planner:
                 plan = with_opening(plan, request)
         return validate_plan(plan)
 
+    def plan_task(self, observation):
+        """Where a computer task starts and its short plan (computer_task.PLAN_SYSTEM)."""
+        from .computer_task import PLAN_SCHEMA, PLAN_SYSTEM
+        return self.complete(PLAN_SYSTEM, [{'role': 'user', 'content': json.dumps(observation, ensure_ascii=False)}],
+                             response_schema=PLAN_SCHEMA, max_tokens=400, thinking=False)
+
     def classify_task_goal(self, goal):
         schema = {'type': 'object', 'additionalProperties': False, 'required': ['mode'],
                   'properties': {'mode': {'enum': ['inspect', 'draft', 'change']}}}

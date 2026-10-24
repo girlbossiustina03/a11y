@@ -18,7 +18,7 @@ import sys
 
 SEP, END = '\x1f', '\x1e'
 # Operations the interpreter can choose; see request_plan.INTENT_SYSTEM.
-READS = ('read_calendar', 'read_reminders', 'read_notes', 'find_contact', 'recent_files', 'open_file',
+READS = ('read_calendar', 'read_reminders', 'read_notes', 'find_contact', 'recent_files', 'open_file', 'system_info',
          'read_page', 'list_shortcuts')
 WRITES = ('add_event', 'add_reminder', 'complete_reminder', 'delete_reminder', 'create_note', 'run_shortcut')
 OPERATIONS = READS+WRITES
@@ -358,6 +358,52 @@ def open_file(target, home=None, opener=subprocess.run):
     return 'Showed '+path.name+' in Finder. I only open documents myself; apps and installers you open yourself.'
 
 
+# --- This Mac ----------------------------------------------------------------------------------------
+
+def system_info(topic, runner=subprocess.run):
+    """A fact about this Mac read exactly (macOS version, battery, storage, memory, appearance,
+    Wi-Fi, uptime, model). A model guessing these said "I don't have access" (live)."""
+    import shutil
+    topic = (topic or '').casefold()
+    def out(*command):
+        try:
+            return runner(list(command), capture_output=True, text=True, timeout=5).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return ''
+    if 'batter' in topic or 'charg' in topic or 'power' in topic:
+        text = out('pmset', '-g', 'batt')
+        level = re.search(r'(\d+)%', text)
+        if not level:
+            return 'This Mac has no battery reading.'
+        state = 'charging' if 'charging;' in text or 'AC Power' in text and 'discharging' not in text else 'on battery'
+        return 'Your battery is at '+level.group(1)+'% ('+state+').'
+    if 'storage' in topic or 'disk' in topic or 'space' in topic:
+        usage = shutil.disk_usage('/')
+        return 'You have %.0f GB free of %.0f GB.' % (usage.free/1e9, usage.total/1e9)
+    if 'memory' in topic or 'ram' in topic:
+        total = out('sysctl', '-n', 'hw.memsize')
+        return ('This Mac has %d GB of memory.' % round(int(total)/2**30)) if total.isdigit() else 'I could not read the memory size.'
+    if 'dark' in topic or 'appearance' in topic or 'light' in topic or 'theme' in topic:
+        return 'Dark mode is on.' if out('defaults', 'read', '-g', 'AppleInterfaceStyle') == 'Dark' else 'Dark mode is off; the Mac uses light mode.'
+    if 'wi' in topic or 'network' in topic or 'internet' in topic:
+        text = out('networksetup', '-getairportnetwork', 'en0')
+        name = text.split(':', 1)[1].strip() if ':' in text and 'not associated' not in text.casefold() else ''
+        return ('You are on the Wi-Fi network “'+name+'”.') if name else 'I could not read the Wi-Fi network name (macOS may need Location access for that).'
+    if 'uptime' in topic or 'restart' in topic or 'boot' in topic:
+        boot = re.search(r'sec = (\d+)', out('sysctl', '-n', 'kern.boottime'))
+        if not boot:
+            return 'I could not read when the Mac started.'
+        import time as clock
+        hours = (clock.time()-int(boot.group(1)))/3600
+        return 'The Mac has been on for %s.' % ('%.0f hours' % hours if hours < 48 else '%.0f days' % (hours/24))
+    if 'model' in topic or 'chip' in topic or 'processor' in topic or 'cpu' in topic:
+        chip = out('sysctl', '-n', 'machdep.cpu.brand_string')
+        return ('This Mac has an '+chip+'.') if chip else 'I could not read the processor.'
+    version = out('sw_vers', '-productVersion')
+    build = out('sw_vers', '-buildVersion')
+    return ('You are running macOS '+version+(' (build '+build+')' if build else '')+'.') if version else 'I could not read the macOS version.'
+
+
 # --- Shortcuts -------------------------------------------------------------------------------------
 
 def shortcut_names(runner=subprocess.run):
@@ -392,6 +438,8 @@ def prepare(operation, target, *, bridge, browser=None, script=None, runner=None
         return 'answer', describe_files(recent_files(folder), folder, now)
     if operation == 'open_file':
         return 'answer', open_file(target)
+    if operation == 'system_info':
+        return 'answer', system_info(target, runner)
     if operation == 'list_shortcuts':
         names = shortcut_names(runner)
         return 'answer', ('Your shortcuts: '+'; '.join(names[:20])+('…' if len(names) > 20 else '')+'.') if names else 'You have no shortcuts yet.'

@@ -287,6 +287,7 @@ def plain_text(message):
     return re.sub(r'\n{3,}', '\n\n', message).strip()
 
 
+THIS_PAGE = re.compile(r'\b(?:this|the current|the open)\s+(?:web\s*)?(?:page|article|site|website|tab)\b', re.I)
 # "close this tab", "close the current Safari tab".
 CLOSE_TAB = re.compile(r'^\W*(?:please\s+)?close\b.*\btabs?\b', re.I)
 CURRENT_TAB = re.compile(r"\b(?:this|current|same|that|already open(?:ed)?|existing|open)\s+(?:safari\s+|chrome\s+|browser\s+)?(?:window|tab)\b|\bhere\b", re.I)
@@ -801,6 +802,13 @@ class Companion:
                 interpreted = with_opening(dict(interpreted, remaining_request=''), request)
             if interpreted.get('operation') in ('move_object', 'move_geometry') and not MOVING_WORDS.search(request):
                 # "Go to my Pictures folder" was routed to moving the companion: going somewhere is a task.
+                interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
+            if interpreted.get('operation') in ('answer', 'inspect_screen', 'computer_task') and THIS_PAGE.search(request) \
+                    and self.front_browser() and self.front_browser() == ((self.desktop_context.context().get('app') or {}).get('bundle_id')):
+                # "Give me the gist of this article" with a browser in front: read that page (live: "I can't retrieve articles").
+                interpreted = dict(interpreted, operation='read_page', app_name='', target='', remaining_request='')
+            if interpreted.get('operation') == 'create_note' and not re.search(r'\bnotes?\b', request, re.I):
+                # "Type '…' into a new text document" became a note in Notes (live).
                 interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
             if interpreted.get('operation') == 'type_text' and not TYPING_WORDS.search(request):
                 # "My name is Ana" was proposed as typing "Ana" into Safari (live): typing needs a request to type.

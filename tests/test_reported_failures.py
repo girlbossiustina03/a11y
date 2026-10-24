@@ -1090,3 +1090,61 @@ class VoiceImportTests(unittest.TestCase):
             for line in [l for l in source.splitlines() if 'faster_whisper' in l and ('import' in l) and 'find_spec' not in l and not l.strip().startswith('#')]:
                 index = source.splitlines().index(line)
                 self.assertIn('WHISPER_IMPORT', source.splitlines()[index-1], line)
+
+
+class VariedSuiteRoutingTests(LiveRoutingTests):
+    """Live evaluation v2 (random tasks): questions about the Mac, this article, text documents."""
+
+    def test_questions_about_this_mac_are_read_in_code(self):
+        # "What version of macOS am I running?" got "I don't have access to your system's version".
+        self.route('system_info', 'macos_version')
+        with patch('companion.mac_apps.system_info', return_value='You are running macOS 27.0.') as info:
+            self.assertEqual(self.app.ask('what version of macOS am I running?')['message'], 'You are running macOS 27.0.')
+        info.assert_called_once()
+
+    def test_a_text_document_is_not_a_note(self):
+        self.route('create_note', 'The quick brown fox')
+        self.assertEqual(self.app.prepare_request("type 'The quick brown fox' into a new text document")['operation'], 'computer_task')
+        self.route('create_note', 'Groceries | milk')
+        self.assertTrue(self.app.prepare_request('make a note called Groceries saying milk').get('app_write'))
+
+
+class PlanStartTests(Harness):
+    """Live evaluation v2: the first vision steps clicked an app's name, a page title or Finder.
+    A task now plans where to start and opens it in code."""
+
+    def test_the_planned_app_is_opened_without_a_vision_step(self):
+        textedit = [{'name': 'TextEdit', 'bundle_id': 'com.apple.TextEdit'}]
+        self.desktop.bridge.catalog = Mock(return_value=textedit)
+        self.desktop.bridge.value['installed_apps'] = textedit
+        class Planning(Mock):
+            def plan_task(self, observation):
+                return {'start': 'app', 'app': 'TextEdit', 'url': '', 'query': '', 'steps': ['New document', 'Type'], 'done_when': 'text shown'}
+        self.provider = Planning()
+        step = self.propose(ComputerTask('write a shopping list in a new TextEdit document', automatic=True, goal_mode='draft'))
+        self.assertEqual((step['action']['type'], step['action']['bundle_id']), ('launch_app', 'com.apple.TextEdit'))
+        self.assertFalse(step['review'])
+        self.provider.complete_structured.assert_not_called()
+        self.vision.capture.assert_not_called()
+
+    def test_a_missing_app_starts_at_its_website(self):
+        safari = [{'name': 'Safari', 'bundle_id': 'com.apple.Safari'}]
+        self.desktop.bridge.catalog = Mock(return_value=safari)
+        self.desktop.bridge.value['installed_apps'] = safari
+        class Planning(Mock):
+            def plan_task(self, observation):
+                return {'start': 'app', 'app': 'Notion', 'url': 'notion.so', 'query': '', 'steps': [], 'done_when': ''}
+        self.provider = Planning()
+        step = self.propose(ComputerTask('open Notion', automatic=True))
+        self.assertEqual((step['action']['type'], step['action']['url']), ('browse_url', 'https://notion.so'))
+
+    def test_clicking_an_apps_name_opens_it(self):
+        from companion.computer_task import validate_step
+        catalog = [{'name': 'Calendar', 'bundle_id': 'com.apple.iCal'}]
+        self.desktop.bridge.catalog = Mock(return_value=catalog)
+        self.desktop.bridge.value['installed_apps'] = catalog
+        self.desktop.collect_once()
+        step = validate_step({'status': 'action', 'message': 'Open Calendar.', 'risk': 'navigation',
+                              'action': {'type': 'click_point', 'x': .5, 'y': .97, 'label': 'Calendar icon in Dock'}},
+                             self.desktop, deepcopy(CALCULATOR), catalog=catalog, screen={'x': 0, 'y': 0, 'width': 1000, 'height': 700})
+        self.assertEqual((step['action']['type'], step['action']['bundle_id']), ('launch_app', 'com.apple.iCal'))

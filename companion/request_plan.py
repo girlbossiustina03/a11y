@@ -6,7 +6,7 @@ from .models import RESPONSE_SCHEMA, ValidationError
 OPERATIONS = ('answer', 'plan', 'inspect_screen', 'move_object', 'move_geometry',
               'computer_task', 'inspect_media', 'play_media', 'type_text', 'press_key', 'scroll', 'capture_once', 'click_point', 'browser_search', 'browser_open', 'launch_app', 'new_window', 'close_window', 'close_tab', 'quit_app', 'focus_app', 'press_control', 'highlight', 'read_mail',
               'read_calendar', 'add_event', 'read_reminders', 'add_reminder', 'complete_reminder', 'delete_reminder', 'read_notes',
-              'create_note', 'find_contact', 'recent_files', 'open_file', 'read_page', 'list_shortcuts', 'run_shortcut')
+              'create_note', 'find_contact', 'recent_files', 'open_file', 'read_page', 'list_shortcuts', 'run_shortcut', 'system_info')
 INTENT_SCHEMA = {'type': 'object', 'additionalProperties': False,
     'required': ['operation', 'app_name', 'target', 'browser_mode', 'remaining_request'], 'properties': {
         'operation': {'enum': list(OPERATIONS)}, 'app_name': {'type': 'string'}, 'target': {'type': 'string'},
@@ -80,7 +80,9 @@ read_notes target = a note's title, "latest", or empty to list them; create_note
 "title | text"; find_contact target = a person's name ("what's Ana's number");
 recent_files target downloads|desktop|documents|empty; open_file target = a file name
 or "latest download"; read_page for questions about the web page open in the browser
-("summarize this page"); list_shortcuts; run_shortcut target = the shortcut's name.
+("summarize this page"); list_shortcuts; run_shortcut target = the shortcut's name;
+system_info for questions about this Mac itself, target one of macos_version, battery, storage,
+memory, appearance, wifi, uptime, model ("what macOS am I on", "how much battery is left").
 when: for add_event and add_reminder the time as YYYY-MM-DDTHH:MM worked out from "now"
 ("at 6" is the next 6 o'clock; "tomorrow at 3" is 15:00 tomorrow), empty if no time is given;
 empty for every other operation.

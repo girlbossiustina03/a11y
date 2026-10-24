@@ -76,6 +76,10 @@ def plan(request, catalog):
         return dict(base, operation='browser_open', target=name)
     if LOCAL_THINGS & {word.casefold() for word in name.split()}:
         return None  # "open downloads folder", "open last email": not a web search.
+    if not rest and browser is None and len(name.split()) <= 3:
+        # "Open Canva": not installed and not a known site. Search, then the task opens its website
+        # (a bare search page was the end of it, live).
+        return dict(base, operation='browser_search', target=name, remaining_request='open the '+name+' website from the results')
     return dict(base, operation='browser_search', target=name)
 
 

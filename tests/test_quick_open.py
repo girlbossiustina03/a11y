@@ -29,7 +29,7 @@ class QuickOpenTests(unittest.TestCase):
         self.assertEqual(plan('open youtube', CATALOG)['target'], 'https://www.youtube.com')
         self.assertEqual(plan('go to github.com/iediot', CATALOG)['target'], 'github.com/iediot')
         self.assertEqual(plan('launch obsidian please', CATALOG), {'operation': 'browser_search', 'app_name': '', 'target': 'obsidian',
-                                                                    'browser_mode': 'default', 'remaining_request': ''})
+                                                                    'browser_mode': 'default', 'remaining_request': 'open the obsidian website from the results'})
 
     def test_descriptions_and_local_things_are_left_to_the_model(self):
         for request in ('open the second email', 'open a new safari window', 'open my downloads folder',
@@ -72,8 +72,9 @@ class QuickOpenServiceTests(CompanionFixture, unittest.TestCase):
         self.assertEqual(action['type'], 'start_task')
         self.assertEqual(action['opening']['url'], 'https://teams.microsoft.com')
         action = self.app.ask('open spotify')['desktop_action']
-        self.assertEqual(action['type'], 'browse_url')
-        self.assertIn('duckduckgo.com', action['url'])
+        # Not installed, not a known site: a search, then the task opens its website.
+        self.assertEqual(action['type'], 'start_task')
+        self.assertIn('duckduckgo.com', action['opening']['url'])
         self.app.provider.interpret_request.assert_not_called()
         self.app.provider.complete_structured.assert_not_called()
 

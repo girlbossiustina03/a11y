@@ -49,9 +49,9 @@ class RequestPlanningTests(CompanionFixture, unittest.TestCase):
         provider = self.app.provider = StagedProvider('launch_app', 'MissingApp')
         self.bridge.catalog.return_value.append({'name': 'Safari', 'bundle_id': 'com.apple.Safari'})
         result = self.app.ask('open MissingApp')
-        # Not installed: searched on the web, never a substitute local app.
-        self.assertEqual(result['desktop_action']['type'], 'browse_url')
-        self.assertEqual(result['desktop_action']['url'], 'https://duckduckgo.com/?q=MissingApp')
+        # Not installed: searched on the web (then its website opened), never a substitute local app.
+        self.assertEqual(result['desktop_action']['type'], 'start_task')
+        self.assertEqual(result['desktop_action']['opening']['url'], 'https://duckduckgo.com/?q=MissingApp')
         provider.complete_structured.assert_not_called()
         self.bridge.application_action.assert_not_called()
 
