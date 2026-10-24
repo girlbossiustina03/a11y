@@ -21,7 +21,7 @@ from .setup_ui import SetupDialog, AccessSheet
 from .settings_ui import Disclosure, scroll_page
 from .provider import AIConfig, ChatProvider, ProviderError
 from .ollama import OllamaProvider, local_url
-from .theme import PANEL_STYLE, apply_theme
+from .theme import panel_style, apply_theme
 from .vision import ScreenVision
 from .desktop_context import DesktopContext, desktop_bridge
 from .computer_use import ComputerUse
@@ -288,7 +288,7 @@ class CompanionWindow(QMainWindow):
         self.context_timer.timeout.connect(self.refresh_desktop_context)
         self.context_timer.start(1000)
         self.statusBar().showMessage('Ready. Screen and microphone are off.')
-        self.setStyleSheet(PANEL_STYLE)
+        self.setStyleSheet(panel_style())
         self.tts = None
         try:
             from PyQt6.QtTextToSpeech import QTextToSpeech
@@ -566,7 +566,7 @@ class CompanionWindow(QMainWindow):
                          'reduced_motion': 'Animation'}[key], control)
             self.pref_controls[key] = control
         layout.addLayout(form)
-        looks = QFormLayout()
+        looks = form  # one form, so the labels line up
         appearance = saved_appearance()
         self.theme_select = QComboBox()
         self.theme_select.setAccessibleName('Companion colours')
@@ -582,7 +582,6 @@ class CompanionWindow(QMainWindow):
         self.face_select.setCurrentIndex(max(0, self.face_select.findData(appearance['face'])))
         self.face_select.currentIndexChanged.connect(lambda: self.set_appearance(face=self.face_select.currentData()))
         looks.addRow('Face', self.face_select)
-        layout.addLayout(looks)
         self.learning = QCheckBox('Suggest ways to adapt to me')
         self.learning.setToolTip('Learn interaction preferences and suggest changes. Nothing is adopted without your approval.')
         layout.addWidget(self.learning)
@@ -1145,6 +1144,7 @@ class CompanionWindow(QMainWindow):
             return
         self.access_preferences.set_voice(True)
         self.voice_announce = True
+        self.voice_asked = True
         self.start_voice()
 
     def start_voice(self):
@@ -1191,6 +1191,12 @@ class CompanionWindow(QMainWindow):
 
     def voice_failed(self, message):
         self.stop_voice()
+        if not getattr(self, 'voice_asked', False):
+            # Voice was only restored at startup: nobody is talking to her, so don't open
+            # the conversation or speak. Say it quietly; turning voice on again shows it all.
+            self.mascot.input.setPlaceholderText('Voice is off: no microphone access')
+            self.record_companion_message(message)
+            return
         self.mascot.expand_chat()
         self.mascot_home(message)
         self.speak_now(message)

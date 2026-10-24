@@ -30,6 +30,8 @@ class Palette:
     opacity: float = 1.0
     font: str = ''        # family or PostScript name; empty uses the first monospace font found
     font_size: float = 13.0
+    blur: float = 0.0     # Terminal's background blur, 0-1, for the active window
+    blur_inactive: float = 0.0
 
     @property
     def dark(self):
@@ -61,8 +63,9 @@ def hex_color(red, green, blue):
     return '#%02X%02X%02X' % tuple(max(0, min(255, round(v*255))) for v in (red, green, blue))
 
 
-def archived_color(data):
-    """(#RRGGBB, alpha) from an NSKeyedArchiver NSColor, as Terminal stores its colours."""
+def archived_color(data, convert=None):
+    """(#RRGGBB, alpha) from an NSKeyedArchiver NSColor, as Terminal stores its colours.
+    convert(r, g, b, space) maps Terminal's colour space to sRGB (mac_window.to_srgb)."""
     archive = plistlib.loads(data)
     for item in archive.get('$objects', []):
         if not isinstance(item, dict):
@@ -70,7 +73,8 @@ def archived_color(data):
         if 'NSRGB' in item:
             values = [float(v) for v in item['NSRGB'].rstrip(b'\0').split()]
             alpha = values[3] if len(values) > 3 else 1.0
-            return hex_color(*values[:3]), alpha
+            rgb = (convert(*values[:3], item.get('NSColorSpace', 2)) if convert else None) or values[:3]
+            return hex_color(*rgb), alpha
         if 'NSWhite' in item:
             values = [float(v) for v in item['NSWhite'].rstrip(b'\0').split()]
             alpha = values[1] if len(values) > 1 else 1.0
@@ -99,7 +103,7 @@ def mix(first, second, amount):
     return '#%02X%02X%02X' % tuple(round(x+(y-x)*amount) for x, y in zip(a, b))
 
 
-def terminal_app_palette(preferences=None):
+def terminal_app_palette(preferences=None, convert=None):
     """The default Terminal.app profile as a Palette, or None."""
     path = Path(preferences or os.path.expanduser('~/Library/Preferences/com.apple.Terminal.plist'))
     try:
@@ -112,7 +116,7 @@ def terminal_app_palette(preferences=None):
 
         def color(key, fallback):
             try:
-                return archived_color(profile[key])
+                return archived_color(profile[key], convert)
             except (KeyError, ValueError, plistlib.InvalidFileException, TypeError):
                 return fallback, 1.0
         background, opacity = color('BackgroundColor', base.background)
@@ -128,7 +132,9 @@ def terminal_app_palette(preferences=None):
                        color('ANSIRedColor', base.red)[0], color('ANSIYellowColor', base.yellow)[0],
                        color('ANSIGreenColor', base.green)[0], color('ANSICyanColor', base.cyan)[0],
                        color('ANSIBlueColor', base.blue)[0], color('SelectionColor', base.selection)[0],
-                       max(0.85, opacity), font, font_size)
+                       max(0.85, opacity), font, font_size, float(profile.get('BackgroundBlur', 0) or 0),
+                       float(profile.get('BackgroundBlurInactive', 0) or 0)
+                       if profile.get('BackgroundSettingsForInactiveWindows') else float(profile.get('BackgroundBlur', 0) or 0))
     except (OSError, ValueError, plistlib.InvalidFileException, AttributeError, TypeError):
         return None
 
@@ -161,7 +167,8 @@ def save_appearance(**values):
 def palette(theme=None):
     theme = theme or saved_appearance()['theme']
     if theme == 'terminal':
-        found = terminal_app_palette() if sys.platform == 'darwin' else None
+        from .mac_window import to_srgb
+        found = terminal_app_palette(convert=to_srgb) if sys.platform == 'darwin' else None
         return found or THEMES[FALLBACK]
     return THEMES.get(theme, THEMES[FALLBACK])
 

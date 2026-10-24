@@ -6,10 +6,9 @@ import ctypes
 import ctypes.util
 import sys
 
-FULL_SIZE_CONTENT_VIEW = 1 << 15
 UTILITY_WINDOW = 1 << 4
 TITLE_HIDDEN = 1
-MINIATURIZE_BUTTON, ZOOM_BUTTON = 1, 2
+CLOSE_BUTTON, MINIATURIZE_BUTTON, ZOOM_BUTTON = 0, 1, 2
 WINDOW_BELOW = -1
 
 _objc = None
@@ -44,28 +43,25 @@ def ns_window(widget):
     return send(view, 'window') if view else None
 
 
-def style_titlebar(widget, red, green, blue, alpha=1.0):
-    """Real title bar and traffic lights, drawn over the window's own background: the bar
-    is transparent and the content runs underneath it, so the window's colour (the
-    terminal theme) shows through. Yellow and green are turned off; she can't be minimised
-    or zoomed. Returns True when applied."""
+def prepare_window(widget, *, buttons=True):
+    """A real title bar like Terminal's. With buttons, yellow and green are turned off (she
+    can't be minimised or zoomed); without, the title bar is a plain strip (the reply)."""
     try:
         window = ns_window(widget)
         if not window:
             return False
         mask = send(window, 'styleMask', restype=ctypes.c_ulong)
-        send(window, 'setStyleMask:', (mask | FULL_SIZE_CONTENT_VIEW) & ~UTILITY_WINDOW,
-             restype=None, argtypes=(ctypes.c_ulong,))
-        send(window, 'setTitlebarAppearsTransparent:', True, restype=None, argtypes=(ctypes.c_bool,))
-        send(window, 'setTitleVisibility:', TITLE_HIDDEN, restype=None, argtypes=(ctypes.c_long,))
-        send(window, 'setMovableByWindowBackground:', False, restype=None, argtypes=(ctypes.c_bool,))
-        color = send(runtime().objc_getClass(b'NSColor'), 'colorWithSRGBRed:green:blue:alpha:',
-                     red, green, blue, alpha, argtypes=(ctypes.c_double,)*4)
-        send(window, 'setBackgroundColor:', color, restype=None, argtypes=(ctypes.c_void_p,))
-        for kind in (MINIATURIZE_BUTTON, ZOOM_BUTTON):
+        send(window, 'setStyleMask:', mask & ~UTILITY_WINDOW, restype=None, argtypes=(ctypes.c_ulong,))
+        for kind in (CLOSE_BUTTON, MINIATURIZE_BUTTON, ZOOM_BUTTON):
             button = send(window, 'standardWindowButton:', kind, argtypes=(ctypes.c_long,))
-            if button:
+            if not button:
+                continue
+            if not buttons:
+                send(button, 'setHidden:', True, restype=None, argtypes=(ctypes.c_bool,))
+            elif kind != CLOSE_BUTTON:
                 send(button, 'setEnabled:', False, restype=None, argtypes=(ctypes.c_bool,))
+        if not buttons:
+            send(window, 'setTitleVisibility:', TITLE_HIDDEN, restype=None, argtypes=(ctypes.c_long,))
         return True
     except (AttributeError, TypeError, ValueError, OSError, ctypes.ArgumentError):
         return False
@@ -96,17 +92,36 @@ def detach(parent, child):
     return False
 
 
-def titlebar_height(widget):
-    """Height of the real title bar in points (28 on current macOS), or None."""
+def to_srgb(red, green, blue, space):
+    """Terminal stores colours in calibrated (generic) RGB (space 1) or device RGB (2); the
+    same numbers read as sRGB look darker. Convert through AppKit; None if unavailable."""
+    try:
+        if runtime() is None:
+            return None
+        ctypes.cdll.LoadLibrary('/System/Library/Frameworks/AppKit.framework/AppKit')
+        color_class = runtime().objc_getClass(b'NSColor')
+        maker = 'colorWithCalibratedRed:green:blue:alpha:' if space == 1 else 'colorWithDeviceRed:green:blue:alpha:'
+        color = send(color_class, maker, red, green, blue, 1.0, argtypes=(ctypes.c_double,)*4)
+        srgb = send(runtime().objc_getClass(b'NSColorSpace'), 'sRGBColorSpace')
+        converted = send(color, 'colorUsingColorSpace:', srgb, argtypes=(ctypes.c_void_p,))
+        if not converted:
+            return None
+        return tuple(send(converted, name, restype=ctypes.c_double) for name in ('redComponent', 'greenComponent', 'blueComponent'))
+    except (AttributeError, TypeError, ValueError, OSError, ctypes.ArgumentError):
+        return None
+
+
+def set_blur(widget, radius):
+    """Blur what's behind the window, as Terminal does for its active windows (a private
+    but long-standing WindowServer call, the one Terminal and iTerm use)."""
     try:
         window = ns_window(widget)
         if not window:
-            return None
-
-        class Rect(ctypes.Structure):
-            _fields_ = [('x', ctypes.c_double), ('y', ctypes.c_double), ('w', ctypes.c_double), ('h', ctypes.c_double)]
-        frame = send(window, 'frame', restype=Rect)
-        layout = send(window, 'contentLayoutRect', restype=Rect)
-        return round(frame.h-layout.h)
+            return False
+        number = send(window, 'windowNumber', restype=ctypes.c_long)
+        graphics = ctypes.cdll.LoadLibrary('/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics')
+        graphics.CGSMainConnectionID.restype = ctypes.c_int
+        graphics.CGSSetWindowBackgroundBlurRadius.argtypes = (ctypes.c_int, ctypes.c_long, ctypes.c_int)
+        return graphics.CGSSetWindowBackgroundBlurRadius(graphics.CGSMainConnectionID(), number, int(radius)) == 0
     except (AttributeError, TypeError, ValueError, OSError, ctypes.ArgumentError):
-        return None
+        return False

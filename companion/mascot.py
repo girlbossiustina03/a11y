@@ -8,7 +8,7 @@ stacking never depends on the window manager. Colours and font follow the user's
 """
 import os
 import sys
-from .theme import MENU_STYLE
+from .theme import MENU_STYLE, native_mac
 from . import faces, mac_window
 from .terminal_theme import palette as load_palette, saved_appearance
 from PyQt6.QtWidgets import (
@@ -97,7 +97,7 @@ QScrollBar:vertical {{background:transparent;width:5px;margin:3px 0;}}
 QScrollBar::handle:vertical {{background:{rgba(p.dim, 0.5)};border-radius:2px;min-height:24px;}}
 QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical {{height:0;width:0;border:0;background:transparent;}}
 QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical {{background:transparent;}}
-''' + MENU_STYLE
+''' + ('' if native_mac() else MENU_STYLE)
 
 
 class RoundedMenu(QMenu):
@@ -178,19 +178,16 @@ class Surface(QFrame):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         body = QRectF(self.rect()).adjusted(.5, .5, -.5, -.5)
         background = QColor(p.background)
-        # A frameless window of its own (the reply beside her real window) shows far more of
-        # what's behind than its alpha says on macOS, so it is painted solid.
-        background.setAlphaF(1.0 if self.owner.native and not self.system else p.opacity)
+        background.setAlphaF(p.opacity)
         painter.setPen(QPen(QColor(p.border), 1.2))
-        if self.system:
+        if self.system:  # under a real title bar: just the background
             painter.fillRect(self.rect(), background)
-        else:
-            path = QPainterPath()
-            path.addRoundedRect(body, RADIUS, RADIUS)
-            painter.fillPath(path, background)
-            painter.drawPath(path)
-        line = self.owner.title_height
-        painter.drawLine(QPointF(body.left(), line), QPointF(body.right(), line))
+            return
+        path = QPainterPath()
+        path.addRoundedRect(body, RADIUS, RADIUS)
+        painter.fillPath(path, background)
+        painter.drawPath(path)
+        painter.drawLine(QPointF(body.left(), TITLE_HEIGHT), QPointF(body.right(), TITLE_HEIGHT))
 
 
 def native_window():
@@ -212,7 +209,6 @@ class Mascot(QWidget):
         self.setWindowTitle('a11y')
         self.native = native_window()
         self.margin = 0 if self.native else MARGIN  # a real window gets its shadow from macOS
-        self.title_height = TITLE_HEIGHT
         self.titlebar_styled = False
         if self.native:
             # Close only: red collapses her (closeEvent); she can't be minimised or zoomed.
@@ -248,15 +244,16 @@ class Mascot(QWidget):
         self.reply_shown = False
         self.reply_window = None
         if self.native:
-            self.reply_window = QWidget(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool |
-                                        Qt.WindowType.WindowStaysOnTopHint)
+            # A real window too, with a plain title strip (no buttons, no title text).
+            self.reply_window = QWidget(None, Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint |
+                                        Qt.WindowType.CustomizeWindowHint | Qt.WindowType.WindowTitleHint)
             self.reply_window.setWindowTitle('a11y reply')
             self.reply_window.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
             self.reply_window.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
             self.reply_window.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
             self.reply_window.setObjectName('mascotRoot')
             self.destroyed.connect(self.reply_window.deleteLater)
-        self.reply_panel = Surface(self, 'replyPanel')
+        self.reply_panel = Surface(self, 'replyPanel', system=self.native)
         if self.reply_window is not None:
             self.reply_panel.setParent(self.reply_window)
         self.set_reply_shown(False)
@@ -267,7 +264,7 @@ class Mascot(QWidget):
         reply.setSpacing(8)
         self.reply_title = QLabel('reply')
         self.reply_title.setObjectName('replyTitle')
-        self.reply_title.setFixedHeight(TITLE_HEIGHT)
+        self.reply_title.setFixedHeight(TITLE_HEIGHT if not self.native else 24)
         reply.addWidget(self.reply_title)
         self.bubble = QPlainTextEdit()
         self.bubble.setReadOnly(True)
@@ -341,19 +338,9 @@ class Mascot(QWidget):
         self.window_title.setObjectName('windowTitle')
         title.addWidget(self.window_title)
         title.addStretch()
-        self.vision_badge = QLabel('◉')
-        self.vision_badge.setObjectName('visionBadge')
-        self.vision_badge.setToolTip('Screen vision is on: each prompt includes a local screen image')
-        self.vision_badge.hide()
-        title.addWidget(self.vision_badge)
-        self.more_button = QPushButton('⋯')
-        self.more_button.setObjectName('quietButton')
-        self.more_button.setAccessibleName('Companion actions and settings')
-        self.more_button.setToolTip('Actions and settings')
-        self.more_button.clicked.connect(lambda: self.show_menu())
-        self.more_button.setVisible(self.native)  # yellow and green do this when drawn
-        title.addWidget(self.more_button)
         frame.addWidget(self.title_bar)
+        # On macOS the real title bar (traffic lights, "a11y" in the middle) replaces this one.
+        self.title_bar.setVisible(not self.native)
         frame.addStretch(1)
         self.character = CharacterButton(self)
         self.character.clicked.connect(self.toggle_chat)
@@ -473,7 +460,7 @@ class Mascot(QWidget):
             self.reply_window.setFont(self.mono)
             self.reply_window.setStyleSheet(self.styleSheet())
         if self.titlebar_styled:
-            self.style_titlebar()
+            self.apply_blur()
         self.input.setFixedHeight(self.line_height()+2)
         # The ❯ mark and ⏎ sit on the first and last line of the input, centred on it.
         self.prompt_mark.setFixedHeight(self.line_height()+2)
@@ -520,20 +507,32 @@ class Mascot(QWidget):
         if beside:
             self.layout_reply(left, m, width, height)
         elif showing_reply:
-            self.layout_reply(REPLY_WIDTH if self.reply_side == 'left' else 0, 0, width, height)
+            self.layout_reply_window(width, height)
         self.setFixedSize(2*m+width+(REPLY_WIDTH if beside else 0), 2*m+height)
         self.reply_panel.lower()
         self.window_frame.raise_()
         self.place_reply_window()
 
+    def layout_reply_window(self, width, height):
+        """The reply as its own real window: it grows out from under her as it opens."""
+        inner = REPLY_WIDTH-30
+        self.reply_content.setFixedWidth(inner)
+        self.reply_content.layout().activate()
+        wanted = self.reply_content.sizeHint().height()
+        reply_height = max(56, min(height-24, wanted))
+        shown = round(REPLY_WIDTH*self.reply_open)
+        self.reply_panel.setGeometry(0, 0, width+shown, reply_height)
+        self.reply_content.setGeometry(width+16 if self.reply_side == 'right' else 14, 0, inner, reply_height)
+
     def place_reply_window(self):
-        """As its own window: over her, its top on her top edge and its side on hers."""
+        """Over her: its top on her top edge and its side on hers."""
         if self.reply_window is None or not self.reply_shown:
             return
-        mine = self.geometry()
-        base = REPLY_WIDTH if self.reply_side == 'left' else 0
-        self.reply_window.setGeometry(mine.x()-base, mine.y(), self.frame_width()+REPLY_WIDTH,
-                                      self.reply_panel.geometry().bottom()+1)
+        mine = self.frameGeometry()
+        size = self.reply_panel.size()
+        self.reply_window.resize(size)
+        x = mine.x() if self.reply_side == 'right' else mine.x()+mine.width()-size.width()
+        self.reply_window.move(x, mine.y())
 
     def set_reply_shown(self, shown):
         self.reply_shown = shown
@@ -543,7 +542,11 @@ class Mascot(QWidget):
         if shown:
             self.place_reply_window()
             self.reply_window.show()
+            if not self.reply_window.property('prepared'):
+                self.reply_window.setProperty('prepared', mac_window.prepare_window(self.reply_window, buttons=False))
+                self.place_reply_window()
             mac_window.keep_below(self, self.reply_window)
+            self.apply_blur()
         else:
             mac_window.detach(self, self.reply_window)
             self.reply_window.hide()
@@ -844,14 +847,24 @@ class Mascot(QWidget):
             QTimer.singleShot(0, self.style_titlebar)
 
     def style_titlebar(self):
-        """Real title bar over her own background; its height sets her title strip."""
-        color = QColor(self.colors.background)
-        if mac_window.style_titlebar(self, color.redF(), color.greenF(), color.blueF(), self.colors.opacity):
-            self.title_height = mac_window.titlebar_height(self) or TITLE_HEIGHT
-            self.title_bar.setFixedHeight(self.title_height)
-            self.reply_title.setFixedHeight(self.title_height)
-            self.fit_on_screen(self.character.mapToGlobal(QPoint()))
-            self.update()
+        """A real title bar like Terminal's, with only the red button working."""
+        mac_window.prepare_window(self)
+        self.apply_blur()
+
+    def apply_blur(self):
+        """Terminal blurs what's behind its active window and (in this profile) not its
+        inactive ones; she does the same, and so does her reply."""
+        if not self.native:
+            return
+        blur = self.colors.blur if self.isActiveWindow() else self.colors.blur_inactive
+        for window in (self, self.reply_window if self.reply_shown else None):
+            if window is not None:
+                mac_window.set_blur(window, round(blur*30))
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.Type.ActivationChange:
+            self.apply_blur()
+        super().changeEvent(event)
 
     def closeEvent(self, event):
         # The red traffic light collapses her; quitting the app still closes her.
@@ -925,7 +938,6 @@ class Mascot(QWidget):
         if self.prompt_settings.property('screenVision') == enabled:
             return
         self.prompt_settings.setProperty('screenVision', enabled)
-        self.vision_badge.setVisible(enabled)
         self.prompt_settings.setToolTip('Settings · Screen vision '+('on: each prompt includes a local screen image' if enabled else 'off'))
 
     def hide_reply(self):
@@ -939,7 +951,8 @@ class Mascot(QWidget):
             self.open_reply()
 
     def show_menu(self, position=None):
-        menu = RoundedMenu(self)
+        # A real macOS menu there (no parent, so her stylesheet doesn't reach it).
+        menu = QMenu() if native_mac() else RoundedMenu(self)
         menu.setAccessibleName('Companion actions')
         for title, action in [('Talk to me', 'talk'), ('Computer task…', 'computer:prompt'), ('Stop computer task', 'computer:stop'), ('Show last reply', 'reply'),
                               ('My saved tasks', 'tasks'), ('Mark current step done', 'confirm'),

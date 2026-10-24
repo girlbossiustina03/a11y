@@ -1073,6 +1073,22 @@ class NativeTests(unittest.TestCase):
         self.window.mascot_action('face:no-such-face')
         self.assertEqual(mascot.skin, 'robot')
 
+    def test_reported_voice_restored_at_startup_fails_quietly(self):
+        # Reported: on startup she said she couldn't hear the microphone, unasked.
+        mascot = self.window.mascot
+        mascot.collapse_chat()
+        self.window.voice_asked = False
+        with patch.object(self.window, 'speak_now') as speak:
+            self.window.voice_failed('I can’t hear anything from the microphone.')
+        speak.assert_not_called()
+        self.assertFalse(mascot.card.isVisible())
+        self.assertIn('microphone', mascot.input.placeholderText())
+        self.window.voice_asked = True  # turned on by hand: then she says it
+        with patch.object(self.window, 'speak_now') as speak:
+            self.window.voice_failed('I can’t hear anything from the microphone.')
+        speak.assert_called_once()
+        self.assertIn('microphone', mascot.bubble.toPlainText())
+
     def test_she_falls_asleep_when_left_alone(self):
         character = self.window.mascot.character
         character.set_reduced_motion(False)

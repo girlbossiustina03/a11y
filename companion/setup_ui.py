@@ -3,7 +3,7 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import (QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                             QLineEdit, QComboBox, QPushButton, QCheckBox, QFormLayout, QStackedWidget)
 from .onboarding import QUESTIONS
-from .theme import PANEL_STYLE
+from .theme import panel_style
 
 
 def description(text):
@@ -19,7 +19,7 @@ class SetupDialog(QDialog):
         self.setWindowTitle('Welcome to A11y')
         self.setMinimumWidth(480)
         self.resize(530, 570)
-        self.setStyleSheet(PANEL_STYLE)
+        self.setStyleSheet(panel_style())
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 28, 28, 24)
         layout.setSpacing(18)
@@ -177,7 +177,7 @@ class AccessSheet(QDialog):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setFixedWidth(440)
-        self.setStyleSheet(PANEL_STYLE)
+        self.setStyleSheet(panel_style())
         layout = QVBoxLayout(self)
         layout.setContentsMargins(26, 24, 26, 24)
         layout.setSpacing(16)

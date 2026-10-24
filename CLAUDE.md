@@ -125,12 +125,15 @@ Windows capture) and are never written to disk.
 ## The companion's look
 
 She is a small terminal window titled "a11y" (`mascot.py`): a text face, the last prompt and
-the input, the same width open or collapsed. On macOS it is a real window: real title bar and
-traffic lights over her own background (`mac_window.py`, AppKit through the Objective-C
-runtime with ctypes; red collapses her, yellow and green are off). Replies open in a shorter
-window under hers (same top edge and the edge of the side it opens from, right when there's
-room, else left), attached with `addChildWindow:ordered:NSWindowBelow` so it never comes in
-front. Elsewhere, and in offscreen tests, both are painted in one frameless window with drawn
+the input, the same width open or collapsed. On macOS it is a real window with a normal title
+bar like Terminal's (`mac_window.py`, AppKit through the Objective-C runtime with ctypes; red
+collapses her, yellow and green are off) and Terminal's background blur while active. Replies
+open in a shorter real window under hers (plain title strip; same top edge and the edge of the
+side it opens from, right when there's room, else left), attached with
+`addChildWindow:ordered:NSWindowBelow` so it never comes in front. Terminal stores colours in
+calibrated RGB: convert them (`mac_window.to_srgb`) or her background reads darker than
+Terminal's. On macOS the settings, setup and readiness windows use the native `macos` style
+and menus are real NSMenus (`theme.native_mac`). Elsewhere, and in offscreen tests, both are painted in one frameless window with drawn
 dots (`A11Y_FRAMELESS=1` forces that on macOS). Faces are multi-line text skins in `faces.py`
 (slots `1` eyes, `2` mouth, `3` mark, per state; every line the same width, one cell per
 character). Colours and font come from the default Terminal.app profile (`terminal_theme.py`

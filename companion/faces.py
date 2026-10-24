@@ -151,6 +151,70 @@ GHOST = skin([
 })
 
 
+def simple(states):
+    """A skin drawn whole per state (no slots). Lines are padded to one width; talking
+    alternates the idle and listening faces."""
+    width = max(len(line) for lines in states.values() for line in lines)
+    frames = {state: [[line.ljust(width) for line in lines]] for state, lines in states.items()}
+    frames['speaking'] = frames['idle']+frames['listening']
+    return frames
+
+EYES = simple({
+    'idle': ['╭────╮  ╭────╮', '│ ██ │  │ ██ │', '╰────╯  ╰────╯', '', '    ╰────╯'],
+    'blink': ['', '', '──────  ──────', '', '    ╰────╯'],
+    'listening': ['╭────╮  ╭────╮', '│ ▄▄ │  │ ▄▄ │', '│ ▀▀ │  │ ▀▀ │', '╰────╯  ╰────╯', '     ╭──╮'],
+    'thinking': ['╭────╮  ╭────╮', '│  ▀▀│  │  ▀▀│', '╰────╯  ╰────╯', '', '      ───'],
+    'working': ['', '▄▄▄▄▄▄  ▄▄▄▄▄▄', '│ ██ │  │ ██ │', '╰────╯  ╰────╯', '     ────'],
+    'done': ['', ' ╭──╮    ╭──╮', ' ╵  ╵    ╵  ╵', '', '   ╰──────╯'],
+    'stuck': ['╭────╮  ╭────╮', '│ ╲╱ │  │ ╲╱ │', '│ ╱╲ │  │ ╱╲ │', '╰────╯  ╰────╯', '    ╭────╮'],
+    'sleeping': ['            z', '          z', '──────  ──────', '', '     ╶──╴'],
+})
+
+PIXEL = simple({
+    'idle': [' ▄██▄    ▄██▄', ' ████    ████', ' ▀██▀    ▀██▀', '', '    ▀▄▄▄▄▀'],
+    'blink': ['', '', ' ▀▀▀▀    ▀▀▀▀', '', '    ▀▄▄▄▄▀'],
+    'listening': ['▄████▄  ▄████▄', '██████  ██████', '▀████▀  ▀████▀', '', '     ▄██▄'],
+    'thinking': ['   ▄█▄    ▄█▄', '   ▀█▀    ▀█▀', '', '', '      ▄▄▄▄'],
+    'working': ['', ' ▄▄▄▄    ▄▄▄▄', ' ▀██▀    ▀██▀', '', '     ▀▀▀▀'],
+    'done': [' ▄▀▀▄    ▄▀▀▄', ' ▀  ▀    ▀  ▀', '', '  ▀▄      ▄▀', '    ▀▀▀▀▀▀'],
+    'stuck': [' ▀▄▄▀    ▀▄▄▀', ' ▄▀▀▄    ▄▀▀▄', '', '    ▄▀▀▀▀▄', ''],
+    'sleeping': ['          ▄▄▄', '            ▀', ' ▄▄▄▄    ▄▄▄▄', '', '     ▀▀▀▀'],
+})
+
+BOXY = simple({
+    'idle': ['╭───────────╮', '│  •     •  │', '│     ‿     │', '╰───────────╯'],
+    'blink': ['╭───────────╮', '│  -     -  │', '│     ‿     │', '╰───────────╯'],
+    'listening': ['╭───────────╮', '│  O     O  │', '│     o     │', '╰───────────╯'],
+    'thinking': ['╭───────────╮', '│  °     °  │', '│     ~     │', '╰───────────╯'],
+    'working': ['╭───────────╮', '│  >     <  │', '│     ─     │', '╰───────────╯'],
+    'done': ['╭───────────╮', '│  ^     ^  │', '│     ▽     │', '╰───────────╯'],
+    'stuck': ['╭───────────╮', '│  ×     ×  │', '│     ~     │', '╰───────────╯'],
+    'sleeping': ['╭───────────╮z', '│  -     -  │', '│     .     │', '╰───────────╯'],
+})
+
+KITTY = simple({
+    'idle': [' /\\_____/\\', '(  o   o  )', '( =  ω  = )', ' (")___(")'],
+    'blink': [' /\\_____/\\', '(  -   -  )', '( =  ω  = )', ' (")___(")'],
+    'listening': [' /\\_____/\\', '(  O   O  )', '( =  o  = )', ' (")___(")'],
+    'thinking': [' /\\_____/\\', '(    °  ° )', '( =  ~  = )', ' (")___(")'],
+    'working': [' /\\_____/\\', '(  >   <  )', '( =  ω  = )', ' (")___(")'],
+    'done': [' /\\_____/\\', '(  ^   ^  )', '( =  ω  = )', ' (")___(")'],
+    'stuck': [' /\\_____/\\', '(  ×   ×  )', '( =  ~  = )', ' (")___(")'],
+    'sleeping': [' /\\_____/\\ z', '(  -   -  )', '( =  ω  = )', ' (")___(")'],
+})
+
+BOT = simple({
+    'idle': ['      ╷', '┌─────┴─────┐', '│  ■     ■  │', '│   ╶───╴   │', '└───────────┘'],
+    'blink': ['      ╷', '┌─────┴─────┐', '│  ▁     ▁  │', '│   ╶───╴   │', '└───────────┘'],
+    'listening': ['      ╷  ))', '┌─────┴─────┐', '│  ■     ■  │', '│    ╭─╮    │', '└───────────┘'],
+    'thinking': ['      ╷  ?', '┌─────┴─────┐', '│    ▀     ▀│', '│   ╶───╴   │', '└───────────┘'],
+    'working': ['      ╷ ⠹', '┌─────┴─────┐', '│  ▄     ▄  │', '│   ═════   │', '└───────────┘'],
+    'done': ['      ╷', '┌─────┴─────┐', '│  ▲     ▲  │', '│   ╰───╯   │', '└───────────┘'],
+    'stuck': ['      ╷  !', '┌─────┴─────┐', '│  ×     ×  │', '│   ╭───╮   │', '└───────────┘'],
+    'sleeping': ['      ╷  z', '┌─────┴─────┐', '│  ─     ─  │', '│    ───    │', '└───────────┘'],
+})
+
+
 def braille(pixel, width, height):
     """Rows of braille cells (2×4 dots each) for a pixel test over width×height dots."""
     bits = ((0, 0, 1), (0, 1, 2), (0, 2, 4), (1, 0, 8), (1, 1, 16), (1, 2, 32), (0, 3, 64), (1, 3, 128))
@@ -252,8 +316,10 @@ def _dots():
     return states
 
 
-SKINS = {'blob': BLOB, 'goggles': GOGGLES, 'cat': CAT, 'robot': ROBOT, 'ghost': GHOST, 'dots': _dots()}
-SKIN_NAMES = {'blob': 'Blob', 'goggles': 'Goggles', 'cat': 'Cat', 'robot': 'Robot', 'ghost': 'Ghost', 'dots': 'Dots'}
+SKINS = {'blob': BLOB, 'goggles': GOGGLES, 'cat': CAT, 'robot': ROBOT, 'ghost': GHOST, 'dots': _dots(),
+         'eyes': EYES, 'pixel': PIXEL, 'boxy': BOXY, 'kitty': KITTY, 'bot': BOT}
+SKIN_NAMES = {'blob': 'Blob', 'goggles': 'Goggles', 'cat': 'Cat', 'robot': 'Robot', 'ghost': 'Ghost', 'dots': 'Dots',
+              'eyes': 'Eyes', 'pixel': 'Pixel', 'boxy': 'Boxy', 'kitty': 'Kitty', 'bot': 'Bot'}
 
 
 def face(skin_name, state, frame=0):

@@ -3,7 +3,7 @@ import threading
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 from PyQt6.QtWidgets import QDialog, QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout
 from . import installer
-from .theme import PANEL_STYLE
+from .theme import panel_style
 
 
 class StatusWorker(QObject):
@@ -67,7 +67,7 @@ class ReadinessDialog(QDialog):
         self.owner, self.status, self.worker = owner, status, None
         self.setWindowTitle('Get A11y ready')
         self.setMinimumWidth(460)
-        self.setStyleSheet(PANEL_STYLE)
+        self.setStyleSheet(panel_style())
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 26, 28, 22)
         layout.setSpacing(14)

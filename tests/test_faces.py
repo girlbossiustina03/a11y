@@ -1,5 +1,6 @@
 import os
 import plistlib
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -64,6 +65,25 @@ class TerminalThemeTests(unittest.TestCase):
         self.assertAlmostEqual(found.opacity, 0.95)
         self.assertEqual((found.font, found.font_size), ('JetBrainsMonoNF-SemiBold', 12.0))
         self.assertTrue(found.dark)
+
+    def test_terminal_colours_are_converted_and_blur_is_read(self):
+        profile = {'BackgroundColor': color('0.0984 0.1139 0.1526 0.95'), 'BackgroundBlur': 0.5,
+                   'BackgroundBlurInactive': 0.0, 'BackgroundSettingsForInactiveWindows': True}
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/'com.apple.Terminal.plist'
+            path.write_bytes(plistlib.dumps({'Default Window Settings': 'Clear Dark', 'Window Settings': {'Clear Dark': profile}}))
+            spaces = []
+            found = terminal_theme.terminal_app_palette(path, convert=lambda r, g, b, space: spaces.append(space) or (1.0, 0.5, 0.0))
+        self.assertEqual(found.background, '#FF8000')   # what the converter said, not the raw numbers
+        self.assertIn(1, spaces)                        # Terminal's calibrated RGB
+        self.assertEqual((found.blur, found.blur_inactive), (0.5, 0.0))
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'AppKit conversion')
+    def test_reported_clear_dark_background_matches_terminal_on_screen(self):
+        # Reported: her window was darker than Terminal. Terminal shows #212733 for these numbers.
+        from companion.mac_window import to_srgb
+        rgb = to_srgb(0.09838771145, 0.1138777476, 0.152602838, 1)
+        self.assertEqual(terminal_theme.hex_color(*rgb)[:5], '#2127')
 
     def test_unreadable_preferences_fall_back(self):
         with tempfile.TemporaryDirectory() as folder:

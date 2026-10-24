@@ -1,8 +1,21 @@
-"""Shared dark appearance for the desktop companion, settings and access dialogs."""
-from PyQt6.QtGui import QColor, QPalette, QFontDatabase
+"""Shared appearance for the desktop companion, settings and access dialogs.
+
+On macOS the windows use the system's own controls (the native "macos" style, light or dark
+as the system is) with a light grouped layout, like a SwiftUI settings form; menus are real
+macOS menus. Elsewhere they keep the custom dark look.
+"""
+import sys
+from PyQt6.QtGui import QColor, QPalette, QFontDatabase, QGuiApplication
+
+
+def native_mac():
+    return sys.platform == 'darwin' and QGuiApplication.platformName() == 'cocoa'
 
 
 def apply_theme(app):
+    if native_mac():
+        app.setStyle('macos')
+        return
     app.setStyle('Fusion')
     app.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont))
     palette = QPalette()
@@ -73,3 +86,25 @@ QScrollBar:vertical {background:transparent;width:7px;}
 QScrollBar::handle:vertical {background:#63636b;border-radius:3px;min-height:24px;}
 QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical {height:0;}
 ''' + MENU_STYLE
+
+
+# macOS: only layout and typography; buttons, pop-ups, checkboxes and lists stay native.
+MAC_PANEL_STYLE = '''
+QFrame#settingsGroup {background:rgba(128,128,128,0.10);border:1px solid rgba(128,128,128,0.18);border-radius:10px;}
+QFrame#settingsDivider {background:rgba(128,128,128,0.22);border:0;max-height:1px;}
+QFrame#settingsSurface {background:transparent;border:0;}
+QLabel#settingsPageTitle {font-size:20px;font-weight:600;}
+QLabel#settingsBrand {font-size:22px;font-weight:600;}
+QLabel#settingsRowTitle {font-weight:600;}
+QLabel#settingsSubtitle {font-size:12px;color:palette(placeholder-text);}
+QListWidget#settingsNavigation {background:transparent;border:0;outline:0;}
+QListWidget#settingsNavigation::item {padding:6px 10px;margin:1px 0;border-radius:6px;}
+QListWidget#settingsNavigation::item:selected {background:rgba(128,128,128,0.22);color:palette(text);}
+QTabWidget::pane {border:0;}
+QScrollArea {background:transparent;border:0;}
+QScrollArea > QWidget > QWidget {background:transparent;}
+'''
+
+
+def panel_style():
+    return MAC_PANEL_STYLE if native_mac() else PANEL_STYLE
