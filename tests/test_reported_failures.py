@@ -4,6 +4,7 @@ Model replies and native submission are doubled here. These tests prove the loop
 control flow and validation for each reported failure; they do not prove that a
 live model makes the right choice on a real desktop."""
 from copy import deepcopy
+import importlib.util
 import json
 import time
 import unittest
@@ -1350,3 +1351,27 @@ class SettingsVersusInfoTests(LiveRoutingTests):
         # "Show me Battery in System Settings" answered "Your battery is at 100%".
         self.route('system_info', 'battery')
         self.assertEqual(self.app.prepare_request('show me Battery in System Settings')['operation'], 'computer_task')
+
+
+@unittest.skipUnless(importlib.util.find_spec('PyQt6') is not None, 'Install requirements.txt to run Qt checks')
+class MicrophonePermissionAnswerTests(unittest.TestCase):
+    """Reported: on startup, "checkPermission(...): argument 1 has unexpected type
+    'QPermission'". Qt answers the microphone request with a plain QPermission."""
+
+    def answer(self, status, *, frozen):
+        from types import SimpleNamespace
+        from PyQt6.QtCore import Qt
+        from companion.voice import VoiceListener
+        calls = []
+        listener = SimpleNamespace(mode='loading', open_microphone=lambda: calls.append('open'),
+                                   microphone_denied=lambda: calls.append('denied'))
+        permission = SimpleNamespace(status=lambda: getattr(Qt.PermissionStatus, status))
+        with patch('companion.paths.frozen', return_value=frozen):
+            VoiceListener.permission_answered(listener, permission)
+        return calls
+
+    def test_the_answer_is_read_from_the_permission_itself(self):
+        self.assertEqual(self.answer('Granted', frozen=True), ['open'])
+        self.assertEqual(self.answer('Denied', frozen=True), ['denied'])
+        # From source Qt always says no; macOS asks for the terminal when the microphone opens.
+        self.assertEqual(self.answer('Denied', frozen=False), ['open'])

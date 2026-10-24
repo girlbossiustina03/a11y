@@ -258,11 +258,14 @@ class VoiceListener(QObject):
         return 'denied' if paths.frozen() else 'granted'
 
     def permission_answered(self, permission):
-        from PyQt6.QtCore import QCoreApplication, Qt
-        app = QCoreApplication.instance()
+        from PyQt6.QtCore import Qt
         if self.mode != 'loading':
             return  # voice was turned off while macOS asked
-        if app is not None and app.checkPermission(permission) == Qt.PermissionStatus.Granted:
+        # Qt hands back a plain QPermission, which checkPermission() rejects; it carries the answer.
+        granted = permission.status() == Qt.PermissionStatus.Granted
+        # From source Qt always says no (Python has no usage description); macOS then asks for the
+        # terminal app when the microphone opens, as microphone_permission() explains.
+        if granted or not paths.frozen():
             self.open_microphone()
         else:
             self.microphone_denied()
