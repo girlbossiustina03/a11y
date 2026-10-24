@@ -13,7 +13,8 @@ from .terminal_theme import palette as load_palette, saved_appearance
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QFrame, QVBoxLayout, QHBoxLayout, QPushButton,
     QPlainTextEdit, QLabel, QAbstractButton, QMenu, QScrollArea, QGraphicsDropShadowEffect)
-from PyQt6.QtCore import Qt, QTimer, QPoint, QPointF, QRectF, QElapsedTimer, pyqtSignal, QRect, QSize, QEvent
+from PyQt6.QtCore import (Qt, QTimer, QPoint, QPointF, QRectF, QElapsedTimer, pyqtSignal, QRect, QSize, QEvent,
+                          QVariantAnimation, QEasingCurve)
 from PyQt6.QtGui import (QPainter, QPainterPath, QColor, QPen, QShortcut, QKeySequence, QFontMetrics, QFontMetricsF,
                          QTextLayout, QTextOption, QFont, QFontDatabase, QRawFont, QTextCursor, QTextCharFormat)
 
@@ -25,6 +26,8 @@ REPLY_WIDTH = 320    # how far the reply window shows to her right
 TYPE_STEP_MS = 16
 TYPE_CHARS = 3       # ~190 characters a second
 SLEEP_AFTER_MS = 10*60*1000
+OPEN_MS = 220       # the input sliding open under the face
+REPLY_OPEN_MS = 260  # the reply window sliding out from under her
 
 
 def monospace_font(name='', size=12.0):
@@ -84,7 +87,7 @@ QPushButton#choicePill[danger="true"] {{color:{p.red};}}
 QPushButton#quietButton {{border:0;padding:2px 4px;color:{p.dim};font-size:{small}pt;}}
 QPushButton#quietButton:hover {{color:{p.text};}}
 QPushButton#contextButton {{border:0;color:{p.dim};font-size:{small}pt;padding:2px 0;}}
-QPushButton#sendButton {{border:0;padding:0;color:{p.dim};text-align:center;min-width:24px;max-width:24px;min-height:24px;max-height:24px;}}
+QPushButton#sendButton {{border:0;padding:0;color:{p.dim};text-align:center;}}
 QPushButton#sendButton:hover {{color:{p.green};background:transparent;}}
 QPushButton#sendButton:focus {{border:1px solid {p.cyan};}}
 QScrollArea,QScrollArea > QWidget > QWidget {{background:transparent;border:0;}}
@@ -316,8 +319,10 @@ class Mascot(QWidget):
         self.status.hide()
         frame.addWidget(self.status)
         frame.addStretch(1)
-        # The prompt part: the last thing you asked and the input. Collapsing hides it.
-        self.card = QWidget()
+        # The prompt part: the last thing you asked and the input. It sits in a drawer that
+        # opens under the face, so opening and collapsing can slide instead of jump.
+        self.drawer = QWidget()
+        self.card = QWidget(self.drawer)
         self.card.setObjectName('conversationCard')
         card = QVBoxLayout(self.card)
         self.card_layout = card
@@ -336,6 +341,7 @@ class Mascot(QWidget):
         entry.setSpacing(8)
         self.prompt_mark = QLabel('❯')
         self.prompt_mark.setObjectName('promptMark')
+        self.prompt_mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
         entry.addWidget(self.prompt_mark, 0, Qt.AlignmentFlag.AlignTop)
         self.input = Composer()
         self.input.setObjectName('composer')
@@ -360,11 +366,19 @@ class Mascot(QWidget):
         self.send.setObjectName('sendButton')
         self.send.setToolTip('Send message · Enter')
         self.send.setAccessibleName('Send your message')
-        self.send.setFixedSize(24, 24)
         self.send.clicked.connect(self.submit)
         entry.addWidget(self.send, 0, Qt.AlignmentFlag.AlignBottom)
         card.addWidget(self.entry_row)
-        frame.addWidget(self.card)
+        frame.addWidget(self.drawer)
+        self.drawer_open = 1.0
+        self.reply_open = 1.0
+        self.reply_side = 'right'
+        self.animations = {}
+        for name in ('drawer_open', 'reply_open'):
+            animation = QVariantAnimation(self)
+            animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+            animation.valueChanged.connect(lambda value, n=name: self.animation_step(n, value))
+            self.animations[name] = animation
 
         shadow = QGraphicsDropShadowEffect(self.window_frame)
         shadow.setBlurRadius(16)
@@ -385,7 +399,7 @@ class Mascot(QWidget):
         for key, delta in [('Left',(-20,0)), ('Right',(20,0)), ('Up',(0,-20)), ('Down',(0,20))]:
             shortcut = QShortcut(QKeySequence('Alt+'+key), self)
             shortcut.activated.connect(lambda d=delta: self.move(self.pos()+QPoint(*d)))
-        QShortcut(QKeySequence('Escape'), self).activated.connect(self.collapse_chat)
+        QShortcut(QKeySequence('Escape'), self).activated.connect(lambda: self.collapse_chat(animate=True))
         QShortcut(QKeySequence('Shift+F10'), self).activated.connect(lambda: self.show_menu())
         QShortcut(QKeySequence('Menu'), self).activated.connect(lambda: self.show_menu())
 
@@ -406,6 +420,12 @@ class Mascot(QWidget):
             dot.update()
         self.character.set_font(self.mono)
         self.input.setFixedHeight(self.line_height()+2)
+        # The ❯ mark and ⏎ sit on the first and last line of the input, centred on it.
+        self.prompt_mark.setFixedHeight(self.line_height()+2)
+        side = self.line_height()+2
+        # In the stylesheet too: its QPushButton min-height would otherwise let the row squeeze it.
+        self.send.setStyleSheet(f'min-width:{side}px;max-width:{side}px;min-height:{side}px;max-height:{side}px;')
+        self.send.setFixedSize(side, side)
         if self.isVisible():
             self.fit_on_screen(self.character.mapToGlobal(QPoint()))
         self.update()
@@ -416,8 +436,7 @@ class Mascot(QWidget):
     # Layout: both windows are placed by hand, hers on top of the reply's left part.
 
     def frame_width(self):
-        if self.user_collapsed:
-            return self.character.width()
+        """Her width never changes; opening the input only makes her taller."""
         return self.expanded_width
 
     def relayout(self):
@@ -425,31 +444,87 @@ class Mascot(QWidget):
             return
         width = self.frame_width()
         self.window_frame.setFixedWidth(width)
-        self.card.setVisible(not self.user_collapsed)
-        self.window_frame.layout().setContentsMargins(0, 0, 0, 10 if self.user_collapsed else 0)
-        for widget in (self.entry_row, self.card, self.window_frame):  # measure with the input's new height
+        self.card.setVisible(not self.user_collapsed or self.drawer_open > 0)
+        self.card.setFixedWidth(width)
+        for widget in (self.entry_row, self.card):  # measure with the input's new height
             widget.layout().invalidate()
+        self.card.layout().activate()
+        card_height = self.card.sizeHint().height()
+        self.card.setGeometry(0, 0, width, card_height)
+        self.drawer.setFixedHeight(round(card_height*self.drawer_open))
+        self.window_frame.layout().setContentsMargins(0, 0, 0, round(10*(1-self.drawer_open)))
+        self.window_frame.layout().invalidate()
         self.window_frame.layout().activate()
         height = self.window_frame.sizeHint().height()
-        self.window_frame.setFixedHeight(height)
-        self.window_frame.setGeometry(MARGIN, MARGIN, width, height)
         showing_reply = self.reply_panel.isVisibleTo(self)
+        left = MARGIN+(REPLY_WIDTH if showing_reply and self.reply_side == 'left' else 0)
+        self.window_frame.setFixedHeight(height)
+        self.window_frame.setGeometry(left, MARGIN, width, height)
         if showing_reply:
-            self.layout_reply(width, height)
+            self.layout_reply(left, width, height)
         self.setFixedSize(2*MARGIN+width+(REPLY_WIDTH if showing_reply else 0), 2*MARGIN+height)
         self.reply_panel.lower()
         self.window_frame.raise_()
 
-    def layout_reply(self, width, height):
-        """Shorter than her window, as tall as its text needs."""
+    def layout_reply(self, left, width, height):
+        """Shorter than her window, as tall as its text needs. It shares her top edge and the
+        edge on the side it opens from, and slides out from under her (reply_open)."""
         inner = REPLY_WIDTH-30
         self.reply_content.setFixedWidth(inner)
         self.reply_content.layout().activate()
         wanted = self.reply_content.sizeHint().height()
-        tallest = height-24
-        reply_height = max(TITLE_HEIGHT+56, min(tallest, wanted))
-        self.reply_panel.setGeometry(MARGIN, MARGIN, width+REPLY_WIDTH, reply_height)
-        self.reply_content.setGeometry(width+16, 0, inner, reply_height)
+        reply_height = max(TITLE_HEIGHT+56, min(height-24, wanted))
+        shown = round(REPLY_WIDTH*self.reply_open)
+        if self.reply_side == 'left':
+            self.reply_panel.setGeometry(left-shown, MARGIN, width+shown, reply_height)
+            self.reply_content.setGeometry(14-(REPLY_WIDTH-shown), 0, inner, reply_height)
+        else:
+            self.reply_panel.setGeometry(left, MARGIN, width+shown, reply_height)
+            self.reply_content.setGeometry(width+16, 0, inner, reply_height)
+
+    def choose_reply_side(self):
+        """Right of her when the screen has room there, else left."""
+        area = self.screen().availableGeometry()
+        frame_left = self.x()+self.window_frame.x()
+        if frame_left+self.frame_width()+REPLY_WIDTH <= area.right()+1 or frame_left-REPLY_WIDTH < area.left():
+            self.reply_side = 'right'
+        else:
+            self.reply_side = 'left'
+
+    def open_reply(self):
+        """Show the reply window on the side with room, sliding out from under her."""
+        if self.reply_panel.isVisibleTo(self):
+            return
+        anchor = self.character.mapToGlobal(QPoint())
+        self.choose_reply_side()
+        self.reply_open = 0.0
+        self.reply_panel.show()
+        self.fit_on_screen(anchor)
+        self.animate('reply_open', 1.0, REPLY_OPEN_MS)
+
+    def animate(self, name, target, duration):
+        animation = self.animations[name]
+        animation.stop()
+        start = getattr(self, name)
+        if self.reduced_motion or not self.isVisible() or start == target:
+            self.animation_step(name, target)
+            return
+        animation.setStartValue(float(start))
+        animation.setEndValue(float(target))
+        animation.setDuration(duration)
+        animation.start()
+
+    def animation_step(self, name, value):
+        setattr(self, name, float(value))
+        if not self.stretching:
+            self.fit_on_screen()
+
+    def finish_animations(self):
+        """Jump running slides to their end (tests, and before a move)."""
+        for name, animation in self.animations.items():
+            if animation.state() == QVariantAnimation.State.Running:
+                animation.stop()
+                self.animation_step(name, animation.endValue())
 
     def place_on_screen(self):
         area = self.screen().availableGeometry()
@@ -467,6 +542,7 @@ class Mascot(QWidget):
     # Movement: one big stretch, like resizing a window yourself, then back.
 
     def begin_stretch(self):
+        self.finish_animations()
         self.stretching = True
         self.reply_panel.hide()
         self.setMinimumSize(0, 0)
@@ -536,9 +612,13 @@ class Mascot(QWidget):
         self.update_interaction_state()
         self.entry_row.setVisible(placeholder is not None or compact)
         self.reply_available = bool(message) or bool(choices)
-        self.reply_panel.setVisible(self.reply_available and not self.user_collapsed)
+        showing = self.reply_available and not self.user_collapsed
+        if not showing:
+            self.reply_panel.hide()
         self.grow_prompt()
         self.fit_on_screen(anchor)
+        if showing:
+            self.open_reply()
         if placeholder is not None and self.card.isVisible() and self.isActiveWindow():
             self.input.setFocus()
 
@@ -695,21 +775,32 @@ class Mascot(QWidget):
         self.reduced_motion = enabled
         if enabled:
             self.finish_typing()
+            self.finish_animations()
         self.character.set_reduced_motion(enabled)
 
-    def collapse_chat(self):
+    def collapse_chat(self, *, animate=False):
+        """Close the input drawer. Code that moves her right after (moves, guidance) collapses
+        at once, so her size is final; a click on her slides it shut."""
         anchor = self.character.mapToGlobal(QPoint())
         self.user_collapsed = True
         self.reply_panel.hide()
-        self.fit_on_screen(anchor)
+        if animate:
+            self.fit_on_screen(anchor)
+            self.animate('drawer_open', 0.0, OPEN_MS)
+        else:
+            self.animations['drawer_open'].stop()
+            self.drawer_open = 0.0
+            self.fit_on_screen(anchor)
         self.character.setFocus()
 
     def expand_chat(self):
+        """Slide the input open under the face."""
         anchor = self.character.mapToGlobal(QPoint())
         self.user_collapsed = False
         self.reply_panel.hide()
         self.grow_prompt()
         self.fit_on_screen(anchor)
+        self.animate('drawer_open', 1.0, OPEN_MS)
         self.character.wake()
         if self.entry_row.isVisible():
             self.input.setFocus()
@@ -718,7 +809,7 @@ class Mascot(QWidget):
         if self.user_collapsed or self.card.isHidden():
             self.expand_chat()
         else:
-            self.collapse_chat()
+            self.collapse_chat(animate=True)
 
     def set_screen_vision_indicator(self, enabled):
         if self.prompt_settings.property('screenVision') == enabled:
@@ -735,9 +826,7 @@ class Mascot(QWidget):
     def show_reply(self):
         if self.reply_available:
             self.expand_chat()
-            anchor = self.character.mapToGlobal(QPoint())
-            self.reply_panel.show()
-            self.fit_on_screen(anchor)
+            self.open_reply()
 
     def show_menu(self, position=None):
         menu = RoundedMenu(self)

@@ -15,7 +15,7 @@ if HAS_QT:
     from PyQt6.QtWidgets import QApplication, QPushButton
     from companion import faces
     from companion.desktop import CompanionWindow
-    from companion.mascot import MARGIN, TITLE_HEIGHT, SLEEP_AFTER_MS
+    from companion.mascot import MARGIN, TITLE_HEIGHT, SLEEP_AFTER_MS, REPLY_WIDTH
     from companion.terminal_theme import saved_appearance
     from companion.models import Identity
     from companion.service import Companion
@@ -54,6 +54,7 @@ class NativeTests(unittest.TestCase):
         self.qt.processEvents()
         # Most widget tests exercise a user-opened conversation, not startup.
         self.window.mascot.character.click()
+        self.window.mascot.finish_animations()
         self.qt.processEvents()
 
     def tearDown(self):
@@ -794,9 +795,9 @@ class NativeTests(unittest.TestCase):
         mascot.collapse_chat()
         self.qt.processEvents()
         self.assertFalse(mascot.card.isVisible())
-        # Collapsed she is a small window: the title bar and the face, nothing else.
-        self.assertEqual(mascot.window_frame.width(), mascot.character.width())
-        self.assertEqual(mascot.width(), mascot.character.width()+2*MARGIN)
+        # Collapsed: the title bar and the face, at the same width as when open.
+        self.assertEqual(mascot.window_frame.width(), 300)
+        self.assertEqual(mascot.width(), 300+2*MARGIN)
         self.assertLessEqual(mascot.height(), mascot.character.height()+TITLE_HEIGHT+2*MARGIN+12)
         self.assertEqual(mascot.character.mapToGlobal(QPoint()), anchor)
         self.assertFalse(any(b.isVisible() for b in mascot.findChildren(QPushButton)))
@@ -812,7 +813,7 @@ class NativeTests(unittest.TestCase):
         self.qt.processEvents()
         self.assertFalse(mascot.card.isVisible())
         self.assertFalse(mascot.reply_panel.isVisible())
-        self.assertEqual(mascot.width(), mascot.character.width()+2*MARGIN)
+        self.assertEqual(mascot.width(), 300+2*MARGIN)
         mascot.character.click()
         self.qt.processEvents()
         self.assertIn('A response arrived', mascot.bubble.toPlainText())
@@ -966,9 +967,13 @@ class NativeTests(unittest.TestCase):
 
     def test_reply_window_lies_under_hers_and_shows_to_the_right(self):
         mascot = self.window.mascot
+        area = mascot.screen().availableGeometry()
+        mascot.move(area.left()+20, area.top()+40)              # room on her right
         self.window.mascot_home('Here is an answer.')
+        mascot.finish_animations()
         self.qt.processEvents()
         self.assertTrue(mascot.reply_panel.isVisible())
+        self.assertEqual(mascot.reply_side, 'right')
         mine, reply = mascot.window_frame.geometry(), mascot.reply_panel.geometry()
         self.assertEqual(reply.topLeft(), mine.topLeft())       # same top and left edges
         self.assertGreater(reply.right(), mine.right())         # sticks out to her right
@@ -978,12 +983,49 @@ class NativeTests(unittest.TestCase):
         text = mascot.bubble.mapTo(mascot, QPoint())
         self.assertGreater(text.x(), mine.right())              # text only in the part that shows
         self.assertEqual(mascot.width(), 2*MARGIN+reply.width())
-        self.assertEqual(mascot.bubble.toPlainText(), 'Here is an answer.')
+        # By the right edge of the screen it opens to her left instead, and she stays put.
+        mascot.hide_reply()
+        mascot.move(area.right()-mascot.width()-4, area.top()+40)
+        face = mascot.character.mapToGlobal(QPoint())
+        self.window.mascot_home('Here is another answer.')
+        mascot.finish_animations()
+        self.qt.processEvents()
+        self.assertEqual(mascot.reply_side, 'left')
+        mine, reply = mascot.window_frame.geometry(), mascot.reply_panel.geometry()
+        self.assertEqual((reply.top(), reply.right()), (mine.top(), mine.right()))
+        self.assertLess(reply.left(), mine.left())
+        self.assertLess(mascot.bubble.mapTo(mascot, QPoint()).x()+mascot.bubble.width(), mine.left())
+        self.assertEqual(mascot.character.mapToGlobal(QPoint()), face)
+        self.assertLessEqual(mascot.geometry().right(), area.right())
+        self.assertEqual(mascot.bubble.toPlainText(), 'Here is another answer.')
         mascot.collapse_chat()
         mascot.character.click()
         self.qt.processEvents()
         self.assertTrue(mascot.card.isVisible())
         self.assertFalse(mascot.reply_panel.isVisible())
+
+    def test_opening_and_the_reply_slide_instead_of_jumping(self):
+        mascot = self.window.mascot
+        mascot.set_reduced_motion(False)
+        mascot.collapse_chat(animate=True)
+        self.assertTrue(mascot.card.isVisible())                 # still sliding shut
+        mascot.finish_animations()
+        self.assertFalse(mascot.card.isVisible())
+        closed = mascot.height()
+        mascot.character.click()
+        self.qt.processEvents()
+        self.assertLess(mascot.height(), closed+mascot.card.height())  # opening, not open yet
+        deadline = time.monotonic()+2
+        while mascot.animations['drawer_open'].state() == mascot.animations['drawer_open'].State.Running and time.monotonic() < deadline:
+            QTest.qWait(20)
+        self.assertEqual(mascot.drawer.height(), mascot.card.height())
+        mascot.present('Here it is.', compact=True)
+        self.assertLess(mascot.reply_panel.width(), mascot.window_frame.width()+REPLY_WIDTH)  # sliding out
+        mascot.finish_animations()
+        self.assertEqual(mascot.reply_panel.width(), mascot.window_frame.width()+REPLY_WIDTH)
+        mascot.set_reduced_motion(True)
+        mascot.collapse_chat(animate=True)
+        self.assertFalse(mascot.card.isVisible())                # reduced motion: no slide
 
     def test_reply_types_out_but_its_whole_text_is_there_at_once(self):
         mascot = self.window.mascot

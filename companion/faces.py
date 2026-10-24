@@ -13,23 +13,23 @@ SLOTS = '123'
 DEFAULT_SKIN = 'blob'
 
 
-def marks(width=2):
-    """The '3' slot per state: a spinner while thinking or working, z's while asleep."""
-    blank = ' '*width
-    return {'thinking': [c+' '*(width-1) for c in SPINNER], 'working': [c+' '*(width-1) for c in SPINNER],
-            'sleeping': ['z'+' '*(width-1), ' '*(width-1)+'z'], 'stuck': [' '*(width-1)+'!'],
-            'listening': [blank]}
+def marks(blank='  '):
+    """The '3' slot per state: a spinner while thinking or working, z's while asleep. blank
+    is what the slot shows otherwise (part of the outline when the mark sits in it)."""
+    pad = blank[1:]
+    return {'thinking': [c+pad for c in SPINNER], 'working': [c+pad for c in SPINNER],
+            'sleeping': ['z'+pad, blank[:1]+'z'], 'stuck': [blank[:1]+'!'], 'listening': [blank]}
 
 
-def skin(template, eyes, mouths):
+def skin(template, eyes, mouths, blank='  '):
     """Frames per state from one template: eyes[state] is rows, mouths[state] is a string
     or a list of strings (frames)."""
     states = {}
-    mark = marks()
+    mark = marks(blank)
     for state in STATES:
         mouth = mouths.get(state, mouths['idle'])
         mouth_frames = mouth if isinstance(mouth, list) else [mouth]
-        mark_frames = mark.get(state, ['  '])
+        mark_frames = mark.get(state, [blank])
         count = max(len(mouth_frames), len(mark_frames))
         states[state] = [fill(template, {'1': eyes.get(state, eyes['idle']),
                                          '2': [mouth_frames[i % len(mouth_frames)]],
@@ -99,7 +99,7 @@ GOGGLES = skin([
 }, mouths={
     'idle': '╰──╯', 'speaking': ['╰──╯', '╰▄▄╯'], 'listening': ' ╭╮ ', 'thinking': ' ~~ ',
     'working': '────', 'done': '╲▁▁╱', 'stuck': '╭──╮', 'sleeping': ' ── ',
-})
+}, blank='──')
 
 CAT = skin([
     '  ╱▔╲          ╱▔╲33',

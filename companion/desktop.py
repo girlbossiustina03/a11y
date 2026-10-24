@@ -1423,8 +1423,7 @@ class CompanionWindow(QMainWindow):
             return
         end = QRect(position, start.size())
         reach = start.united(end)
-        grow, settle = QEasingCurve(QEasingCurve.Type.InOutCubic), QEasingCurve(QEasingCurve.Type.OutBack)
-        settle.setOvershoot(1.1)
+        grow, settle = QEasingCurve(QEasingCurve.Type.InOutCubic), QEasingCurve(QEasingCurve.Type.OutCubic)
         def between(a, b, t):
             return QRect(round(a.x()+(b.x()-a.x())*t), round(a.y()+(b.y()-a.y())*t),
                          max(1, round(a.width()+(b.width()-a.width())*t)), max(1, round(a.height()+(b.height()-a.height())*t)))
