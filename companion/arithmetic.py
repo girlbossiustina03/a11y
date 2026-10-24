@@ -91,6 +91,13 @@ def keypad(goal):
     tail = re.split(r'\bcalculator\b', goal, flags=re.I)[-1]
     tail = re.sub(r'^\s*(?:and|then|to|,)*\s*(?:sum|add|calculate|compute|do|work out|type|enter)?\s*', '', tail, flags=re.I)
     expr = expression(tail)
+    if expr is None:
+        # "…and in it calculate 234 divided by 298": the arithmetic wherever it is in the rest.
+        body = tail
+        for pattern, symbol in WORDS:
+            body = re.sub(pattern, symbol, body, flags=re.I)
+        spans = re.findall(r'[\d.(][\d\s.+\-*/%()]*[\d)]', body)
+        expr = next((found for found in map(expression, sorted(spans, key=len, reverse=True)) if found), None)
     if expr is None or re.search(r'[()%]|\*\*', expr):
         return None
     keys = ['clear']

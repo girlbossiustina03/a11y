@@ -150,7 +150,10 @@ class MacDesktopBridge:
                 raise RuntimeError('Music could not open Apple Music search.')
             return {'submitted': True, 'verification_required': True, 'url': url}
         if kind == 'browse_url':
-            return self.call('--browse', action['bundle_id'], action['url'], action.get('browser_mode', 'default'))
+            return self.call('--browse', action['bundle_id'], action['url'], action.get('browser_mode', 'default'),
+                             *((action['window_hint'],) if action.get('window_hint') else ()))
+        if kind == 'close_tab':
+            return self.call('--close-tab', action['bundle_id'])
         if kind == 'close_window':
             return self.call('--close-window', action['bundle_id'], action['window_id'].rsplit(':', 1)[1],
                              action['window_title'], json.dumps(action['bounds']))
@@ -310,6 +313,10 @@ class DesktopContext:
                     raise ValueError('New-window automation is currently available only for Terminal.')
                 verb = {'launch_app': 'Open ', 'quit_app': 'Quit ', 'new_window': 'Open a new window in '}[kind]
                 return {'type': kind, 'bundle_id': app['bundle_id'], 'label': verb+app['name']}
+        elif kind == 'close_tab' and set(action) == {'type', 'bundle_id'} and action['bundle_id'] in ('com.apple.Safari', 'com.google.Chrome', 'com.microsoft.edgemac'):
+            app = next((a for a in context.get('available_apps', []) if a['bundle_id'] == action['bundle_id']), None)
+            if app:
+                return {'type': kind, 'bundle_id': app['bundle_id'], 'label': 'Close the current '+app['name']+' tab'}
         elif kind == 'close_window' and set(action) == {'type', 'window_id'}:
             window = next((item for item in context.get('app_windows', [])
                            if item['window_id'] == action['window_id'] and item.get('can_close')), None)
@@ -382,7 +389,7 @@ class DesktopContext:
                 raise RuntimeError('The browser did not confirm accepting that address. Nothing will be retried automatically.')
             self.collect_once()
             return result
-        fields = ('type', 'window_id') if proposal['type'] == 'close_window' else ('type', 'bundle_id')
+        fields = ('type', 'window_id') if proposal['type'] == 'close_window' else ('type', 'bundle_id')  # close_tab too
         current = self.authorize_action({key: proposal[key] for key in fields})
         if proposal['type'] == 'close_window' and any(current[key] != proposal.get(key) for key in ('window_title', 'bounds', 'bundle_id')):
             raise ValueError('That window changed. Ask again before closing it.')

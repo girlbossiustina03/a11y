@@ -147,8 +147,8 @@ def validate_response(value, allowed_sources, *, planning=False, has_screen=Fals
                                             confirmation_label=('Right-click' if action.get('button') == 'right' else 'Double-click' if action.get('click_count', 1) == 2 else 'Click')+' “'+action['label']+'”')
         elif isinstance(action, dict) and action.get('type') == 'browse_url':
             from urllib.parse import urlsplit
-            keys(action, ('type', 'bundle_id', 'url', 'label', 'browser_mode'), ('type', 'bundle_id', 'url', 'label'))
-            if action.get('browser_mode', 'default') not in ('default', 'window', 'tab'):
+            keys(action, ('type', 'bundle_id', 'url', 'label', 'browser_mode', 'window_hint'), ('type', 'bundle_id', 'url', 'label'))
+            if action.get('browser_mode', 'default') not in ('default', 'window', 'tab', 'current') or len(str(action.get('window_hint', ''))) > 80:
                 raise ValidationError('Invalid browser window mode.')
             url = urlsplit(action['url']) if isinstance(action['url'], str) else None
             if not url or url.scheme not in ('http', 'https') or not url.hostname or url.username or url.password or len(action['url']) > 4000:

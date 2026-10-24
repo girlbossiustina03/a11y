@@ -1052,3 +1052,41 @@ class StaleObservationTests(Harness):
         step = self.propose(ComputerTask('switch to the calculator', automatic=True, goal_mode='inspect'))
         self.assertEqual(step['action']['type'], 'focus_app')
         self.assertEqual(self.provider.complete_structured.call_count, 1)
+
+
+class AskedForSensitiveTests(Harness):
+    """"Sign me in with my passwords" was refused as "inspection-only" three times (live); what the
+    goal asks for is proposed for confirmation instead. What it does not ask for is still refused."""
+    snapshot = dict(CALCULATOR, controls=[], app={'name': 'Safari', 'bundle_id': 'com.apple.Safari', 'pid': 7})
+    regions = [region('Sign in', .5, .5), region('Delete account', .5, .7)]
+
+    def click(self, goal, label, y):
+        self.provider.complete_structured.return_value = {'status': 'action', 'message': 'Sign in.', 'risk': 'change',
+                                                         'action': {'type': 'click_point', 'x': .54, 'y': y, 'label': label}}
+        return self.propose(ComputerTask(goal, automatic=True, goal_mode='inspect'))
+
+    def test_the_sign_in_the_user_asked_for_waits_for_confirmation(self):
+        step = self.click('sign me in with my passwords', 'Sign in', .515)
+        self.assertEqual(step['action']['label'], 'Sign in')
+        self.assertTrue(step['review'])
+
+    def test_a_sensitive_click_the_goal_does_not_mention_is_still_refused(self):
+        with self.assertRaises(Exception):
+            self.click('sign me in with my passwords', 'Delete account', .715)
+        with self.assertRaises(Exception):
+            self.click('check my notifications', 'Sign in', .515)
+
+
+class VoiceImportTests(unittest.TestCase):
+    """Voice never started: the voice start and the readiness check imported faster_whisper at the
+    same time and Python 3.14 reported an import deadlock (live log)."""
+
+    def test_every_faster_whisper_import_shares_one_lock(self):
+        import inspect
+        from companion import installer, voice
+        self.assertTrue(hasattr(voice.WHISPER_IMPORT, 'acquire'))
+        for module in (voice, installer):
+            source = inspect.getsource(module)
+            for line in [l for l in source.splitlines() if 'faster_whisper' in l and ('import' in l) and 'find_spec' not in l and not l.strip().startswith('#')]:
+                index = source.splitlines().index(line)
+                self.assertIn('WHISPER_IMPORT', source.splitlines()[index-1], line)

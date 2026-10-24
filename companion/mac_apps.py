@@ -338,6 +338,13 @@ def describe_files(paths, folder, now=None):
 def open_file(target, home=None, opener=subprocess.run):
     """Open the named or newest file from Downloads/Desktop/Documents; non-documents are only revealed."""
     wanted = (target or '').strip()
+    from pathlib import Path
+    named = re.sub(r'^(?:my|the)\s+|\s+folder$', '', wanted, flags=re.I).strip()
+    folder_path = (home or Path.home())/named if named and '/' not in named and not named.startswith('.') else None
+    if folder_path is not None and folder_path.is_dir():
+        # "Open my Movies folder": a folder in the home folder opens in Finder.
+        opener(['open', str(folder_path)], capture_output=True, timeout=15)
+        return 'Opened '+folder_path.name+'.'
     folder = next((key for key in FOLDERS if key in wanted.casefold()), '')
     candidates = recent_files(folder, home, limit=200)
     plain = re.sub(r'\b(latest|last|newest|recent|most recent|my|the|file|download|downloads|desktop|documents?)\b', ' ', wanted.casefold()).strip()

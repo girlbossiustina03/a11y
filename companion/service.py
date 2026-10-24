@@ -287,6 +287,29 @@ def plain_text(message):
     return re.sub(r'\n{3,}', '\n\n', message).strip()
 
 
+# "close this tab", "close the current Safari tab".
+CLOSE_TAB = re.compile(r'^\W*(?:please\s+)?close\b.*\btabs?\b', re.I)
+CURRENT_TAB = re.compile(r"\b(?:this|current|same|that|already open(?:ed)?|existing|open)\s+(?:safari\s+|chrome\s+|browser\s+)?(?:window|tab)\b|\bhere\b", re.I)
+NAMED_WINDOW = re.compile(r"\bin\s+the\s+([\w.'-]+(?:\s+[\w.'-]+)?)\s+(?:safari\s+|chrome\s+|browser\s+)?(?:window|tab)\b", re.I)
+
+
+def current_tab(request):
+    """(True, title hint) when a browser request means a tab that is already open."""
+    named = NAMED_WINDOW.search(request)
+    hint = named.group(1) if named and named.group(1).casefold().split()[0] not in ('new', 'other', 'another', 'next', 'same', 'current', 'this', 'safari', 'chrome') else ''
+    return bool(CURRENT_TAB.search(request) or hint), hint
+
+
+def two_sentences(message, words=50):
+    """At most two sentences and about 50 words; lists and multi-line answers are left alone."""
+    if '\n' in message.strip():
+        return message
+    sentences = re.split(r'(?<=[.!?])\s+', message.strip())  # a dot inside an address is not an end
+    short = ' '.join(sentence.strip() for sentence in sentences[:2]).strip() or message.strip()
+    cut = short.split()
+    return short if len(cut) <= words else ' '.join(cut[:words]).rstrip(',;:')+'…'
+
+
 def geometric_destination(phrase):
     """An unambiguous edge/corner/center named in a movement request, else None.
 
@@ -387,12 +410,13 @@ class Companion:
                        'endpoint': config.base_url if config else 'test-provider',
                        'model': config.model if config else 'test-provider'}}
 
-    def browser_action(self, operation, app_name, target, browser_mode='default'):
+    def browser_action(self, operation, app_name, target, browser_mode='default', window_hint=''):
         """Deterministic browse_url for an interpreted browser request, or None."""
         from .desktop_context import BROWSER_IDS
         catalog = self.desktop_context.installed_apps()
         from .desktop_context import default_browser_id
-        preferred = default_browser_id()
+        # The current tab belongs to the browser in front (or open), not necessarily the default one.
+        preferred = (self.front_browser() if browser_mode == 'current' else None) or default_browser_id()
         default = next((app['name'] for app in catalog if preferred and app['bundle_id'].casefold() == preferred.casefold()), None)
         default = default or ('Safari' if any(app['bundle_id'] == 'com.apple.Safari' for app in catalog) else 'Microsoft Edge')
         matches = [app for app in resolve_app(app_name or default, catalog) if app['bundle_id'] in BROWSER_IDS]
@@ -411,7 +435,10 @@ class Companion:
             return None
         app = matches[0]
         label = ('Search '+app['name']+' for “'+target+'”') if searching else ('Open '+target+' in '+app['name'])
-        return {'type': 'browse_url', 'bundle_id': app['bundle_id'], 'url': url, 'label': label, 'browser_mode': browser_mode}
+        if browser_mode == 'current':
+            label += ' in the current tab'
+        return {'type': 'browse_url', 'bundle_id': app['bundle_id'], 'url': url, 'label': label, 'browser_mode': browser_mode,
+                **({'window_hint': window_hint} if window_hint else {})}
 
     def mail_app_running(self):
         """True when a desktop mail client is open, so email requests work in it."""
@@ -506,6 +533,26 @@ class Companion:
         """True when a launch request says more than the app's name: "in System Settings, open Displays"."""
         words = set(re.findall(r"[\w'-]+", request.casefold()))-set(re.findall(r"[\w'-]+", app_name.casefold()))
         return bool(words-LAUNCH_FILLER)
+
+    def named_installed_app(self, request, writes=False):
+        """An installed app, not a browser, that the request names ("the App Store", "TextEdit").
+        For writes only after in/into/with/using, since a reminder's text can mention any app."""
+        from .app_names import normalized
+        from .desktop_context import BROWSER_IDS
+        try:
+            catalog = [app for app in self.desktop_context.installed_apps() if app['bundle_id'] not in BROWSER_IDS]
+        except (RuntimeError, ValueError, OSError, AttributeError):
+            return None
+        text = request
+        if writes:
+            spans = re.findall(r'\b(?:in|into|with|using)\s+(?:a\s+|an\s+|the\s+|my\s+|new\s+)*((?:[\w.&+-]+\s*){1,3})', request, re.I)
+            text = ' '.join(spans)
+        words = re.findall(r"[\w.&+'-]+", text.casefold())
+        spans = {normalized(' '.join(words[i:i+n])): ' '.join(words[i:i+n]) for n in (1, 2, 3) for i in range(len(words)-n+1)}
+        for app in sorted(catalog, key=lambda item: -len(item['name'])):
+            if len(normalized(app['name'])) > 3 and normalized(app['name']) in spans:
+                return app['name']
+        return None
 
     def names_any_app(self, request):
         """True when the request names an installed app or a known web app ("Teams", "Mail")."""
@@ -638,6 +685,10 @@ class Companion:
             # "Click on Chat." with an earlier email.
             self.last_request_plan = {'operation': 'computer_task', 'app_name': '', 'target': request, 'computed': True}
             return self.last_request_plan
+        if CLOSE_TAB.search(request) and self.front_browser():
+            # "Close this Safari tab" closed the whole window (live): a tab is its own operation.
+            self.last_request_plan = {'operation': 'close_tab', 'app_name': '', 'target': '', 'computed': True}
+            return self.last_request_plan
         fast = simple_app_command(request)
         if fast is not None and fast['operation'] != 'launch_app':
             observed = self.desktop_context.context()
@@ -702,6 +753,29 @@ class Companion:
                     # open the named site, then search there.
                     from .request_plan import with_opening
                     interpreted = with_opening(dict(interpreted, operation='browser_open', target=site[1], remaining_request=''), request)
+            acts = interpreted.pop('acts_on_computer', None) is True
+            from .request_plan import highlight_only
+            if acts and (interpreted.get('operation') in ('answer', 'inspect_screen', 'move_object', 'read_page')
+                         or interpreted.get('operation') == 'highlight' and not highlight_only(request)):
+                # The router said the user wants something done ("I want to see my Battery settings",
+                # "show me Pictures in Finder", "look up quixotic in the Dictionary app") but picked a
+                # chat, a description or a highlight (live, varied suite): it is a task.
+                interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
+            if interpreted.get('operation') in ('browser_search', 'browser_open'):
+                app = self.named_installed_app(request)
+                if app:
+                    # "Search the App Store for Notion" searched the web: the named app is where to look.
+                    from .request_plan import with_opening
+                    interpreted = with_opening({'operation': 'launch_app', 'app_name': app, 'target': '', 'browser_mode': 'default',
+                                                'remaining_request': ''}, request)
+            if interpreted.get('operation') in ('create_note', 'add_reminder', 'add_event') and self.named_installed_app(request, writes=True):
+                # "Write '…' in a new TextEdit document" became a note in Notes (live).
+                interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
+            if interpreted.get('operation') in ('browser_search', 'browser_open'):
+                current, hint = current_tab(request)
+                if current:
+                    # "In this window, search for …" / "in the Google window": that tab, not a new one (live).
+                    interpreted = dict(interpreted, browser_mode='current', window_hint=hint)
             if interpreted.get('operation') in ('browser_search', 'browser_open') and not str(interpreted.get('remaining_request', '')).strip():
                 # "search DuckDuckGo for weather in Bucharest and open the first result" lost its second half.
                 target = str(interpreted.get('target', '')).casefold()
@@ -742,6 +816,10 @@ class Companion:
                 remembered = self.converse(request, context)
                 if remembered:
                     interpreted = dict(interpreted, reply=remembered)
+            if (acts and interpreted.get('operation') in BUILT_IN_READS and re.search(
+                    r'\b(?:in|on)\s+(?:the\s+)?(?:%s)(?:\s+app)?\b' % '|'.join(map(re.escape, BUILT_IN_READS[interpreted['operation']][:1])), request, re.I)):
+                # "Show me July 2026 in Calendar" read the events aloud: it asks to see the app.
+                interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
             if interpreted.get('operation') in BUILT_IN_READS and self.names_other_app(request, interpreted['operation'],
                                                                                          str(interpreted.get('target', ''))):
                 # "Check if I have new notifications on Teams" was read from Calendar or Mail (live):
@@ -824,6 +902,9 @@ class Companion:
                     message += ' Still pending: '+receipt['remaining_request']+'; it has not been executed.'
                 return {'desktop_action': None, 'target': None, 'workflow': None, 'sources': [], 'message': message,
                         'effective': self.adaptation.effective(self.identity)}
+        if mode == 'verify' and (self.last_action_result or {}).get('type') == 'close_tab':
+            return {'desktop_action': None, 'target': None, 'workflow': None, 'sources': [], 'message': 'Closed the tab.',
+                    'effective': self.adaptation.effective(self.identity)}
         if mode == 'verify' and (self.last_action_result or {}).get('type') in ('close_window', 'quit_app') and self.desktop_context:
             receipt = self.last_action_result
             label = receipt.get('label', '')
@@ -1011,6 +1092,12 @@ class Companion:
                 if isinstance(seen, dict) and isinstance(seen.get('message'), str) and seen['message'].strip():
                     prebuilt = {'request_kind': 'answer', 'message': seen['message'].strip()[:2000], 'source_ids': [], 'workflow': None,
                                 'target': None, 'desktop_action': None}
+            elif operation == 'close_tab':
+                browser = self.front_browser()
+                prebuilt = {'request_kind': 'answer', 'message': 'Proposed.', 'source_ids': [], 'workflow': None, 'target': None,
+                            'desktop_action': {'type': 'close_tab', 'bundle_id': browser} if browser else None}
+                if not browser:
+                    prebuilt['message'] = 'No browser is open.'
             elif operation == 'capture_once':
                 prebuilt = {'request_kind': 'answer', 'message': 'Ready to capture once. You will review the screenshot before anything is sent.',
                     'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': {'type': 'capture_once'}}
@@ -1026,7 +1113,8 @@ class Companion:
                     prebuilt = {'request_kind': 'answer', 'message': 'I could not identify one installed app named “'+request_plan['app_name']+'”. Please give its exact application name.',
                                 'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
             elif operation in ('browser_search', 'browser_open') and prebuilt is None:
-                action = self.browser_action(operation, request_plan['app_name'], request_plan['target'], request_plan.get('browser_mode', 'default'))
+                action = self.browser_action(operation, request_plan['app_name'], request_plan['target'], request_plan.get('browser_mode', 'default'),
+                                             request_plan.get('window_hint', ''))
                 if action:
                     label = action['label']
                     prebuilt = {'request_kind': 'answer', 'message': 'Ready to '+label[0].lower()+label[1:]+'.',
@@ -1134,10 +1222,13 @@ class Companion:
             response['desktop_action'] = None
             response['target'] = None
         response['message'] = plain_text(response['message'])
+        if not (request_plan and request_plan.get('full_text')) and not sources:
+            # One or two short sentences; a model once narrated its reasoning in six (live).
+            response['message'] = two_sentences(response['message'])
         action = response.get('desktop_action') or {}
-        if action.get('type') in ('launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'press_control', 'browse_url', 'click_point', 'play_media', 'type_text', 'press_key', 'scroll'):
+        if action.get('type') in ('launch_app', 'new_window', 'close_window', 'close_tab', 'quit_app', 'focus_app', 'press_control', 'browse_url', 'click_point', 'play_media', 'type_text', 'press_key', 'scroll'):
             label = action.get('confirmation_label', action['label'])
-            response['message'] = label+'…' if action['type'] in ('launch_app', 'browse_url', 'focus_app', 'new_window', 'play_media', 'close_window', 'quit_app') else 'Ready to '+label[0].lower()+label[1:]+'. Confirm below.'
+            response['message'] = label+'…' if action['type'] in ('launch_app', 'browse_url', 'focus_app', 'new_window', 'play_media', 'close_window', 'close_tab', 'quit_app') else 'Ready to '+label[0].lower()+label[1:]+'. Confirm below.'
         if request_plan and request_plan.get('remaining_request'):
             response['message'] += ' Still pending: '+request_plan['remaining_request']+'; this part has not been executed.'
             if response.get('desktop_action'):

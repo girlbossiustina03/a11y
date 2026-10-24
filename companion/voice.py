@@ -137,7 +137,8 @@ class Transcriber:
                 import os
                 # Model files are cached by Hugging Face Hub; copies instead of symlinks are fine on Windows.
                 os.environ.setdefault('HF_HUB_DISABLE_SYMLINKS_WARNING', '1')
-                from faster_whisper import WhisperModel
+                with WHISPER_IMPORT:
+                    from faster_whisper import WhisperModel
                 self.models[name] = WhisperModel(name, device='cpu', compute_type='int8', cpu_threads=4)
             return self.models[name]
 
@@ -166,10 +167,16 @@ def vad_available():
     return importlib.util.find_spec('onnxruntime') is not None
 
 
+# faster_whisper is imported from the voice start and from the readiness check's thread; on
+# Python 3.14 the two at once deadlocked on its import lock and voice never started (live).
+WHISPER_IMPORT = threading.Lock()
+
+
 def voice_available():
     try:
-        import faster_whisper  # noqa: F401
-        import numpy  # noqa: F401
+        with WHISPER_IMPORT:
+            import faster_whisper  # noqa: F401
+            import numpy  # noqa: F401
         return True
     except ImportError:
         return False

@@ -396,7 +396,9 @@ if let index = args.firstIndex(of: "--browse"), index+2 < args.count {
         emit(["error": "Only an installed supported browser and a public HTTP(S) address are allowed."]); exit(1)
     }
     let mode = index+3 < args.count ? args[index+3] : "default"
-    guard ["default", "window", "tab"].contains(mode) else {
+    // "current": the tab the user is looking at (or the window whose title holds the hint), not a new one.
+    let hint = index+4 < args.count ? args[index+4] : ""
+    guard ["default", "window", "tab", "current"].contains(mode) else {
         emit(["error": "Invalid browser placement."]); exit(1)
     }
     // Reuse an already-open tab for the same site instead of opening another window: the
@@ -408,6 +410,21 @@ if let index = args.firstIndex(of: "--browse"), index+2 < args.count {
     let exact = url.query != nil
     let sitePrefix = (url.scheme ?? "https") + "://" + (url.host ?? "")
     let chromium = ["com.google.Chrome", "com.microsoft.edgemac"]
+    if mode == "current", bundleID == "com.apple.Safari" || chromium.contains(bundleID) {
+        let literal = quoted(url.absoluteString)
+        let pick = hint.isEmpty ? "" : "repeat with w in windows\nif (name of w) contains " + quoted(hint) + " then\nset index of w to 1\nexit repeat\nend if\nend repeat\n"
+        let navigate = bundleID == "com.apple.Safari"
+            ? "if (count of windows) is 0 then\nmake new document with properties {URL:" + literal + "}\nelse\n" + pick + "set URL of current tab of front window to " + literal + "\nend if\nactivate\nreturn {URL of current tab of front window, count of windows, count of tabs of front window}"
+            : "if (count of windows) is 0 then\nmake new window\nend if\n" + pick + "set URL of active tab of front window to " + literal + "\nactivate\nreturn {URL of active tab of front window, count of windows, count of tabs of front window}"
+        var failure: NSDictionary?
+        let observation = NSAppleScript(source: "with timeout of 30 seconds\ntell application id \"" + bundleID + "\"\n" + navigate + "\nend tell\nend timeout")?.executeAndReturnError(&failure)
+        guard failure == nil, let observation else {
+            emit(["error": "The browser did not take the address in its current tab. Nothing else was opened."]); exit(1)
+        }
+        emit(["submitted": true, "verification_required": true, "tab_placement": "current",
+              "browser_observation": ["url": observation.atIndex(1)?.stringValue ?? "", "window_count": observation.atIndex(2)?.int32Value ?? 0,
+                                      "tab_count": observation.atIndex(3)?.int32Value ?? 0]]); exit(0)
+    }
     if (bundleID == "com.apple.Safari" || chromium.contains(bundleID)),
        !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty {
         let test = exact ? "u is " + quoted(url.absoluteString) : "u starts with " + quoted(sitePrefix)
@@ -551,6 +568,18 @@ if let index = args.firstIndex(of: "--close-window"), index+4 < args.count {
     AXUIElementSetMessagingTimeout(close, 1)
     let status = AXUIElementPerformAction(close, kAXPressAction as CFString)
     emit(["submitted": status == .success, "verification_required": true]); exit(0)
+}
+if let index = args.firstIndex(of: "--close-tab"), index+1 < args.count {
+    // The tab in front, not its whole window. Fixed commands; no page content is read.
+    let bundleID = args[index+1]
+    let command = ["com.apple.Safari": "close current tab of front window", "com.google.Chrome": "close active tab of front window",
+                   "com.microsoft.edgemac": "close active tab of front window"][bundleID]
+    guard let command, !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty else {
+        emit(["error": "That browser is not open."]); exit(1)
+    }
+    var failure: NSDictionary?
+    _ = NSAppleScript(source: "with timeout of 10 seconds\ntell application id \"" + bundleID + "\"\nif (count of windows) > 0 then " + command + "\nend tell\nend timeout")?.executeAndReturnError(&failure)
+    emit(failure == nil ? ["submitted": true, "verification_required": true] : ["error": "The browser did not close the tab."]); exit(failure == nil ? 0 : 1)
 }
 if let index = args.firstIndex(of: "--new-window"), index+1 < args.count {
     if args[index+1] == "com.apple.Safari" {

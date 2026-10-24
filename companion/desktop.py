@@ -777,7 +777,7 @@ class CompanionWindow(QMainWindow):
                 self.overlay.hide()
             self.pointer.point_at(capture['geometry'], action['x'], action['y'], action['label'],
                 reduced_motion=self.service.adaptation.effective(self.service.identity)['reduced_motion'])
-        if not response.get('task_step') and self.pending_desktop_action and self.pending_desktop_action['type'] in ('launch_app', 'browse_url', 'focus_app', 'new_window', 'play_media', 'close_window', 'quit_app'):
+        if not response.get('task_step') and self.pending_desktop_action and self.pending_desktop_action['type'] in ('launch_app', 'browse_url', 'focus_app', 'new_window', 'play_media', 'close_window', 'close_tab', 'quit_app'):
             # The request itself authorizes opening, switching to and closing apps (apps keep
             # their own "save changes?" prompts); model-selected presses still require review.
             proposal = self.pending_desktop_action
@@ -1865,7 +1865,7 @@ class CompanionWindow(QMainWindow):
                     worker.finished.connect(lambda: self.set_busy(False))
                     worker.start()
                     return
-                if proposed['type'] in ('focus_app', 'press_control', 'launch_app', 'quit_app', 'new_window', 'close_window', 'browse_url', 'click_point', 'play_media', 'type_text', 'press_key', 'scroll', 'wait'):
+                if proposed['type'] in ('focus_app', 'press_control', 'launch_app', 'quit_app', 'new_window', 'close_window', 'close_tab', 'browse_url', 'click_point', 'play_media', 'type_text', 'press_key', 'scroll', 'wait'):
                     self.execute_desktop_action(proposed)
                     return
                 current = self.desktop_monitor.authorize_action({'type': 'highlight_control', 'control_id': proposed['control_id']})

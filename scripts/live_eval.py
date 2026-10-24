@@ -230,6 +230,46 @@ def quit_settings():
     time.sleep(1)
 
 
+def screen_lines(window_only=True):
+    """OCR lines on screen, by default only those inside the front window (A11y's helper)."""
+    from companion.vision import ScreenVision
+    sample = desktop_sample()
+    frame = ScreenVision((ROOT/'.data').resolve()).call('--x', '0', '--y', '0', '--ocr')
+    screen, bounds = frame['screen'], (sample.get('window') or {}).get('bounds')
+    lines = []
+    for region in frame.get('text_regions', []):
+        x = screen['x']+(region['x']+region['width']/2)*screen['width']
+        y = screen['y']+(region['y']+region['height']/2)*screen['height']
+        if not window_only or not bounds or (bounds['x'] <= x < bounds['x']+bounds['width'] and bounds['y'] <= y < bounds['y']+bounds['height']):
+            lines.append(region['text'])
+    return lines
+
+
+def shows(text, window_only=True):
+    """True when the text (letters and digits only, any case) is on screen in the front window."""
+    wanted = re.sub(r'[^\w]', '', text.casefold())
+    return any(wanted in re.sub(r'[^\w]', '', line.casefold()) for line in screen_lines(window_only)) or \
+        wanted in re.sub(r'[^\w]', '', ''.join(screen_lines(window_only)).casefold())
+
+
+def settings_panes():
+    """The panes in System Settings' sidebar on this Mac (read from the app, not assumed)."""
+    subprocess.run(['open', '-a', 'System Settings'])
+    time.sleep(2.5)
+    sample = desktop_sample('com.apple.systempreferences')
+    sidebar = next((item['bounds'] for item in sample.get('lists', []) if item.get('label') == 'Sidebar'), None)
+    names = []
+    from companion.desktop_context import desktop_bridge
+    targets = desktop_bridge(ROOT/'.data').sample_targets('com.apple.systempreferences').get('targets', [])
+    for target in targets:
+        b = target['bounds']
+        if sidebar and sidebar['x'] <= b['x']+b['width']/2 < sidebar['x']+sidebar['width'] and target['role'] == 'AXButton' \
+                and ',' not in target['label'] and len(target['label']) < 30:
+            names.append(target['label'])
+    quit_settings()
+    return names
+
+
 # --- the app ---------------------------------------------------------------------------------
 
 class App:
@@ -251,6 +291,8 @@ class App:
                 if not chunk:
                     break
                 data += chunk
+        if not data:
+            raise RuntimeError('A11y did not answer (exit code %s)' % (self.process.poll() if self.process else '?'))
         reply = json.loads(data)
         if 'error' in reply:
             raise RuntimeError('A11y: '+reply['error'])
@@ -548,6 +590,147 @@ def build_navigation(eval_window):
     ]
 
 
+def build_varied(eval_window, count, seed):
+    """Fresh tasks every run: random apps, places, numbers and wording. Read-only, except typing
+    into search fields and a new TextEdit document (skipped when TextEdit is already open)."""
+    import random
+    from companion.arithmetic import evaluate, formatted
+    rng = random.Random(seed)
+
+    def pick(*options):
+        return rng.choice(options)
+
+    def calculator():
+        a, b = rng.randint(2, 999), rng.randint(2, 99)
+        op, words, symbol = pick(('+', 'plus', 'add'), ('-', 'minus', 'subtract'), ('*', 'times', 'multiply'), ('/', 'divided by', 'divide'))
+        request = pick('open calculator and compute {a} {w} {b}', 'use the calculator to work out {a} {w} {b}',
+                       'in Calculator, calculate {a} {w} {b}', 'open the calculator app and do {a} {w} {b} for me').format(a=a, w=words, b=b)
+        result = formatted(evaluate('%d %s %d' % (a, op, b)))
+        digits = re.sub(r'[^\d]', '', str(result).split('.')[0])
+        def check(state, events):
+            message = final_message(events)
+            return None if digits and digits in re.sub(r'[^\d]', '', message) else 'expected '+str(result)+': '+message[:120]
+        return Case(request, check, setup=lambda app: activate('Finder'), timeout=180)
+
+    def settings():
+        panes = [p for p in PANES if p not in ('General',)] or ['Battery']
+        name = rng.choice(panes)
+        request = pick('open the {p} settings', 'show me {p} in System Settings', 'take me to the {p} settings',
+                       'go to System Settings and open {p}', 'I want to see my {p} settings').format(p=name)
+        def check(state, events):
+            return None if settings_pane_is(name) else 'Settings does not show '+name+': '+final_message(events)[:100]
+        return Case(request, check, setup=lambda app: quit_settings(), timeout=180)
+
+    def finder():
+        name = pick('Downloads', 'Documents', 'Desktop', 'Applications', 'Pictures', 'Movies', 'Music')
+        request = pick('open my {f} folder', 'show me {f} in Finder', 'go to the {f} folder', 'open Finder and go to {f}').format(f=name)
+        def check(state, events):
+            title = window_title('Finder')
+            return None if title == name else 'Finder shows '+str(title)
+        return Case(request, check, setup=lambda app: subprocess.run(['open', str(Path.home())]), timeout=180)
+
+    def wikipedia():
+        topic = pick('Paris', 'Albert Einstein', 'Giraffe', 'Mount Everest', 'Jazz', 'Python (programming language)', 'Danube',
+                     'Leonardo da Vinci', 'Photosynthesis', 'Tokyo', 'Black hole', 'Chess', 'Vienna', 'Coffee', 'Moon')
+        short = topic.split(' (')[0]
+        request = pick('go to Wikipedia and open the article about {t}', 'look up {t} on Wikipedia', 'find the Wikipedia page for {t}',
+                       'on wikipedia, search for {t} and open the article').format(t=short)
+        pattern = r'wikipedia\.org/wiki/'+re.escape(topic.replace(' ', '_')).replace('\\_', '_')
+        def check(state, events):
+            address, _ = safari_front_tab()
+            return None if re.search(pattern.replace('\\(', '%28').replace('\\)', '%29'), address, re.I) or \
+                re.search(r'wikipedia\.org/wiki/'+re.escape(short.replace(' ', '_')), address, re.I) else 'Safari shows '+address[:100]
+        return Case(request, check, setup=lambda app: (eval_window.ensure(NEUTRAL), activate('Finder')), timeout=240)
+
+    def app_search():
+        app, thing, request = pick(
+            ('Maps', pick('Brasov', 'Lisbon', 'Kyoto', 'Reykjavik', 'Cluj-Napoca'), 'open Maps and find {x}'),
+            ('Weather', pick('London', 'Madrid', 'Oslo', 'Sydney'), 'open the Weather app and show me the weather in {x}'),
+            ('App Store', pick('Spotify', 'Notion', 'Slack', 'Duolingo'), 'search the App Store for {x}'),
+            ('Dictionary', pick('serendipity', 'ephemeral', 'lucid', 'quixotic'), 'look up the word {x} in the Dictionary app'),
+            ('Music', pick('Daft Punk', 'Adele', 'Coldplay', 'Inna'), 'open Music and search for {x}'))
+        request = request.format(x=thing)
+        def check(state, events):
+            if front_app() != app:
+                return 'front app is '+front_app()+', not '+app
+            return None if shows(thing) else app+' does not show '+thing+': '+final_message(events)[:100]
+        return Case(request, check, setup=lambda app: activate('Finder'), timeout=240)
+
+    def calendar_month():
+        month = pick('January', 'March', 'May', 'July', 'September', 'December')
+        year = rng.choice((2026, 2027))
+        request = pick('open Calendar and go to {m} {y}', 'show me {m} {y} in Calendar').format(m=month, y=year)
+        def check(state, events):
+            if front_app() != 'Calendar':
+                return 'front app is '+front_app()
+            return None if shows(month) and shows(str(year)) else 'Calendar does not show '+month+' '+str(year)
+        return Case(request, check, setup=lambda app: activate('Finder'), timeout=240)
+
+    def menu():
+        app, menu_name, item = pick(('Safari', 'History', 'Show All History'), ('Safari', 'Bookmarks', 'Show Bookmarks'),
+                                     ('Finder', 'Go', 'Recents'), ('Finder', 'View', 'as Icons'), ('Safari', 'View', 'Zoom In'))
+        request = pick('in {a}, open the {m} menu', 'open the {m} menu in {a}').format(a=app, m=menu_name)
+        def setup(runner):
+            if app == 'Safari':
+                eval_window.ensure(NEUTRAL)
+            else:
+                subprocess.run(['open', str(Path.home())])
+                time.sleep(1)
+        def check(state, events):
+            found = shows(item, window_only=False)
+            subprocess.run(['osascript', '-e', 'tell application "System Events" to key code 53'])  # close the menu
+            return None if found else 'menu item '+item+' not visible'
+        return Case(request, check, setup=setup, timeout=180)
+
+    def this_window():
+        query = pick('romeo and juliet', 'banana bread recipe', 'how tall is the eiffel tower', 'best hiking boots')
+        request = pick('in this window, search for {q}', 'search for {q} here in this tab', 'use this Safari tab to search for {q}').format(q=query)
+        before = {}
+        def setup(runner):
+            eval_window.ensure(NEUTRAL)
+            before.update(safari_windows())
+        def check(state, events):
+            after = safari_windows()
+            address, _ = safari_front_tab()
+            if after != before:
+                return 'opened a new tab or window ('+str(sum(after.values()))+' tabs, before '+str(sum(before.values()))+')'
+            words = [w for w in re.findall(r'\w+', query) if len(w) > 2]
+            return None if all(w in address.casefold() for w in words) else 'Safari shows '+address[:100]
+        return Case(request, check, setup=setup, timeout=180)
+
+    def close_tab():
+        before = {}
+        def setup(runner):
+            eval_window.ensure(NEUTRAL)
+            osa('tell application "Safari"', 'tell window id %d' % eval_window.id,
+                'set current tab to (make new tab at end of tabs with properties {URL:"https://example.com/?tab"})', 'end tell', 'activate', 'end tell')
+            time.sleep(1.5)
+            before.update(safari_windows())
+        def check(state, events):
+            after = safari_windows()
+            if eval_window.id not in after:
+                return 'closed the whole window'
+            return None if after[eval_window.id] == before.get(eval_window.id, 0)-1 else 'tabs: %s → %s' % (before.get(eval_window.id), after.get(eval_window.id))
+        return Case(pick('close this tab', 'close this Safari tab', 'close the current tab'), check, setup=setup, timeout=60)
+
+    def textedit():
+        sentence = pick('The quick brown fox jumps over the lazy dog', 'Meeting moved to Thursday at noon', 'Buy milk eggs and bread')
+        request = pick("open TextEdit, make a new document and type '{s}'", "write '{s}' in a new TextEdit document").format(s=sentence)
+        def check(state, events):
+            if front_app() != 'TextEdit':
+                return 'front app is '+front_app()+': '+final_message(events)[:100]
+            return None if shows(sentence) else 'TextEdit does not show the sentence: '+final_message(events)[:100]
+        return Case(request, check, setup=lambda app: activate('Finder'), timeout=240)
+
+    generators = [calculator, calculator, settings, settings, finder, wikipedia, app_search, app_search, calendar_month, menu, this_window, close_tab]
+    if not running('TextEdit'):
+        generators.append(textedit)
+    rng.shuffle(generators)
+    return [generators[i % len(generators)]() for i in range(count)]
+
+
+PANES = []
+
 # --- running and reporting -------------------------------------------------------------------
 
 def metrics(events):
@@ -644,8 +827,11 @@ def main():
     parser.add_argument('--only', action='append', help='run only requests containing this text (repeatable)')
     parser.add_argument('--out', default=str(ROOT/'.data'/'live_eval'))
     parser.add_argument('--compare', help='an earlier summary.json to show next to the results')
-    parser.add_argument('--suite', choices=('requests', 'navigation', 'all'), default='requests',
-                        help='requests: the reported requests; navigation: getting somewhere by clicking')
+    parser.add_argument('--suite', choices=('requests', 'navigation', 'varied', 'all'), default='requests',
+                        help='requests: the reported requests; navigation: getting somewhere by clicking; '
+                             'varied: new random tasks across many apps every run')
+    parser.add_argument('--tasks', type=int, default=14, help='varied suite: how many random tasks')
+    parser.add_argument('--seed', type=int, help='varied suite: repeat an earlier run (printed at the start)')
     args = parser.parse_args()
     out = Path(args.out)/datetime.now().strftime('%Y%m%d-%H%M%S')
     out.mkdir(parents=True, exist_ok=True)
@@ -653,7 +839,12 @@ def main():
     print('build', build_id(), '→', out, flush=True)
     app = App(ROOT/'.data', out/'app.log')
     eval_window = EvalWindow()
-    suites = {'requests': build_cases, 'navigation': build_navigation}
+    seed = args.seed if args.seed is not None else int(time.time()) % 100000
+    if args.suite in ('varied', 'all'):
+        PANES[:] = settings_panes()
+        print('varied seed', seed, '·', len(PANES), 'settings panes', flush=True)
+    suites = {'requests': build_cases, 'navigation': build_navigation,
+              'varied': lambda window: build_varied(window, args.tasks, seed)}
     chosen = [suites[name](eval_window) for name in (suites if args.suite == 'all' else [args.suite])]
     cases = [case for group in chosen for case in group if not args.only or any(text.casefold() in case.request.casefold() for text in args.only)]
     records = []
@@ -663,9 +854,12 @@ def main():
             for attempt in range(1, args.runs+1):
                 try:
                     record = run_case(app, case, attempt)
-                except (RuntimeError, OSError, subprocess.SubprocessError) as error:
+                except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as error:
                     record = {'request': case.request, 'attempt': attempt, 'success': False, 'seconds': None,
                               'route': '', 'failure': 'harness: '+str(error)[:200], 'reply': ''}
+                    if app.process and app.process.poll() is not None:
+                        record['failure'] = 'A11y exited (code %s): see app.log' % app.process.poll()
+                        app.launch()  # keep going with a fresh app
                 records.append(record)
                 with open(out/'runs.jsonl', 'a') as file:
                     file.write(json.dumps(record, ensure_ascii=False)+'\n')

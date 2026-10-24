@@ -214,7 +214,8 @@ def voice_status(data_directory):
     speech_ready = True
     if speech_supported:
         try:
-            from faster_whisper.utils import download_model
+            with voice.WHISPER_IMPORT:
+                from faster_whisper.utils import download_model
             for name in (voice.WAKE_MODEL, voice.SPEECH_MODEL):
                 download_model(name, local_files_only=True)
         except Exception:  # not cached yet (or the cache is unreadable)
@@ -229,7 +230,8 @@ def prepare_voice(progress, cancel=None, data_directory=None):
     from . import voice, neural_voice
     state = voice_status(data_directory)
     if state['speech_supported'] and not state['speech_ready']:
-        from faster_whisper.utils import download_model
+        with voice.WHISPER_IMPORT:
+            from faster_whisper.utils import download_model
         for name in (voice.WAKE_MODEL, voice.SPEECH_MODEL):
             if cancel is not None and cancel.is_set():
                 raise SetupError('Setup was cancelled.')

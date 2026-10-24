@@ -440,6 +440,28 @@ def labelled_targets(want, regions, controls, screen):
     return found
 
 
+def pixel_model(provider):
+    """Qwen2.5-VL answers clicks in pixels of the image it was shown (Qwen3-VL uses a 0-1000 grid)."""
+    name = (getattr(getattr(provider, 'config', None), 'vision_model', '') or '').casefold()
+    return name.startswith(('qwen2.5vl', 'qwen2.5-vl'))
+
+
+def pixels_to_fractions(action, image_data):
+    """A click in the model image's pixels as image fractions; fractions pass through."""
+    x, y = action.get('x'), action.get('y')
+    if not all(isinstance(n, (int, float)) and not isinstance(n, bool) for n in (x, y)) or (x <= 1 and y <= 1):
+        return action
+    import base64
+    try:
+        from PyQt6.QtGui import QImage
+        image = QImage.fromData(base64.b64decode(image_data.split(',', 1)[1]))
+    except (ImportError, ValueError, IndexError):
+        return action
+    if image.isNull() or not image.width() or not image.height():
+        return action
+    return dict(action, x=min(x/image.width(), 0.999), y=min(y/image.height(), 0.999))
+
+
 def normalize_click(action):
     """Accept the 0–1000 grid Qwen-VL models are trained on as well as fractions; anything else stays invalid."""
     numbers = [action.get(key) for key in ('x', 'y')]
@@ -535,10 +557,15 @@ def validate_step(raw, desktop, snapshot, *, goal_mode=None, screen=None, text_r
                 if all(key in bounds for key in ('x', 'y', 'width', 'height')) and bounds['x'] <= x < bounds['x']+bounds['width'] and bounds['y'] <= y < bounds['y']+bounds['height']:
                     labels.append(control.get('label', ''))
         import re
-        if action['type'] in ('click_point', 'press_control') and any(re.search(
-                r'\b(post|send|reply|compose|delete|remove|buy|pay|purchase|subscribe|install|download|upload|allow|permission|password|sign.?in|submit|turn on|turn off|enable|disable|accept|block|unsubscribe)\b|\bnew message\b', label, re.I) for label in labels):
+        sensitive = r'\b(post|send|reply|compose|delete|remove|buy|pay|purchase|subscribe|install|download|upload|allow|permission|password|sign.?in|log.?in|submit|turn on|turn off|enable|disable|accept|block|unsubscribe)\b|\bnew message\b'
+        found = {match.group(0).casefold().replace(' ', '').replace('-', '') for label in labels for match in re.finditer(sensitive, label, re.I)}
+        # What the goal itself asks for ("sign me in") is proposed for the user's confirmation
+        # (needs_review), not refused: refusing it left the user with no way forward (live).
+        asked = {word for word in found if re.search(r'\b'+'.?'.join(map(re.escape, word.replace('signin', 'sign in').replace('login', 'log in').split()))+r'\b',
+                                                     re.sub(r'\bsign (\w+ )?in\b', 'sign in', re.sub(r'\blog (\w+ )?in\b', 'log in', goal or '', flags=re.I), flags=re.I), re.I)}
+        if action['type'] in ('click_point', 'press_control') and found and not found <= asked:
             raise ValidationError('This is an inspection-only goal. Do not open a composer, post/send, or change anything. Choose a reading/navigation target, or report a genuine blocker with action=null.')
-        if raw['risk'] == 'change':
+        if raw['risk'] == 'change' and not (found and found <= asked):
             raise ValidationError('This goal only authorizes inspection. Choose a navigation action or pause with action=null; do not propose a change.')
     return dict(raw, message=message, action=action)
 
@@ -1002,6 +1029,9 @@ class ComputerTask:
                 self.text_pass_misses.add(app_key)
                 correction = 'Full screen image is now attached. Resolve the missing visual evidence for the original goal. Do not invent success, and do not repeat an action: no action has run on this observation.'
                 continue
+            if not fast_pass and pixel_model(provider) and isinstance(raw, dict) and isinstance(raw.get('action'), dict) \
+                    and raw['action'].get('type') == 'click_point' and model_image:
+                raw = dict(raw, action=pixels_to_fractions(raw['action'], model_image))
             if desktop.context().get('status') == 'stale':
                 # A slow model answer outlived the observation (10 s): valid steps were rejected as
                 # "Fresh desktop context is required" (live). Read the desktop again; execution

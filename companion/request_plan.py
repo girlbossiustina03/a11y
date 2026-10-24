@@ -4,7 +4,7 @@ import re
 from .models import RESPONSE_SCHEMA, ValidationError
 
 OPERATIONS = ('answer', 'plan', 'inspect_screen', 'move_object', 'move_geometry',
-              'computer_task', 'inspect_media', 'play_media', 'type_text', 'press_key', 'scroll', 'capture_once', 'click_point', 'browser_search', 'browser_open', 'launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'press_control', 'highlight', 'read_mail',
+              'computer_task', 'inspect_media', 'play_media', 'type_text', 'press_key', 'scroll', 'capture_once', 'click_point', 'browser_search', 'browser_open', 'launch_app', 'new_window', 'close_window', 'close_tab', 'quit_app', 'focus_app', 'press_control', 'highlight', 'read_mail',
               'read_calendar', 'add_event', 'read_reminders', 'add_reminder', 'complete_reminder', 'read_notes',
               'create_note', 'find_contact', 'recent_files', 'open_file', 'read_page', 'list_shortcuts', 'run_shortcut')
 INTENT_SCHEMA = {'type': 'object', 'additionalProperties': False,
@@ -12,8 +12,9 @@ INTENT_SCHEMA = {'type': 'object', 'additionalProperties': False,
         'operation': {'enum': list(OPERATIONS)}, 'app_name': {'type': 'string'}, 'target': {'type': 'string'},
         'browser_mode': {'enum': ['window', 'tab', 'default']},
         'remaining_request': {'type': 'string'}, 'media_artist': {'type': 'string'},
-        'goal_mode': {'enum': ['inspect', 'draft', 'change']}, 'reply': {'type': 'string'}, 'when': {'type': 'string'}}}
-INTENT_SCHEMA['required'] += ['goal_mode', 'reply', 'when']
+        'goal_mode': {'enum': ['inspect', 'draft', 'change']}, 'reply': {'type': 'string'}, 'when': {'type': 'string'},
+        'acts_on_computer': {'type': 'boolean'}}}
+INTENT_SCHEMA['required'] += ['goal_mode', 'reply', 'when', 'acts_on_computer']
 INTENT_SYSTEM = '''Interpret ONLY the latest user request. Do not execute or answer it.
 Return operation, app_name (the actual requested app, empty if none), target, and
 browser_mode (default for non-browser requests), remaining_request (empty if the
@@ -56,7 +57,7 @@ Operations: launch_app opens a named app; new_window creates a NEW app window;
 click_point clicks a visually located screen target; use it for click/press requests
 when no exact accessible control has already been identified. press_control is for
 observed Accessibility IDs, not arbitrary screen coordinates.
-close_window closes ONE window; quit_app quits an application; focus_app only brings
+close_window closes ONE window; close_tab closes the current browser tab ("close this tab"); quit_app quits an application; focus_app only brings
 an EXISTING app forward; press_control presses a named control; move_object relocates
 the companion toward an object/text/window; move_geometry relocates the companion to
 an edge/corner/center; highlight shows where an object is; inspect_screen explains
@@ -119,6 +120,9 @@ way on screen. It is never answer, inspect_screen or movement of the companion. 
 of an app ("open the sound settings") is that task too, not just launch_app. inspect_screen
 only describes what is already on screen ("what's on my screen", "what does this say");
 read_page only answers about the web page open in the browser.
+acts_on_computer: true when the user wants something opened, shown, found, looked up, searched,
+played, typed, written, clicked, closed or changed on the computer, in any app or website;
+false for conversation, questions you can answer yourself, and describing the screen.
 front_app is the app and window the user is looking at now. A question that names no app
 ("any notifications for me?", "anything new here?", "what does this say?") is about front_app:
 computer_task for checking notifications, messages or activity in it.
@@ -149,11 +153,11 @@ def with_opening(plan, request):
 
 
 def validate_plan(value):
-    if not isinstance(value, dict) or not {'operation', 'app_name', 'target'} <= set(value) or set(value) - {'operation', 'app_name', 'target', 'browser_mode', 'remaining_request', 'media_artist', 'goal_mode', 'opening', 'reply', 'when', 'computed', 'full_text', 'read_aloud', 'app_write'}:
+    if not isinstance(value, dict) or not {'operation', 'app_name', 'target'} <= set(value) or set(value) - {'operation', 'app_name', 'target', 'browser_mode', 'window_hint', 'remaining_request', 'media_artist', 'goal_mode', 'opening', 'reply', 'when', 'acts_on_computer', 'computed', 'full_text', 'read_aloud', 'app_write'}:
         raise ValidationError('The request could not be interpreted reliably. Please name the action and target.')
     if value['operation'] not in OPERATIONS or any(not isinstance(value[key], str) or len(value[key]) > (2000 if key == 'target' else 500) for key in ('app_name', 'target')):
         raise ValidationError('The request planner returned an invalid operation.')
-    if value.get('browser_mode', 'default') not in ('window', 'tab', 'default'):
+    if value.get('browser_mode', 'default') not in ('window', 'tab', 'default', 'current') or len(str(value.get('window_hint', ''))) > 80:
         raise ValidationError('Invalid browser window mode.')
     opening = value.get('opening')
     if opening is not None and (not isinstance(opening, dict) or set(opening) != set(OPENING_FIELDS)
@@ -244,7 +248,9 @@ Do not substitute movement for clicking. If the target is absent or ambiguous, c
 For highlight return a bounded normalized target rectangle and a clear label.
 Do not claim any action has executed: this is only a proposal for the native executor.
 Current pixels override older metadata. If evidence is insufficient, ask a short
-clarification with request_kind=answer and no action/target. No shell commands.'''
+clarification with request_kind=answer and no action/target. No shell commands.
+message is one short sentence to the user ("Which Safari window: Google or GitHub?"), never
+your reasoning, the request's interpretation or the evidence you used.'''
 
 
 def _normalized(value):
