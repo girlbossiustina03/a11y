@@ -49,10 +49,12 @@ def section_opening(title, section):
         {'action': 'query', 'prop': 'extracts', 'explaintext': 1, 'exsectionformat': 'wiki', 'titles': title,
          'redirects': 1, 'format': 'json', 'formatversion': 2}))['query']['pages']
     text = pages[0].get('extract', '')
-    match = re.search(r'\n==\s*'+re.escape(section)+r'\s*==\n+(.+?)(?:\n|$)', text)
+    match = re.search(r'\n==\s*'+re.escape(section)+r'\s*==\n', text)
     if not match:
         return ''
-    return re.split(r'(?<=[.!?])\s', match.group(1).strip())[0]
+    # The section's first sentence, past any sub-heading ("=== Legendary accounts ===").
+    line = next((l.strip() for l in text[match.end():].split('\n') if len(l.strip()) > 20 and not l.strip().startswith('=')), '')
+    return re.split(r'(?<=[.!?])\s', line)[0]
 
 
 def hn_titles(count=6):
