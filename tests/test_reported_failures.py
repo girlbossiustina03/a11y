@@ -890,3 +890,165 @@ class LookingAtTests(ConversationTests):
         task = ComputerTask('any notifications for me?', looking_at='Safari — Activity | Microsoft Teams')
         self.assertEqual(task.looking_at, 'Safari — Activity | Microsoft Teams')
         self.assertIn('user_was_looking_at', SYSTEM)
+
+
+class ScreenTargetTests(Harness):
+    """Navigation evaluation: icons and web links (GitHub's "Explore", Hacker News "19 comments")
+    were clicked by guessing pixels. Everything clickable is now numbered from the accessibility
+    tree (web pages included) and OCR; the model picks a number and code knows where it is."""
+    snapshot = dict(CALCULATOR, controls=CALCULATOR['controls'], app={'name': 'Safari', 'bundle_id': 'com.apple.Safari', 'pid': 7},
+                    targets=[{'role': 'AXLink', 'label': '19 comments', 'bounds': {'x': 380, 'y': 140, 'width': 60, 'height': 20}},
+                             {'role': 'AXButton', 'label': 'Open menu', 'bounds': {'x': 10, 'y': 10, 'width': 30, 'height': 30}}])
+    regions = [region('19 comments', .385, .2, .05, .02), region('OBS Studio 33', .1, .2)]
+
+    def test_targets_and_uncovered_text_are_numbered_once(self):
+        from companion.computer_task import screen_marks, compact_marks
+        marks = screen_marks(self.snapshot['targets'], self.regions, {'x': 0, 'y': 0, 'width': 1000, 'height': 700})
+        self.assertEqual([(m['id'], m['kind'], m['label']) for m in marks],
+                         [('t1', 'link', '19 comments'), ('t2', 'button', 'Open menu'), ('t3', 'text', 'OBS Studio 33')])
+        self.assertEqual(compact_marks(marks)[0], 't1|link|19 comments|0.410,0.214')
+
+    def test_the_model_picks_a_number_and_the_click_lands_on_its_center(self):
+        self.provider.complete_structured.return_value = {'status': 'action', 'message': 'Open the comments.', 'risk': 'navigation',
+                                                         'action': {'type': 'click_target', 'target_id': 't1'}}
+        step = self.propose(ComputerTask('open the comments of the first story', automatic=True, goal_mode='inspect'))
+        self.assertEqual((step['action']['type'], step['action']['label']), ('click_point', '19 comments'))
+        self.assertEqual((step['action']['x'], step['action']['y']), (.41, round(150/700, 4)))
+        self.assertIn('capture_guard', step['action'])
+        call = self.provider.complete_structured.call_args
+        prompt = call.args[1][1]['content']  # the observation; the goal is in the cached first message
+        self.assertIn('t1|link|19 comments', prompt)
+        self.assertNotIn('controls', json.loads(prompt)['desktop'])  # the same things, listed once
+        variant = call.kwargs['schema']['anyOf'][0]['properties']['action']['anyOf'][0]
+        self.assertEqual(variant['properties']['target_id'], {'enum': ['t1', 't2', 't3']})
+
+    def test_an_unknown_number_is_rejected(self):
+        from companion.computer_task import resolve_target
+        from companion.models import ValidationError
+        with self.assertRaises(ValidationError):
+            resolve_target({'status': 'action', 'action': {'type': 'click_target', 'target_id': 't9'}}, [])
+
+    def test_task_steps_ask_the_helper_for_targets(self):
+        self.desktop.bridge.sample_targets = Mock(return_value=deepcopy(self.snapshot))
+        self.provider.complete_structured.return_value = {'status': 'done', 'message': 'Done.', 'risk': 'navigation', 'action': None}
+        self.propose(ComputerTask('look at the page', automatic=True, goal_mode='inspect'))
+        self.desktop.bridge.sample_targets.assert_called()
+
+
+class NavigationRoutingTests(LiveRoutingTests):
+    """Navigation evaluation: "show me my Documents folder" moved the companion, "find the Bluetooth
+    settings" described the screen; going somewhere is a task, whatever the place is."""
+
+    def test_going_somewhere_is_a_task_not_movement_or_a_description(self):
+        for operation, request in (('move_object', 'go to my Pictures folder'), ('inspect_screen', 'find the dark mode setting')):
+            self.route(operation, request)
+            self.assertEqual(self.app.prepare_request(request)['operation'], 'computer_task', request)
+        self.route('move_object', 'the clock')
+        self.assertEqual(self.app.prepare_request('hop over to the clock')['operation'], 'move_object')
+
+    def test_a_screen_description_needs_the_request_to_be_about_the_screen(self):
+        self.provider.complete_structured.return_value = {'message': 'It is 17:00 in Tokyo.'}
+        self.route('inspect_screen')
+        self.assertEqual(self.app.prepare_request('what time is it in Tokyo')['operation'], 'answer')
+        self.route('inspect_screen')
+        self.assertEqual(self.app.prepare_request("what's on my screen")['operation'], 'inspect_screen')
+
+    def test_reading_a_page_needs_a_browser(self):
+        self.route('read_page')
+        self.assertEqual(self.app.prepare_request('show me the battery health')['operation'], 'computer_task')
+
+
+class LaunchWithMoreTests(LiveRoutingTests):
+    """"In System Settings, open Displays" only brought Settings forward (live, 2 of 2)."""
+
+    def test_words_beyond_the_app_name_are_work_in_the_app(self):
+        self.app.desktop_context.bridge.catalog.return_value.append({'name': 'System Settings', 'bundle_id': 'com.apple.systempreferences'})
+        self.provider.interpret_request.return_value = {'operation': 'launch_app', 'app_name': 'System Settings', 'target': '', 'reply': '',
+                                                        'browser_mode': 'default', 'remaining_request': ''}
+        plan = self.app.prepare_request('in System Settings, open Displays')
+        self.assertEqual(plan['operation'], 'computer_task')
+        self.assertEqual(plan['opening']['operation'], 'launch_app')
+
+
+class EchoedLaunchTests(LaunchWithMoreTests):
+    def test_an_echoed_remainder_is_still_work_in_the_app(self):
+        # "open the Calendar in Teams": launch_app Teams, remaining_request = the whole request (live).
+        self.provider.interpret_request.return_value = {'operation': 'launch_app', 'app_name': 'Teams', 'target': 'Calendar', 'reply': '',
+                                                        'browser_mode': 'default', 'remaining_request': 'open the Calendar in Teams'}
+        self.assertEqual(self.app.prepare_request('open the Calendar in Teams')['operation'], 'computer_task')
+
+
+class PromptCacheTests(Harness):
+    """A task step re-read ~4,000 prompt tokens (2.8 s): the goal and app list shared a message with
+    the changing observation. They now come first, unchanged from step to step, so Ollama keeps them."""
+    regions = TEAMS_REGIONS
+
+    def test_the_first_message_is_the_same_on_every_step(self):
+        task = ComputerTask('open the calendar in Teams', automatic=True, goal_mode='inspect')
+        self.provider.complete_structured.return_value = {'status': 'action', 'message': 'Scroll.', 'risk': 'navigation',
+                                                         'action': {'type': 'scroll', 'direction': 'down'}}
+        firsts = []
+        for step in range(2):
+            self.regions = TEAMS_REGIONS+[region('Step %d' % step, .5, .5)]
+            self.propose(task)
+            firsts.append(self.provider.complete_structured.call_args.args[1][0]['content'])
+            task.record({'type': 'scroll', 'label': 'Scroll down', 'status': 'submitted'})
+        self.assertEqual(firsts[0], firsts[1])
+        self.assertNotIn('Step', firsts[0])
+
+
+class NamedSiteSearchTests(LiveRoutingTests):
+    """"On Wikipedia, search for Bucharest" became a web search for "Bucharest" (live)."""
+
+    def test_a_search_on_a_named_site_opens_the_site_first(self):
+        self.route('browser_search', 'Bucharest')
+        plan = self.app.prepare_request('on Wikipedia, search for Bucharest and open the article')
+        self.assertEqual(plan['operation'], 'computer_task')
+        self.assertEqual(plan['opening']['target'], 'https://www.wikipedia.org')
+        self.route('browser_search', 'weather in Bucharest')
+        self.assertEqual(self.app.prepare_request('search for weather in Bucharest')['operation'], 'browser_search')
+
+
+class SearchFieldEnterTests(Harness):
+    """"On Wikipedia, search for Bucharest" typed the name and then waited: every Enter needed a confirmation."""
+    snapshot = dict(CALCULATOR, controls=[], app={'name': 'Safari', 'bundle_id': 'com.apple.Safari', 'pid': 7}, focused_role='AXTextField',
+                    focused_bounds={'x': 300, 'y': 200, 'width': 400, 'height': 30},
+                    targets=[{'role': 'AXTextField', 'label': 'Search Wikipedia', 'bounds': {'x': 300, 'y': 200, 'width': 400, 'height': 30}}])
+
+    def enter(self, goal_mode):
+        self.provider.complete_structured.return_value = {'status': 'action', 'message': 'Search.', 'risk': 'navigation',
+                                                         'action': {'type': 'press_key', 'key': 'enter'}}
+        return self.propose(ComputerTask('on Wikipedia, search for Bucharest', automatic=True, goal_mode=goal_mode))
+
+    def test_enter_in_a_search_field_runs_for_a_read_only_goal(self):
+        self.assertFalse(self.enter('inspect')['review'])
+
+    def test_enter_elsewhere_or_for_a_change_still_asks(self):
+        self.assertTrue(self.enter('change')['review'])
+        self.desktop.bridge.value['targets'][0]['label'] = 'Message'
+        self.assertTrue(self.enter('inspect')['review'])
+
+
+class SearchFollowUpTests(LiveRoutingTests):
+    def test_more_work_after_the_query_makes_it_a_task(self):
+        self.route('browser_search', 'weather in Bucharest')
+        plan = self.app.prepare_request('search DuckDuckGo for weather in Bucharest and open the first result')
+        self.assertEqual(plan['operation'], 'computer_task')
+        self.assertEqual(plan['opening']['operation'], 'browser_search')
+
+
+class StaleObservationTests(Harness):
+    """Navigation evaluation: five valid steps were rejected as "Fresh desktop context is required"
+    because the model answered more than 10 s after the observation."""
+
+    def test_a_slow_answer_is_validated_against_a_fresh_reading(self):
+        now = [100]
+        self.desktop.clock = lambda: now[0]
+        self.desktop.bridge.value['available_apps'] = [{'name': 'Calculator', 'bundle_id': 'com.apple.calculator'}]
+        def slow(*args, **kwargs):
+            now[0] += 12  # the model took 12 s
+            return {'status': 'action', 'message': 'Switch.', 'risk': 'navigation', 'action': {'type': 'focus_app', 'bundle_id': 'com.apple.calculator'}}
+        self.provider.complete_structured.side_effect = slow
+        step = self.propose(ComputerTask('switch to the calculator', automatic=True, goal_mode='inspect'))
+        self.assertEqual(step['action']['type'], 'focus_app')
+        self.assertEqual(self.provider.complete_structured.call_count, 1)

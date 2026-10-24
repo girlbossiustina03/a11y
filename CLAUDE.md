@@ -45,7 +45,7 @@ other contributor's: verify it, test it, and keep the ground rules.
 ```bash
 python3 -m pip install -r requirements.txt -r requirements-voice.txt   # voice is optional
 python3 a11y_desktop.py                         # run from source (data in .data/)
-QT_QPA_PLATFORM=offscreen python3 -m unittest discover -s tests -q   # ~540 tests, ~1.5-2.5 min
+QT_QPA_PLATFORM=offscreen python3 -m unittest discover -s tests -q   # ~590 tests, ~1.5-2.5 min
 .venv/bin/python scripts/live_eval.py --runs 3  # real requests against a source run on this Mac
 packaging/build_macos.sh                        # → dist/A11y.app and dist/A11y-macOS.dmg
 dist/A11y.app/Contents/MacOS/A11y --self-test /tmp/self-test.json   # packaged-app check
@@ -97,7 +97,14 @@ instant). Before the model, code takes the steps it can do exactly: Calculator k
 Activity view for notification goals, a click on the one place labelled X ("click on Chat",
 from the accessibility tree or OCR), and the nth row of a list ("click the first email",
 from the bridge's `lists`). `press_control` may only name a control in the current
-observation (the schema's enum). Actions run through `computer_use.py` and the platform bridge:
+observation (the schema's enum). Each step reads the window's clickable targets
+(`DesktopBridge --targets`: buttons, links, tabs, fields, rows, named icons, web pages
+included; names only, never values) and numbers them with the OCR lines no target covers
+(`screen_marks`); the model answers `click_target` with a number and code clicks its center.
+Pixel `click_point` remains for things neither lists. Enter in a search field needs no
+confirmation in a read-only goal; elsewhere it still does. Measured (Ollama 0.34): prompt
+prefixes are reused for text calls but not for calls with an image, so every image step
+re-reads its whole prompt (~3.5 s for ~4k tokens); keep that prompt small. Actions run through `computer_use.py` and the platform bridge:
 `desktop_context.py` + `native/DesktopBridge.swift` on macOS, `windows_desktop.py` /
 `windows_input.py` on Windows. Screenshots come from `vision.py` (ScreenCaptureKit /
 Windows capture) and are never written to disk.
@@ -144,7 +151,9 @@ off) and types each request through `companion/eval_control.py`, an owner-only s
 cannot confirm or execute anything itself. It checks the result against the Mac (Safari's
 page, Mail's selection, Calendar, the mascot's position) and writes `runs.jsonl` and
 `summary.json` under `.data/live_eval/`. `--only TEXT` picks requests, `--compare` an earlier
-summary. Ollama runs greedy with a fixed seed, so repeated runs should match; a request that
+summary. `--suite navigation` runs "take me there" tasks (Settings panes, Finder folders,
+websites) checked by window title, Settings' pane header (OCR) or Safari's address; `--suite all`
+runs both. Ollama runs greedy with a fixed seed, so repeated runs should match; a request that
 passes sometimes is a bug to chase. It needs the terminal's Accessibility, Screen Recording,
 Automation and (for the reminders case) Reminders permissions, and it takes over the screen.
 

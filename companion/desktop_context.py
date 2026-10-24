@@ -93,6 +93,10 @@ class MacDesktopBridge:
     def sample_target(self, bundle_id):
         return self.call('--observe-app', bundle_id)
 
+    def sample_targets(self, bundle_id=None):
+        """A sample plus every clickable target in the window (computer-task steps only)."""
+        return self.call('--targets', *(('--observe-app', bundle_id) if bundle_id else ()))
+
     def request_access(self):
         return self.call('--request-access')
 
@@ -213,12 +217,15 @@ class DesktopContext:
             self.collect_once(generation=generation)
             stop.wait(2)
 
-    def collect_once(self, *, generation=None, target_bundle=None):
+    def collect_once(self, *, generation=None, target_bundle=None, targets=False):
         with self.lock:
             if not self.enabled:
                 return
         try:
-            value = self.bridge.sample_target(target_bundle) if target_bundle and hasattr(self.bridge, 'sample_target') else self.bridge.sample()
+            if targets and hasattr(self.bridge, 'sample_targets'):
+                value = self.bridge.sample_targets(target_bundle)
+            else:
+                value = self.bridge.sample_target(target_bundle) if target_bundle and hasattr(self.bridge, 'sample_target') else self.bridge.sample()
             with self.lock:
                 if not self.enabled or (generation is not None and generation != self.generation):
                     return

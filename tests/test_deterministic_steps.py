@@ -115,7 +115,7 @@ class OpeningTaskTests(unittest.TestCase):
         with patch('companion.computer_task.time.sleep'):
             task.propose(self.desktop, self.vision, self.provider, {'x': 0, 'y': 0})
         self.assertEqual(self.vision.capture.call_count, 4)
-        self.assertIn('Activity', self.provider.complete_structured.call_args.args[1][0]['content'])
+        self.assertIn('Activity', self.provider.complete_structured.call_args.args[1][1]['content'])
         self.assertIn('settle_ms', task.timings[-1])
         task.record({'type': 'click_point', 'label': 'Activity', 'status': 'submitted'})
         self.vision.capture.reset_mock()

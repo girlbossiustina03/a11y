@@ -192,6 +192,44 @@ def reminders_reply(scope):
     return mac_apps.read_reminders(desktop_bridge(ROOT/'.data'), scope)
 
 
+def desktop_sample(bundle=None):
+    from companion.desktop_context import desktop_bridge
+    bridge = desktop_bridge(ROOT/'.data')
+    return bridge.sample_target(bundle) if bundle else bridge.sample()
+
+
+def window_title(app_name):
+    """Title of the app's first window, from A11y's own desktop helper (no Automation prompt).
+    Finder's "⁨Documents⁩ — Local" is "Documents" (Unicode isolates and the location dropped)."""
+    title = next((w['title'] for w in desktop_sample().get('app_windows', []) if w['name'] == app_name and w['title']), None)
+    return re.sub('[\u2066-\u2069]', '', title).split(' — ')[0].strip() if title is not None else None
+
+
+def settings_pane_is(name):
+    """True when System Settings shows the pane: its header, right of the sidebar (OCR)."""
+    from companion.vision import ScreenVision
+    sample = desktop_sample('com.apple.systempreferences')
+    window = (sample.get('window') or {}).get('bounds') or {}
+    sidebar = next((item['bounds'] for item in sample.get('lists', []) if item.get('label') == 'Sidebar'), None)
+    if not window or not sidebar:
+        return False
+    vision = ScreenVision((ROOT/'.data').resolve())
+    frame = vision.call('--x', '0', '--y', '0', '--ocr')
+    screen = frame['screen']
+    for region in frame.get('text_regions', []):
+        x = screen['x']+(region['x']+region['width']/2)*screen['width']
+        y = screen['y']+(region['y']+region['height']/2)*screen['height']
+        if (region['text'].strip() == name and sidebar['x']+sidebar['width'] < x < window['x']+window['width']
+                and window['y'] <= y < window['y']+window['height']*0.4):
+            return True
+    return False
+
+
+def quit_settings():
+    subprocess.run(['pkill', '-x', 'System Settings'])
+    time.sleep(1)
+
+
 # --- the app ---------------------------------------------------------------------------------
 
 class App:
@@ -446,6 +484,70 @@ def build_cases(eval_window):
     ]
 
 
+def build_navigation(eval_window):
+    """Getting somewhere by observing and clicking: native apps and websites, read-only."""
+    def pane(name):
+        def check(state, events):
+            if failed_reply(final_message(events)):
+                return final_message(events)[:160]
+            return None if settings_pane_is(name) else 'Settings does not show '+name+': '+final_message(events)[:120]
+        return check
+
+    def folder(name):
+        def check(state, events):
+            title = window_title('Finder')
+            return None if title == name else 'Finder shows '+str(title)
+        return check
+
+    def url(pattern):
+        def check(state, events):
+            address, _ = safari_front_tab()
+            return None if re.search(pattern, address, re.I) else 'Safari shows '+address[:100]
+        return check
+
+    def settings_open(app):
+        quit_settings()
+        subprocess.run(['open', '-a', 'System Settings'])
+        time.sleep(3)
+
+    def finder_home(app):
+        subprocess.run(['open', str(Path.home())])
+        time.sleep(1.5)
+
+    def web(app):
+        eval_window.ensure(NEUTRAL)
+        activate('Finder')
+
+    def teams_activity(app):
+        teams_view(eval_window, 1)
+
+    def other_result(state, events):
+        address, _ = safari_front_tab()
+        if not address.startswith('http') or 'duckduckgo.com' in address or 'example.com' in address:
+            return 'Safari shows '+address[:100]
+        return None
+
+    def teams_calendar(state, events):
+        _, title = safari_front_tab()
+        return None if title.startswith('Calendar') else 'Teams shows '+title.split('|')[0].strip()
+
+    return [
+        Case('open System Settings and go to Battery', pane('Battery'), setup=lambda app: quit_settings(), timeout=180),
+        Case('show me my Wi-Fi settings', pane('Wi-Fi'), setup=lambda app: quit_settings(), timeout=180),
+        Case('in System Settings, open Displays', pane('Displays'), setup=settings_open, timeout=180),
+        Case('find the Bluetooth settings', pane('Bluetooth'), setup=lambda app: quit_settings(), timeout=180),
+        Case('open Finder and go to the Downloads folder', folder('Downloads'), setup=finder_home, timeout=180),
+        Case('show me my Documents folder', folder('Documents'), setup=finder_home, timeout=180),
+        Case('go to Wikipedia and open the article about Romania', url(r'wikipedia\.org/wiki/Romania'), setup=web, timeout=240),
+        Case('open github.com and go to the Explore page', url(r'github\.com/explore'), setup=web, timeout=240),
+        Case('open apple.com and go to the Mac page', url(r'apple\.com/(?:\w+/)?mac/?(?:$|[?#])'), setup=web, timeout=240),
+        Case('open Hacker News and open the comments of the first story', url(r'news\.ycombinator\.com/item\?id='), setup=web, timeout=240),
+        Case('search DuckDuckGo for weather in Bucharest and open the first result', other_result, setup=web, timeout=240),
+        Case('on Wikipedia, search for Bucharest and open the article', url(r'wikipedia\.org/wiki/Bucharest'), setup=web, timeout=240),
+        Case('open the Calendar in Teams', teams_calendar, setup=teams_activity, timeout=240),
+    ]
+
+
 # --- running and reporting -------------------------------------------------------------------
 
 def metrics(events):
@@ -542,6 +644,8 @@ def main():
     parser.add_argument('--only', action='append', help='run only requests containing this text (repeatable)')
     parser.add_argument('--out', default=str(ROOT/'.data'/'live_eval'))
     parser.add_argument('--compare', help='an earlier summary.json to show next to the results')
+    parser.add_argument('--suite', choices=('requests', 'navigation', 'all'), default='requests',
+                        help='requests: the reported requests; navigation: getting somewhere by clicking')
     args = parser.parse_args()
     out = Path(args.out)/datetime.now().strftime('%Y%m%d-%H%M%S')
     out.mkdir(parents=True, exist_ok=True)
@@ -549,7 +653,9 @@ def main():
     print('build', build_id(), '→', out, flush=True)
     app = App(ROOT/'.data', out/'app.log')
     eval_window = EvalWindow()
-    cases = [case for case in build_cases(eval_window) if not args.only or any(text.casefold() in case.request.casefold() for text in args.only)]
+    suites = {'requests': build_cases, 'navigation': build_navigation}
+    chosen = [suites[name](eval_window) for name in (suites if args.suite == 'all' else [args.suite])]
+    cases = [case for group in chosen for case in group if not args.only or any(text.casefold() in case.request.casefold() for text in args.only)]
     records = []
     app.launch()
     try:

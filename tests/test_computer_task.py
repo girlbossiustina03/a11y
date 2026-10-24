@@ -85,7 +85,7 @@ class TaskTests(unittest.TestCase):
         self.assertEqual(second['action']['text'], 'keyboard accessibility')
         self.assertEqual(self.vision.capture.call_count, 2)
         self.assertIn('Find a help page', self.provider.complete_structured.call_args.args[1][0]['content'])
-        self.assertIn('Help', self.provider.complete_structured.call_args.args[1][0]['content'])
+        self.assertIn('Help', self.provider.complete_structured.call_args.args[1][1]['content'])
         self.assertEqual(self.provider.complete_structured.call_args.kwargs['image_data'], 'data:image/png;base64,synthetic')
         self.assertEqual(self.provider.complete_structured.call_args.kwargs['max_tokens'], 1200)
         self.assertIs(self.provider.complete_structured.call_args.kwargs['thinking'], False)
@@ -111,7 +111,7 @@ class TaskTests(unittest.TestCase):
         self.enable_ocr()
         result = self.respond({'type': 'click_point', 'x': .25, 'y': .35, 'label': 'Battery'})
         self.assertIsNone(self.provider.complete_structured.call_args.kwargs['image_data'])
-        self.assertIn('Battery', self.provider.complete_structured.call_args.args[1][0]['content'])
+        self.assertIn('Battery', self.provider.complete_structured.call_args.args[1][1]['content'])
         self.assertIn('capture_guard', result['action'])
         self.assertTrue(self.vision.capture.call_args.kwargs['fast_text'])
         self.vision.click_guard.assert_called_once()
@@ -157,7 +157,7 @@ class TaskTests(unittest.TestCase):
             'before': {'old_window_title': 'OLD_STATE'*1000}, 'after': {'old_window_title': 'OLD_STATE'*1000},
             'native_result': {'submitted': True, 'unused_debug': 'OLD_STATE'*1000}})
         self.respond({'type': 'scroll', 'direction': 'down'})
-        prompt = self.provider.complete_structured.call_args.args[1][0]['content']
+        prompt = self.provider.complete_structured.call_args.args[1][1]['content']
         self.assertNotIn('OLD_STATE', prompt)
         self.assertIn('Open Safari', prompt)
 

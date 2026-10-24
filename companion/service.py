@@ -112,6 +112,13 @@ BUILT_IN_READS = {'read_mail': ('Mail', 'Apple Mail', 'email', 'inbox'), 'read_c
 # Only questions: "remind me tomorrow about what I told you" is still a reminder.
 ABOUT_CONVERSATION = re.compile(r'^\W*(?:what|which|who|when|where|how|did|do|was|were)\b.*?(?:\b(?:I|we)\s+(?:just\s+|already\s+|earlier\s+)?'
                                 r'(?:say|said|tell|told|mention|mentioned|ask|asked)\b|\byou\s+(?:just\s+)?(?:said|told me|answered)\b)', re.I)
+LAUNCH_FILLER = frozenset("open launch start run bring up the app application program window in please can could would you "
+                          "for me my a an to now hey ok okay ally".split())
+# A request about what is on screen now, and one to find something.
+SCREEN_WORDS = re.compile(r'\b(?:screen|this|here|see|seeing|showing|shown|visible|window|page|display|open|front|looking)\b', re.I)
+FINDING_WORDS = re.compile(r'\b(?:find|search|look for|locate|show me|go to|take me|get me|open)\b', re.I)
+# Moving the companion itself: "move to the Safari window", "hop over to the clock", "go there yourself".
+MOVING_WORDS = re.compile(r'\b(?:move|moving|scoot|slide|hop|fly|jump|yourself|ally|a11y|mascot|companion)\b', re.I)
 TYPING_WORDS = re.compile(r'\b(?:type|typing|write|enter|fill|paste|insert|input|dictate|put|replace|spell)\b', re.I)
 MAIL_WORDS = re.compile(r'\b(?:e-?mails?|mails?|inbox)\b', re.I)
 # Words that point back to an earlier request (pronouns and "again"), so it is worth sending.
@@ -494,6 +501,12 @@ class Companion:
         title = re.sub(r'^\(\d+\)\s*', '', (observed.get('window') or {}).get('title', ''))[:120]
         return (name+(' — '+title if title else '')) if name else ''
 
+    @staticmethod
+    def beyond_app_name(request, app_name):
+        """True when a launch request says more than the app's name: "in System Settings, open Displays"."""
+        words = set(re.findall(r"[\w'-]+", request.casefold()))-set(re.findall(r"[\w'-]+", app_name.casefold()))
+        return bool(words-LAUNCH_FILLER)
+
     def names_any_app(self, request):
         """True when the request names an installed app or a known web app ("Teams", "Mail")."""
         from .app_names import normalized
@@ -681,6 +694,40 @@ class Companion:
         if isinstance(interpreted, dict):
             for key in ('computed', 'full_text', 'read_aloud', 'app_write'):  # set only by code
                 interpreted.pop(key, None)
+            if interpreted.get('operation') == 'browser_search':
+                from .web_apps import find_site
+                site = find_site(request)
+                if site and site[0] not in str(interpreted.get('target', '')).casefold():
+                    # "On Wikipedia, search for Bucharest" searched the web and lost Wikipedia (live):
+                    # open the named site, then search there.
+                    from .request_plan import with_opening
+                    interpreted = with_opening(dict(interpreted, operation='browser_open', target=site[1], remaining_request=''), request)
+            if interpreted.get('operation') in ('browser_search', 'browser_open') and not str(interpreted.get('remaining_request', '')).strip():
+                # "search DuckDuckGo for weather in Bucharest and open the first result" lost its second half.
+                target = str(interpreted.get('target', '')).casefold()
+                at = request.casefold().find(target) if target else -1
+                after = request[at+len(target):] if at >= 0 else ''
+                from .quick_open import FOLLOW_UP
+                if FOLLOW_UP.search(after) and len(after.split()) > 2:
+                    from .request_plan import with_opening
+                    interpreted = with_opening(interpreted, request)
+            if interpreted.get('operation') == 'inspect_screen' and not SCREEN_WORDS.search(request):
+                # "Find the dark mode setting" / "what time is it in Tokyo" were described from the screen.
+                interpreted = (dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
+                               if FINDING_WORDS.search(request) else dict(interpreted, operation='answer', app_name='', target='', reply=''))
+            if interpreted.get('operation') == 'read_page' and self.desktop_context is not None and not self.front_browser():
+                # No browser open, so no page: "show me the battery health" is a task.
+                interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
+            from .request_plan import _normalized
+            remaining = str(interpreted.get('remaining_request', ''))
+            if interpreted.get('operation') == 'launch_app' and (not remaining.strip() or _normalized(remaining) == _normalized(request)) \
+                    and self.beyond_app_name(request, str(interpreted.get('app_name', ''))):
+                # "In System Settings, open Displays" only brought Settings forward (live): the rest is work in it.
+                from .request_plan import with_opening
+                interpreted = with_opening(dict(interpreted, remaining_request=''), request)
+            if interpreted.get('operation') in ('move_object', 'move_geometry') and not MOVING_WORDS.search(request):
+                # "Go to my Pictures folder" was routed to moving the companion: going somewhere is a task.
+                interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
             if interpreted.get('operation') == 'type_text' and not TYPING_WORDS.search(request):
                 # "My name is Ana" was proposed as typing "Ana" into Safari (live): typing needs a request to type.
                 interpreted = dict(interpreted, operation='answer', app_name='', target='', remaining_request='',
@@ -843,7 +890,7 @@ class Companion:
         desktop = self.desktop_context.context() if self.desktop_context else {'enabled': False, 'status': 'off'}
         # The installed-app catalog (about 11k characters on a typical Mac) is resolved
         # by the app itself for launch requests; sending it made every chat reply slower.
-        model_desktop = {key: value for key, value in desktop.items() if key not in ('installed_apps', 'lists')}
+        model_desktop = {key: value for key, value in desktop.items() if key not in ('installed_apps', 'lists', 'targets')}
         context = {'capabilities': {'native_companion': self.desktop_context is not None,
                                   'screen_observation_tool': self.desktop_context is not None}, 'visual_context': visual_context, 'evidence': {'fresh_image': bool(image_data),
                    'window_metadata_present': bool(desktop.get('window')),

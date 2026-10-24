@@ -682,6 +682,44 @@ if pressIndex == nil, let window {
     }
     if !lists.isEmpty { output["lists"] = lists }
 }
+// --targets (computer-task steps): everything in the window a person could click, web pages
+// included, named as assistive technology reads it (title, description, help, a field's
+// placeholder; never its value). Depth-first, so targets come in reading order.
+if pressIndex == nil, args.contains("--targets"), let window, let frame = bounds(window) {
+    // Electron apps (Teams, Slack, VS Code) build their accessibility tree only when asked.
+    AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+    let windowRect = CGRect(x: frame["x"]!, y: frame["y"]!, width: frame["width"]!, height: frame["height"]!)
+    let clickable: Set<String> = ["AXButton", "AXLink", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXMenuButton", "AXTab",
+        "AXDisclosureTriangle", "AXMenuItem", "AXTextField", "AXTextArea", "AXSearchField", "AXComboBox", "AXSlider", "AXSwitch", "AXCell", "AXRow"]
+    let fields: Set<String> = ["AXTextField", "AXTextArea", "AXSearchField", "AXComboBox"]
+    var targets: [[String: Any]] = []
+    var stack: [(AXUIElement, Int)] = [(window, 0)]
+    var seen = 0
+    let started = CFAbsoluteTimeGetCurrent()
+    while !stack.isEmpty && seen < 3000 && targets.count < 150 && CFAbsoluteTimeGetCurrent()-started < 0.6 {
+        let (node, depth) = stack.removeLast()
+        seen += 1
+        let box = bounds(node).map { CGRect(x: $0["x"]!, y: $0["y"]!, width: $0["width"]!, height: $0["height"]!) }
+        if let box, !box.intersects(windowRect) { continue }  // the off-screen part of a page
+        if string(node, "AXSubrole") == "AXSecureTextField" { continue }
+        let role = string(node, "AXRole")
+        if clickable.contains(role), let box, box.width >= 4, box.height >= 4, windowRect.contains(CGPoint(x: box.midX, y: box.midY)) {
+            var label = string(node, "AXTitle")
+            if label.isEmpty { label = string(node, "AXDescription") }
+            if label.isEmpty { label = string(node, "AXHelp") }
+            if label.isEmpty && fields.contains(role) { label = string(node, "AXPlaceholderValue") }
+            if !label.isEmpty {
+                targets.append(["role": role, "label": String(label.prefix(80)),
+                                "bounds": ["x": box.minX, "y": box.minY, "width": box.width, "height": box.height]])
+                if role != "AXRow" && role != "AXCell" { continue }  // a named button's parts are not separate targets
+            }
+        }
+        if depth < 60, let children = attr(node, "AXChildren") as? [AXUIElement] {
+            stack.append(contentsOf: children.prefix(300).reversed().map { ($0, depth+1) })
+        }
+    }
+    output["targets"] = targets
+}
 if let index = pressIndex {
     let controlID = args[index+2]
     let expectedLabel = args[index+3]

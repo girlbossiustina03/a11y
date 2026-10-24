@@ -112,6 +112,13 @@ user_profile only when relevant and never invent facts about the user or employe
 reply empty for questions about the user's company, its policies, tools or
 procedures (the app looks those up in company documents with citations), and for
 every operation other than answer. Never claim to have done anything on the computer.
+Taking the user somewhere on the computer ("show me my Wi-Fi settings", "find the Bluetooth
+settings", "go to my Documents folder", "take me to the GitHub Explore page", "on Wikipedia,
+search for Bucharest") is computer_task with the full request as target: the app finds the
+way on screen. It is never answer, inspect_screen or movement of the companion. Opening a part
+of an app ("open the sound settings") is that task too, not just launch_app. inspect_screen
+only describes what is already on screen ("what's on my screen", "what does this say");
+read_page only answers about the web page open in the browser.
 front_app is the app and window the user is looking at now. A question that names no app
 ("any notifications for me?", "anything new here?", "what does this say?") is about front_app:
 computer_task for checking notifications, messages or activity in it.

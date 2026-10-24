@@ -42,7 +42,7 @@ FAST_SCHEMA['anyOf'][1]['properties']['status']['enum'].append('needs_vision')
 UNSUPPORTED = {'Windows': {'new_window'}}
 
 
-def schema_for(platform, fast, control_ids=None):
+def schema_for(platform, fast, control_ids=None, target_ids=None):
     """The step grammar for this platform. With control_ids, press_control can name only a
     control in the current observation (or is left out when there are none): a model that
     invented IDs got two rejected steps and a blocked task (live, Teams in Safari)."""
@@ -54,6 +54,12 @@ def schema_for(platform, fast, control_ids=None):
         for variant in schema['anyOf'][0]['properties']['action']['anyOf']:
             if 'press_control' in variant['properties']['type']['enum']:
                 variant['properties']['control_id'] = {'enum': list(dict.fromkeys(control_ids))}
+    if target_ids:
+        # One of the numbered targets on screen: code knows exactly where it is.
+        schema['anyOf'][0]['properties']['action']['anyOf'].insert(0, {
+            'type': 'object', 'additionalProperties': False, 'required': ['type', 'target_id'],
+            'properties': {'type': {'enum': ['click_target']}, 'target_id': {'enum': list(target_ids)},
+                           'button': {'enum': ['left', 'right']}, 'click_count': {'enum': [1, 2]}}})
     if excluded:
         variants = schema['anyOf'][0]['properties']['action']['anyOf']
         for variant in variants:
@@ -65,9 +71,9 @@ def schema_for(platform, fast, control_ids=None):
 # Pass-specific instructions go in the LAST message. The system prompt and the
 # observation stay byte-identical between the text pass and the image pass of a
 # step, so Ollama can reuse their evaluated prefix instead of re-reading it.
-TEXT_PASS = '''TEXT PASS: no image is attached. You have OCR text regions and accessibility
-metadata extracted from the current screenshot. Prefer an exact press_control ID or a
-click_point at an OCR line's x,y (its center, in image fractions).
+TEXT_PASS = '''TEXT PASS: no image is attached. You have the numbered targets (accessibility and OCR)
+read from the current screen. Prefer click_target with a listed id; otherwise an exact
+press_control ID or a click_point at an OCR line's x,y (its center, in image fractions).
 Never invent a coordinate for an icon or unlabelled object. Use status=needs_vision,
 action=null when pixels, icons, uncertain state or missing text require the image.
 Do not infer there are no tasks/activity just because OCR omitted them. done requires
@@ -132,9 +138,14 @@ in the done message instead of only saying it is visible.
 The done message is your answer to the user, spoken to them in plain words: "Your last email
 is from Rockstar Games: verification code 368229." Never write "the goal is achieved",
 "looks done" or restate the task.
-Observation formats: visual_context.text_regions entries are "text|x,y" (OCR line
-center as image fractions, ready for click_point); desktop.controls entries are
-"control_id|role|label|x,y,w,h" (desktop points); running_apps are "name=bundle_id".
+Observation formats: visual_context.targets entries are "id|kind|label|x,y": everything on
+screen you can click (buttons, links, tabs, fields, list rows, named icons, and text lines),
+center as image fractions, listed in reading order (top to bottom, left to right). To click one,
+use click_target with its id: the app knows exactly where it is. "The first result/story/item"
+is the first matching one in the page's content, not a link in a menu or navigation bar. Use click_point only for something visible that no target lists.
+visual_context.text_regions entries (when there are no targets) are "text|x,y"; desktop.controls
+entries are "control_id|role|label|x,y,w,h" (desktop points); running_apps are "name=bundle_id".
+To reach something not on screen, scroll, or open the menu, tab or page that leads to it.
 Prefer press_control with a control_id from the CURRENT metadata for named buttons,
 menu items or links. It uses the native accessibility API, with no coordinate guessing
 or movement of the user's mouse. Calculator arithmetic can press its observed digit,
@@ -148,7 +159,10 @@ Optional button left/right and click_count 1/2 support double-clicking
 (left only) and context menus. Use type_text only when metadata confirms a focused non-password text field,
 with literal user-requested text OR text you compose when the goal explicitly asks
 you to write/draft a summary or other content. Do not invent recipient data or secrets.
-It does not press Enter. Use press_key for navigation
+It does not press Enter. To search: if desktop.focused_role is not already a text field, click
+the search field once; then type_text the query, then press_key enter. The typed text is already
+there, so never type it or click the field again.
+Use press_key for navigation
 or supported Command shortcuts. Scroll changes the center of the current observed window.
 Use wait for 250, 500 or 1000 milliseconds when a page is visibly still loading.
 For launch_app set bundle_id to an exact name from installed_apps (the app resolves it);
@@ -176,6 +190,20 @@ execution. Available actions are strictly limited by the schema. No shell or scr
 # confirming or changing labels wait for the user, besides the sensitive ones in needs_review.
 CONFIRMING = re.compile(r'\b(ok|okay|yes|confirm|continue|proceed|archive|save|apply|done|finish|move|mark|empty|erase|trash|'
                         r'discard|replace|overwrite|close|quit|leave|end|reset|restore|sign out|log ?out|unsend|forward)\b', re.I)
+
+
+def search_field_focused(snapshot):
+    """True when the focused field is a search field: its role, or its accessible name
+    ("Search Wikipedia", Safari's "smart search field"). Never reads what was typed."""
+    focused = snapshot.get('focused_bounds') or {}
+    if snapshot.get('focused_role') == 'AXSearchField':
+        return True
+    for target in snapshot.get('targets') or ():
+        b = target.get('bounds') or {}
+        if (target.get('role') in ('AXTextField', 'AXSearchField', 'AXComboBox')
+                and all(abs((b.get(key) or 0)-(focused.get(key) or -99)) <= 2 for key in ('x', 'y', 'width', 'height'))):
+            return target.get('role') == 'AXSearchField' or 'search' in (target.get('label') or '').casefold()
+    return False
 
 
 def needs_review(action, risk):
@@ -214,6 +242,57 @@ def screen_text(visual, snapshot):
 def compact_regions(regions):
     """OCR lines as 'text|x,y' with x,y the line's center in image fractions."""
     return ['%s|%.3f,%.3f' % (r['text'], r['x']+r['width']/2, r['y']+r['height']/2) for r in regions]
+
+
+ROLE_NAMES = {'AXButton': 'button', 'AXLink': 'link', 'AXCheckBox': 'checkbox', 'AXRadioButton': 'option', 'AXPopUpButton': 'menu',
+              'AXMenuButton': 'menu', 'AXTab': 'tab', 'AXDisclosureTriangle': 'expander', 'AXMenuItem': 'menu item', 'AXTextField': 'field',
+              'AXTextArea': 'field', 'AXSearchField': 'search field', 'AXComboBox': 'field', 'AXSlider': 'slider', 'AXSwitch': 'switch',
+              'AXCell': 'item', 'AXRow': 'row'}
+
+
+def screen_marks(targets, regions, screen, limit=160):
+    """Numbered things on screen to click: accessible targets (buttons, links, fields, rows,
+    named icons, web pages included), then OCR lines no target already covers. Each is
+    {'id', 'kind', 'label', 'x', 'y', 'width', 'height'} in image fractions."""
+    marks = []
+    if screen and screen.get('width') and screen.get('height'):
+        for target in targets or ():
+            b = (target.get('bounds') or {}) if isinstance(target, dict) else {}
+            if not isinstance(target.get('label'), str) or not all(isinstance(b.get(k), (int, float)) for k in ('x', 'y', 'width', 'height')):
+                continue
+            x, y = (b['x']-screen.get('x', 0))/screen['width'], (b['y']-screen.get('y', 0))/screen['height']
+            width, height = b['width']/screen['width'], b['height']/screen['height']
+            if 0 <= x+width/2 < 1 and 0 <= y+height/2 < 1:
+                marks.append({'kind': ROLE_NAMES.get(target.get('role'), 'control'), 'label': target['label'][:80],
+                              'x': x, 'y': y, 'width': width, 'height': height})
+    covered = list(marks)
+    for region in regions:
+        cx, cy = region['x']+region['width']/2, region['y']+region['height']/2
+        if not any(m['x'] <= cx < m['x']+m['width'] and m['y'] <= cy < m['y']+m['height'] for m in covered):
+            marks.append({'kind': 'text', 'label': region['text'][:80], 'x': region['x'], 'y': region['y'],
+                          'width': region['width'], 'height': region['height']})
+    marks = marks[:limit]
+    for number, mark in enumerate(marks, 1):
+        mark['id'] = 't%d' % number
+    return marks
+
+
+def compact_marks(marks):
+    """'t12|link|19 comments|0.270,0.154': id, kind, label and center (image fractions)."""
+    return ['%s|%s|%s|%.3f,%.3f' % (m['id'], m['kind'], m['label'], m['x']+m['width']/2, m['y']+m['height']/2) for m in marks]
+
+
+def resolve_target(raw, marks):
+    """click_target → the click at that target's center, labelled with its name."""
+    action = raw.get('action') if isinstance(raw, dict) else None
+    if not isinstance(action, dict) or action.get('type') != 'click_target':
+        return raw
+    mark = next((m for m in marks if m['id'] == action.get('target_id')), None)
+    if mark is None:
+        raise ValidationError('That target number is not on the current screen. Choose a listed target.')
+    click = {'type': 'click_point', 'x': round(mark['x']+mark['width']/2, 4), 'y': round(mark['y']+mark['height']/2, 4), 'label': mark['label']}
+    click.update({key: action[key] for key in ('button', 'click_count') if key in action})
+    return dict(raw, action=click)
 
 
 def compact_desktop(snapshot):
@@ -410,7 +489,7 @@ def snap_click(action, text_regions, controls=(), screen=None):
     return dict(action, x=round(x, 4), y=round(y, 4))
 
 
-def validate_step(raw, desktop, snapshot, *, goal_mode=None, screen=None, text_regions=(), catalog=(), goal=None):
+def validate_step(raw, desktop, snapshot, *, goal_mode=None, screen=None, text_regions=(), catalog=(), goal=None, snap=True):
     if not isinstance(raw, dict) or set(raw) != {'status', 'message', 'risk', 'action'} or raw['status'] not in ('action', 'done', 'needs_user') or raw['risk'] not in ('navigation', 'change'):
         raise ValidationError('The task model returned an invalid step. No action was sent.')
     message = text(raw['message'], 'task step', 256)
@@ -439,7 +518,7 @@ def validate_step(raw, desktop, snapshot, *, goal_mode=None, screen=None, text_r
             if len(matches) != 1:
                 raise ValidationError('launch_app must name exactly one app from installed_apps.')
             action = dict(action, bundle_id=matches[0]['bundle_id'])
-    if action['type'] == 'click_point':
+    if action['type'] == 'click_point' and snap:  # a numbered target's position is already exact
         action = snap_click(normalize_click(action), text_regions, snapshot.get('controls', []) if isinstance(snapshot, dict) else (), screen)
     validated = validate_response({'request_kind': 'answer', 'message': message, 'desktop_action': action,
         'target': None, 'source_ids': [], 'workflow': None}, set(), has_screen=True, desktop=desktop, desktop_snapshot=snapshot)
@@ -764,10 +843,10 @@ class ComputerTask:
         stages = {}
         observed_at = time.monotonic()
         timing('task.observe.start', observed_at, step=len(self.receipts)+1)
-        desktop.collect_once()
+        desktop.collect_once(targets=True)
         snapshot = desktop.context()
         if snapshot.get('companion_focused'):
-            desktop.collect_once(target_bundle=snapshot.get('app', {}).get('bundle_id'))
+            desktop.collect_once(target_bundle=snapshot.get('app', {}).get('bundle_id'), targets=True)
             snapshot = desktop.context()
         timing('task.metadata.finished', observed_at, step=len(self.receipts)+1)
         stages['metadata_ms'] = round((time.monotonic()-observed_at)*1000)
@@ -794,7 +873,7 @@ class ComputerTask:
                 time.sleep(0.6)
                 if self.cancelled.is_set() or not desktop.enabled or not vision.enabled or desktop.generation != desktop_generation or vision.generation != vision_generation:
                     raise ValueError('Computer task stopped or access was paused. No next action was submitted.')
-                desktop.collect_once()
+                desktop.collect_once(targets=True)
                 snapshot = desktop.context()
                 visual = vision.capture(provider, x=geometry['x'], y=geometry['y'], desktop=snapshot, fast_text=True)
                 current = tuple(region.get('text') for region in visual.get('text_regions') or [] if isinstance(region, dict))
@@ -862,19 +941,30 @@ class ComputerTask:
             history.append(outcome)
         model_desktop = compact_desktop(snapshot)
         model_visual = {'screen': visual['screen']} if 'screen' in visual else {}
-        if regions:
+        marks = screen_marks(snapshot.get('targets'), regions, visual.get('screen')) if snapshot.get('targets') is not None else []
+        if marks:
+            # Everything clickable, numbered: the model picks a number and code knows where it is.
+            # The same names would otherwise appear again as controls and text lines.
+            model_visual['targets'] = compact_marks(marks)
+            model_desktop.pop('controls', None)
+        elif regions:
             model_visual['text_regions'] = compact_regions(regions)
         # Stable goal/authorization/catalog first so Ollama reuses that prefix across
         # steps; the changing observation follows. Observations are compact strings:
         # a live log showed ~3,500 of ~4,800 prompt tokens per step spent on verbose
         # JSON for OCR lines and controls.
+        # The goal and app list stay the same for the whole task, in their own message, so Ollama
+        # keeps them cached; only the observation after them is read again each step (a step
+        # re-read ~4,000 prompt tokens, 2.8 s, when they shared one message).
         messages = [{'role': 'user', 'content': json.dumps({'goal': self.goal, 'goal_mode': self.goal_mode,
-                **({'user_was_looking_at': self.looking_at} if self.looking_at else {}),
-                'authorization': 'The user requested this goal. Opening apps and browser navigation toward it are already authorized.',
-                'installed_apps': self.app_names(desktop, snapshot), 'actions_taken': history,
-                'desktop': model_desktop, 'visual_context': model_visual}, ensure_ascii=False, separators=(',', ':'))}]
-        timing('task.context.prepared', observed_at, step=len(self.receipts)+1, text_chars=len(messages[0]['content']))
-        stages['context_chars'] = len(messages[0]['content'])
+                         **({'user_was_looking_at': self.looking_at} if self.looking_at else {}),
+                         'authorization': 'The user requested this goal. Opening apps and browser navigation toward it are already authorized.',
+                         'installed_apps': self.app_names(desktop, snapshot)}, ensure_ascii=False, separators=(',', ':'))},
+                    {'role': 'user', 'content': json.dumps({'actions_taken': history, 'desktop': model_desktop, 'visual_context': model_visual},
+                                                           ensure_ascii=False, separators=(',', ':'))}]
+        context_chars = sum(len(message['content']) for message in messages)
+        timing('task.context.prepared', observed_at, step=len(self.receipts)+1, text_chars=context_chars)
+        stages['context_chars'] = context_chars
         stages['model'] = []
         cancel_kwargs = {'cancel': self.cancelled} if accepts_cancel(provider) else {}
         def check_active():
@@ -883,7 +973,8 @@ class ComputerTask:
 
         model_image = None
         correction = None
-        control_ids = [c['id'] for c in snapshot.get('controls') or [] if isinstance(c, dict) and c.get('id') and c.get('enabled', True)]
+        control_ids = [] if marks else [c['id'] for c in snapshot.get('controls') or [] if isinstance(c, dict) and c.get('id') and c.get('enabled', True)]
+        target_ids = [m['id'] for m in marks]
         for attempt in range(2):
             check_active()
             if attempt and progress:
@@ -900,7 +991,7 @@ class ComputerTask:
             request_messages = messages + [{'role': 'user', 'content': final}]
             try:
                 raw = provider.complete_structured(SYSTEM, request_messages,
-                                                   schema=schema_for(snapshot.get('platform'), fast_pass, control_ids),
+                                                   schema=schema_for(snapshot.get('platform'), fast_pass, control_ids, target_ids),
                                                    image_data=None if fast_pass else model_image,
                                                    max_tokens=1200, thinking=False, **cancel_kwargs)
             finally:
@@ -911,8 +1002,16 @@ class ComputerTask:
                 self.text_pass_misses.add(app_key)
                 correction = 'Full screen image is now attached. Resolve the missing visual evidence for the original goal. Do not invent success, and do not repeat an action: no action has run on this observation.'
                 continue
+            if desktop.context().get('status') == 'stale':
+                # A slow model answer outlived the observation (10 s): valid steps were rejected as
+                # "Fresh desktop context is required" (live). Read the desktop again; execution
+                # re-checks the target in any case.
+                desktop.collect_once(targets=True)
+                snapshot = dict(desktop.context(), targets=snapshot.get('targets'))
             try:
-                step = validate_step(raw, desktop, snapshot, goal_mode=self.goal_mode, screen=visual.get('screen'),
+                numbered = isinstance(raw, dict) and isinstance(raw.get('action'), dict) and raw['action'].get('type') == 'click_target'
+                raw = resolve_target(raw, marks)
+                step = validate_step(raw, desktop, snapshot, goal_mode=self.goal_mode, screen=visual.get('screen'), snap=not numbered,
                                      text_regions=regions, catalog=self._catalog or (), goal=self.goal)
                 if fast_pass and step['status'] == 'action' and step['action']['type'] == 'click_point' and not text_grounded_click(step['action'], regions, snapshot, visual['screen']):
                     raise ValidationError('That point is not grounded in OCR text or a current accessible control. Inspect the supplied full image before choosing a click.')
@@ -931,7 +1030,9 @@ class ComputerTask:
                     self.text_pass_misses.add(app_key)
                 timing('task.step.invalid', inference_at, step=len(self.receipts)+1, attempt=attempt+1,
                        status_action_mismatch=isinstance(raw, dict) and raw.get('status') in ('done', 'needs_user') and raw.get('action') is not None,
-                       action_type=str(((raw.get('action') if isinstance(raw, dict) else None) or {}).get('type', ''))[:20])
+                       action_type=str(((raw.get('action') if isinstance(raw, dict) else None) or {}).get('type', ''))[:20],
+                       reason=str(error).split('“')[0][:90],  # code's own wording, cut before any quoted screen text
+                       focused=str(snapshot.get('focused_role', ''))[:30], companion_focused=bool(snapshot.get('companion_focused')))
                 if attempt:
                     answer = self.report_only(provider, messages, model_image or image_data, cancel_kwargs, check_active)
                     if answer is None:
@@ -989,5 +1090,9 @@ class ComputerTask:
         if action['type'] == 'click_point':
             action['capture_guard'] = vision.click_guard(image_data, visual, action)
         self.pending = action
-        return {'status': 'action', 'message': message, 'action': action,
-                'review': not self.automatic or needs_review(action, raw['risk']), 'visual_capture': visual}
+        searching = (action['type'] == 'press_key' and action.get('key') == 'enter' and raw['risk'] == 'navigation'
+                     and self.goal_mode == 'inspect' and search_field_focused(snapshot))
+        # Enter in a search field during a read-only goal is a search, not a submission: it ran
+        # nowhere before (Wikipedia, live) because every Enter waited for a confirmation.
+        review = not self.automatic or (needs_review(action, raw['risk']) and not searching)
+        return {'status': 'action', 'message': message, 'action': action, 'review': review, 'visual_capture': visual}
