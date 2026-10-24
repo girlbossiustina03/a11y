@@ -963,7 +963,7 @@ class NativeTests(unittest.TestCase):
         QTest.keyClick(mascot.input, Qt.Key.Key_Return)
         self.qt.processEvents()
         self.assertTrue(mascot.last_prompt.isVisible())
-        self.assertTrue(mascot.last_prompt.text().startswith('› what is the weather'))
+        self.assertTrue(mascot.last_prompt.text().startswith('› what is the'))
         self.assertEqual(mascot.last_prompt.toolTip(), 'what is the weather like?')  # the whole of it
 
     def test_reply_window_lies_under_hers_and_shows_to_the_right(self):
@@ -1072,6 +1072,18 @@ class NativeTests(unittest.TestCase):
         self.assertGreaterEqual(mascot.character.width(), columns*mascot.character.cell.width())
         self.window.mascot_action('face:no-such-face')
         self.assertEqual(mascot.skin, 'robot')
+        # Reported: changing faces resized her and moved her around.
+        size, face = mascot.size(), mascot.character.mapToGlobal(QPoint())
+        for key in faces.SKINS:
+            self.window.mascot_action('face:'+key)
+            self.qt.processEvents()
+            self.assertEqual((mascot.size(), mascot.character.mapToGlobal(QPoint())), (size, face), key)
+
+    def test_red_button_closes_the_companion(self):
+        mascot = self.window.mascot
+        with patch.object(self.window, 'request_quit') as quit:
+            mascot.close_dot.click()
+        quit.assert_called_once()
 
     def test_reported_voice_restored_at_startup_fails_quietly(self):
         # Reported: on startup she said she couldn't hear the microphone, unasked.

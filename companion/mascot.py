@@ -23,7 +23,8 @@ from PyQt6.QtGui import (QPainter, QPainterPath, QColor, QPen, QShortcut, QKeySe
 MARGIN = 10          # room for her shadow around the windows
 TITLE_HEIGHT = 28
 RADIUS = 11
-WIDTH = 250          # her window, open or collapsed
+WIDTH = 230          # her window, open or collapsed
+SEE_THROUGH = 0.82   # her windows show this much of the terminal's opacity: a bit more see-through
 REPLY_WIDTH = 280    # how far the reply window shows beside her
 TYPE_STEP_MS = 16
 TYPE_CHARS = 3       # ~190 characters a second
@@ -178,7 +179,7 @@ class Surface(QFrame):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         body = QRectF(self.rect()).adjusted(.5, .5, -.5, -.5)
         background = QColor(p.background)
-        background.setAlphaF(p.opacity)
+        background.setAlphaF(p.opacity*SEE_THROUGH)
         painter.setPen(QPen(QColor(p.border), 1.2))
         if self.system:  # under a real title bar: just the background
             painter.fillRect(self.rect(), background)
@@ -323,8 +324,8 @@ class Mascot(QWidget):
         title = QHBoxLayout(self.title_bar)
         title.setContentsMargins(9, 0, 10, 0)
         title.setSpacing(2)
-        self.close_dot = DotButton(self.colors.red, 'Collapse the conversation. Activate the face to reopen.')
-        self.close_dot.clicked.connect(self.toggle_chat)
+        self.close_dot = DotButton(self.colors.red, 'Close the companion')
+        self.close_dot.clicked.connect(lambda: self.action_requested.emit('quit'))
         self.menu_dot = DotButton(self.colors.yellow, 'Companion actions')
         self.menu_dot.clicked.connect(lambda: self.show_menu())
         self.prompt_settings = DotButton(self.colors.green, 'Open companion settings')
@@ -868,10 +869,11 @@ class Mascot(QWidget):
         super().changeEvent(event)
 
     def closeEvent(self, event):
-        # The red traffic light collapses her; quitting the app still closes her.
+        # The red traffic light closes the companion: the app quits through its usual path
+        # (which waits for a running request), and that path closes her.
         if self.native and event.spontaneous():
             event.ignore()
-            self.toggle_chat()
+            self.action_requested.emit('quit')
             return
         if self.reply_window is not None:
             self.set_reply_shown(False)
@@ -1044,7 +1046,8 @@ class CharacterButton(QAbstractButton):
         metrics = QFontMetricsF(self.font_)
         # Whole-pixel cells like a terminal, so box and block characters join up.
         self.cell = QSize(max(1, round(metrics.horizontalAdvance('M'))), max(1, int(metrics.height())))
-        columns, lines = faces.size(self.owner.skin)
+        # The same room for every face, so changing faces neither resizes nor moves her.
+        columns, lines = (max(values) for values in zip(*(faces.size(name) for name in faces.SKINS)))
         self.setFixedSize(columns*self.cell.width()+28, lines*self.cell.height()+18)
         self.update()
 
