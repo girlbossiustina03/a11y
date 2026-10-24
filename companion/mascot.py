@@ -355,7 +355,8 @@ class Mascot(QWidget):
         self.status.setObjectName('activityLabel')
         self.status.setAccessibleName('Companion activity')
         self.status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.status.hide()
+        # Always there, empty when idle: "thinking" appearing must not resize her or move the face.
+        self.status.setFixedHeight(QFontMetrics(self.mono).lineSpacing())
         frame.addWidget(self.status)
         frame.addStretch(1)
         # The prompt part: the last thing you asked and the input. It sits in a drawer that
@@ -886,12 +887,7 @@ class Mascot(QWidget):
             self.character.hop(height=6.0)
         self.state = state
         self.character.set_state(state)
-        status = self.STATUS.get(state, '')
-        if status != self.status.text():
-            self.status.setText(status)
-            self.status.setVisible(bool(status))
-            if self.isVisible() and not self.stretching:
-                self.fit_on_screen(self.character.mapToGlobal(QPoint()))
+        self.status.setText(self.STATUS.get(state, ''))
         if message:
             self.show_message(message)
             if self.reply_shown:

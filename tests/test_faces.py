@@ -45,6 +45,15 @@ class FaceTests(unittest.TestCase):
         self.assertNotEqual(faces.face('blob', 'speaking', 0), faces.face('blob', 'speaking', 1))
         self.assertEqual(faces.face('no-such-skin', 'idle'), faces.face(faces.DEFAULT_SKIN, 'idle'))
 
+    def test_reported_thinking_face_stays_centred(self):
+        # Reported: the Pixel face moved off centre while thinking.
+        def middle(lines):
+            columns = [i for line in lines for i, c in enumerate(line) if c != ' ']
+            return (min(columns)+max(columns))/2
+        for name in ('pixel', 'kitty', 'bot'):
+            idle, thinking = faces.face(name, 'idle'), faces.face(name, 'thinking')
+            self.assertLessEqual(abs(middle(idle[1:])-middle(thinking[1:])), 0.5, name)  # (line 0 may carry a mark)
+
     def test_slot_sizes_are_checked(self):
         with self.assertRaises(ValueError):
             faces.fill(['[11]'], {'1': ['abc']})
