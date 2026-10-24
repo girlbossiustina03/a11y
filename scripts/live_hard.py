@@ -23,7 +23,6 @@ CITIES = ['Lisbon', 'Oslo', 'Cairo', 'Seoul', 'Lima', 'Reykjavik', 'Nairobi', 'T
 SECTION_TOPICS = [('Coffee', 'History'), ('Chess', 'History'), ('Penguin', 'Evolution'), ('Jazz', 'Etymology'),
                   ('Saturn', 'Rings'), ('Volcano', 'Etymology'), ('Lisbon', 'Climate'), ('Danube', 'Names')]
 COUNTRIES = ['Portugal', 'Norway', 'Peru', 'Kenya', 'Vietnam', 'Iceland', 'Chile', 'Austria']
-SONGS = ['Clair de Lune Debussy', 'Bohemian Rhapsody Queen', 'Take Five Dave Brubeck', 'Hallelujah Leonard Cohen']
 USER_AGENT = 'A11y-desktop-companion-tests/1.0 (https://github.com/iediot/a11y)'
 
 
@@ -200,8 +199,8 @@ def build(eval_window, count, seed):
 
     @family
     def reuse_open_site():
-        site, address = pick([('YouTube', 'https://www.youtube.com'), ('Wikipedia', 'https://en.wikipedia.org/wiki/Main_Page'),
-                              ('GitHub', 'https://github.com')])
+        site, address = pick([('Wikipedia', 'https://en.wikipedia.org/wiki/Main_Page'), ('GitHub', 'https://github.com'),
+                              ('Hacker News', 'https://news.ycombinator.com')])
         before = {}
         def setup(runner):
             eval_window.ensure(address)
@@ -248,9 +247,11 @@ def build(eval_window, count, seed):
 
     @family
     def play_video():
-        song = pick(SONGS)
-        request = pick(['search YouTube for {s} and play the first video', 'play {s} on YouTube']).format(s=song)
-        return Task('play_video', request, [('a video page', url(r'youtube\.com/watch')), ('no failure', no_failure)], timeout=300)
+        # Not YouTube: the owner blocks it (Cold Turkey). Wikimedia Commons has playable media.
+        topic = pick(['Moon landing', 'Aurora', 'Hummingbird', 'Solar eclipse'])
+        request = pick(['find a video of {t} on Wikimedia Commons and open it', 'on Wikimedia Commons, open a video about {t}']).format(t=topic)
+        return Task('play_video', request, [('a media file page', url(r'commons\.wikimedia\.org/wiki/File:.*\.(webm|ogv|mp4)')),
+                                            ('no failure', no_failure)], timeout=300)
 
     @family
     def newest_download_size():
