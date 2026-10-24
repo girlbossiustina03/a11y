@@ -96,15 +96,19 @@ TAB_APPS = ('Safari', 'Google Chrome')
 
 def app_names():
     """Names of the running apps that have a Dock presence."""
-    out = osa('tell application "System Events" to return name of every process whose background only is false')
+    try:
+        out = osa('tell application "System Events" to return name of every process whose background only is false', timeout=15)
+    except (RuntimeError, subprocess.TimeoutExpired):
+        return set()
     return {name.strip() for name in out.split(',') if name.strip()}
 
 
 def window_ids(app):
     try:
-        out = osa('tell application "%s" to return id of every %s' % (app, WINDOW_APPS[app][:-1] if WINDOW_APPS[app].endswith('s') else WINDOW_APPS[app]))
-    except RuntimeError:
-        return set()
+        out = osa('tell application "%s" to return id of every %s' % (app, WINDOW_APPS[app][:-1] if WINDOW_APPS[app].endswith('s') else WINDOW_APPS[app]),
+                  timeout=8)
+    except (RuntimeError, subprocess.TimeoutExpired):
+        return set()  # a stuck app (TextEdit behind a save sheet) must not fail the next test
     return {int(item) for item in out.replace(' ', '').split(',') if item.strip().isdigit()}
 
 
@@ -112,8 +116,8 @@ def tab_counts(app):
     counts = {}
     for window in window_ids(app):
         try:
-            counts[window] = int(osa('tell application "%s" to return count of tabs of (window id %d)' % (app, window)))
-        except (RuntimeError, ValueError):
+            counts[window] = int(osa('tell application "%s" to return count of tabs of (window id %d)' % (app, window), timeout=8))
+        except (RuntimeError, ValueError, subprocess.TimeoutExpired):
             pass
     return counts
 

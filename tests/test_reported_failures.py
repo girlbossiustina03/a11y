@@ -261,7 +261,7 @@ class LiveTeamsLogTests(Harness):
         self.assertEqual((step['action']['type'], step['action']['url'], step['action']['browser_mode']),
                          ('browse_url', 'https://teams.microsoft.com', 'window'))
         self.assertFalse(step['review'])
-        self.assertEqual(self.provider.complete_structured.call_count, 1)
+        self.assertEqual(self.provider.complete_structured.call_count, 0)  # opened in code, no model step
 
     def test_browser_is_not_launched_as_a_separate_step_for_other_sites(self):
         safari = [{'name': 'Safari', 'bundle_id': 'com.apple.Safari'}]

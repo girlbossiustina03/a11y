@@ -1045,6 +1045,30 @@ class ComputerTask:
                     'visual_capture': None}
         if named is False:
             return None  # the named app is already in front: nothing to plan for where to start
+        from .web_apps import find_site, site_address
+        from .desktop_context import BROWSER_IDS, default_browser_id
+        site, address = find_site(self.goal), site_address(self.goal)
+        window = ((snapshot.get('window') or {}).get('title') or '').casefold()
+        if site and address and not ((snapshot.get('app') or {}).get('bundle_id') in BROWSER_IDS and site[0].split()[0] in window):
+            # The goal names a known site and it isn't in front: open it, no planning call. The
+            # planner picked an app that isn't installed for Hacker News and the task ended (live, v3).
+            from .web_apps import browser_mode, browser_named
+            wanted = browser_named(self.goal) or ''
+            browser = next((a for a in self._catalog or [] if wanted and a['name'] == wanted), None) or \
+                next((a for a in self._catalog or [] if a['bundle_id'] == default_browser_id()), None) or \
+                next((a for a in self._catalog or [] if a['bundle_id'] in BROWSER_IDS), None)
+            if browser:
+                try:
+                    action = validate_step({'status': 'action', 'message': 'Opening.', 'risk': 'navigation',
+                                            'action': {'type': 'browse_url', 'bundle_id': browser['bundle_id'], 'url': address,
+                                                       'label': 'Open '+address+' in '+browser['name'], 'browser_mode': browser_mode(self.goal)}},
+                                           desktop, snapshot, catalog=self._catalog or (), goal=self.goal)['action']
+                except (ValueError, ValidationError):
+                    action = None
+                if action:
+                    self.pending = action
+                    return {'status': 'action', 'message': action.get('label', 'Opening')+'…', 'action': action,
+                            'review': not self.automatic, 'visual_capture': None}
         planner = getattr(type(provider), 'plan_task', None)
         if planner is None:
             return None

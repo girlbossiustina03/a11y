@@ -301,8 +301,7 @@ class TaskTests(unittest.TestCase):
         self.assertEqual(step['action']['type'], 'browse_url')
         self.assertEqual(step['action']['browser_mode'], 'window')
         self.assertFalse(step['review'])
-        self.assertEqual(self.provider.complete_structured.call_count, 2)
-        self.vision.capture.assert_called_once()
+        self.assertEqual(self.provider.complete_structured.call_count, 0)  # a named site opens in code now
 
     def test_actual_login_block_is_not_overridden_by_pause_reconsideration(self):
         step = self.respond(status='needs_user')

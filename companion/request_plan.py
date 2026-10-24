@@ -239,8 +239,8 @@ def enforce_operation(plan, response):
     allowed = {operation, 'request_app_access', 'request_screen'}
     if operation in ('browser_search', 'browser_open'):
         allowed.add('browse_url')
-    if operation == 'computer_task':
-        allowed.add('start_task')
+    if operation in ('computer_task', 'weather', 'look_up'):
+        allowed.add('start_task')  # a lookup carries on with the rest of the request as a task
     if operation in ('move_object', 'move_geometry'):
         allowed.update(('move_to_point', 'move_companion'))
     if operation not in ('answer', 'plan', 'inspect_screen') and action['type'] not in allowed:

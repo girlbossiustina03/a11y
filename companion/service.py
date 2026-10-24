@@ -966,10 +966,13 @@ class Companion:
                 return 'The weather needs online lookups, which are turned off in Preferences.'
             from . import weather
             from .paths import saved_ai_settings
+            several = weather.places(plan.get('target', ''), request)
             place = plan.get('target', '').strip() or weather.home_place(saved_ai_settings().get('home_place', ''))
-            if not place:
+            if not place and not several:
                 return 'Which city should I check?'
             try:
+                if len(several) >= 2:
+                    return weather.compare(several)  # "is it warmer in Lima or Nairobi?" (one city was answered, live)
                 return weather.forecast(place, plan.get('when') or 'now')['sentence']
             except weather.WeatherError as error:
                 return str(error)
@@ -1141,6 +1144,13 @@ class Companion:
                 # Answered in the background instead of opening a browser window.
                 prebuilt = {'request_kind': 'answer', 'source_ids': [], 'workflow': None, 'target': None,
                             'desktop_action': None, 'message': message}
+                rest = str(request_plan.get('remaining_request', '')).strip()
+                if rest and request_plan['operation'] in ('weather', 'look_up'):
+                    # "Look up the population of Norway and write it in a new TextEdit document": the
+                    # answer was found, then the rest was dropped (live, v3). Carry on with it, answer in hand.
+                    found = message.split('\n\nSource:')[0].strip()
+                    prebuilt['desktop_action'] = {'type': 'start_task', 'goal': rest+' (the answer to use: '+found+')'}
+                    request_plan = dict(request_plan, remaining_request='')
         if prebuilt is None and (request_plan and request_plan['operation'] == 'answer' and request_plan.get('reply', '').strip()
                 and (request_plan.get('computed') or not sources and not workflow) and not image_data and mode in ('answer', 'assist')):
             # Plain conversation was already answered by the routing call; company

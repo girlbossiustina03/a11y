@@ -15,6 +15,7 @@ WEB_APPS = {
     'youtube': 'https://www.youtube.com', 'wikipedia': 'https://www.wikipedia.org',
     'whatsapp': 'https://web.whatsapp.com', 'slack': 'https://app.slack.com',
     'github': 'https://github.com', 'linkedin': 'https://www.linkedin.com',
+    'hacker news': 'https://news.ycombinator.com', 'reddit': 'https://www.reddit.com',
 }
 # Where a site really lives once open: Teams redirects teams.microsoft.com to
 # teams.cloud.microsoft, so the open tab never matched and every request opened another one

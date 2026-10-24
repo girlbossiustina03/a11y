@@ -139,3 +139,29 @@ def wet_hour(data):
             hour = int(time[11:13])
             return f'{hour % 12 or 12} {"am" if hour < 12 else "pm"}'
     return None
+
+
+def places(target, request):
+    """The places a weather question names: "Lima or Nairobi" → two of them."""
+    parts = [p.strip(' ?.!') for p in re.split(r'\s*(?:,|\bor\b|\bvs\.?|\bversus\b|\band\b)\s*', target or '') if p.strip(' ?.!')]
+    if len(parts) < 2:
+        # The router often names only one: "warmer in Lima or Nairobi" also in the request's own words.
+        match = re.search(r'\bin\s+([A-Z][\w\-]+(?:\s+[A-Z][\w\-]+)?)\s+(?:or|vs\.?|versus|and)\s+([A-Z][\w\-]+(?:\s+[A-Z][\w\-]+)?)', request)
+        if match:
+            parts = [match.group(1), match.group(2)]
+    return parts[:3]
+
+
+def compare(names):
+    """Which of a few places is warmer now, in one sentence."""
+    readings = []
+    for name in names:
+        place, _, latitude, longitude = locate(name)
+        data = fetch_json(FORECAST+urllib.parse.urlencode({'latitude': latitude, 'longitude': longitude, 'timezone': 'auto',
+                                                           'current': 'temperature_2m'}))
+        readings.append((round(data['current']['temperature_2m']), place))
+    readings.sort(reverse=True)
+    (warm, first), (cold, second) = readings[0], readings[-1]
+    if warm == cold:
+        return f'{first} and {second} are both about {warm}°C right now.'
+    return f'{first} is warmer: {warm}°C, against {cold}°C in {second}.'

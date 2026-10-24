@@ -71,6 +71,27 @@ class DirectAnswerServiceTests(CompanionFixture, unittest.TestCase):
             self.ask('what is the weather like?', {'operation': 'weather', 'app_name': '', 'target': '', 'when': ''})
         forecast.assert_called_once_with('Bucharest', 'now')
 
+    def test_reported_two_cities_are_compared(self):
+        # Live (v3): "is it warmer in Lima or Nairobi right now?" got Lima's weather only.
+        with patch.dict('os.environ', {'A11Y_WEB_ANSWERS': '1'}), \
+                patch('companion.weather.compare', return_value='Lima is warmer: 24°C, against 19°C in Nairobi.') as compare:
+            result = self.ask('is it warmer in Lima or Nairobi right now?', {'operation': 'weather', 'app_name': '', 'target': 'Lima'})
+        compare.assert_called_once_with(['Lima', 'Nairobi'])
+        self.assertIn('Lima is warmer', result['message'])
+
+    def test_reported_a_lookup_then_carries_on_with_the_rest(self):
+        # Live (v3): the population was found, "write it in a new TextEdit document" was dropped.
+        found = ('5.6 million', {'title': 'Norway', 'extract': '', 'url': ''})
+        with patch.dict('os.environ', {'A11Y_WEB_ANSWERS': '1'}), patch('companion.web_lookup.answer', return_value=found), \
+                patch.object(self.app.knowledge, 'retrieve', return_value=[]):  # the sample company docs mention documents
+            result = self.ask('look up the population of Norway and write it in a new TextEdit document',
+                              {'operation': 'look_up', 'app_name': '', 'target': 'population of Norway',
+                               'remaining_request': 'write it in a new TextEdit document'})
+        self.assertEqual(result['desktop_action']['type'], 'start_task')
+        self.assertIn('write it in a new TextEdit document', result['desktop_action']['goal'])
+        self.assertIn('5.6 million', result['desktop_action']['goal'])
+        self.assertNotIn('Still pending', result['message'])
+
     def test_changing_facts_are_looked_up_in_the_background(self):
         found = ('Austria won with "Wasted Love" by JJ.', {'title': 'Eurovision Song Contest 2025', 'extract': '', 'url': ''})
         with patch.dict('os.environ', {'A11Y_WEB_ANSWERS': '1'}), patch('companion.web_lookup.answer', return_value=found) as lookup:
