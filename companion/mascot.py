@@ -950,29 +950,46 @@ class Mascot(QWidget):
             self.expand_chat()
             self.open_reply()
 
+    def menu_entries(self):
+        """Her actions: (title, action), (title, action, checked), (title, [entries]) or None."""
+        entries = [('Talk to me', 'talk'), ('Computer task…', 'computer:prompt'), ('Stop computer task', 'computer:stop'),
+                   ('Show last reply', 'reply'), ('My saved tasks', 'tasks'), ('Mark current step done', 'confirm'), None,
+                   ('Pause screen vision' if self.vision_button.text() == 'Screen on' else 'Enable screen vision…', 'vision:toggle'),
+                   ('Turn off voice' if getattr(self, 'voice_on', False) else 'Turn on voice (“Hey Ally”)…', 'voice:toggle'),
+                   ('Personalize and set up access…', 'setup:wizard'), ('Set up AI and voice…', 'readiness'), None,
+                   ('Face', [(name, 'face:'+key, key == self.skin) for key, name in faces.SKIN_NAMES.items()]),
+                   ('Settings…', 'settings'), None, ('Quit companion', 'quit')]
+        return entries
+
     def show_menu(self, position=None):
-        # A real macOS menu there (no parent, so her stylesheet doesn't reach it).
-        menu = QMenu() if native_mac() else RoundedMenu(self)
+        position = position or self.character.mapToGlobal(self.character.rect().topLeft())
+        entries = self.menu_entries()
+        if native_mac():
+            # A real macOS menu (Qt's own popups only imitate one).
+            chosen = mac_window.popup_menu(entries, position.x(), position.y(),
+                                           QGuiApplication.primaryScreen().geometry().height())
+            if chosen is not None:
+                if chosen:
+                    self.action_requested.emit(chosen)
+                return
+        menu = RoundedMenu(self)
         menu.setAccessibleName('Companion actions')
-        for title, action in [('Talk to me', 'talk'), ('Computer task…', 'computer:prompt'), ('Stop computer task', 'computer:stop'), ('Show last reply', 'reply'),
-                              ('My saved tasks', 'tasks'), ('Mark current step done', 'confirm'),
-                              ('Pause screen vision' if self.vision_button.text() == 'Screen on' else 'Enable screen vision…', 'vision:toggle'),
-                              ('Turn off voice' if getattr(self, 'voice_on', False) else 'Turn on voice (“Hey Ally”)…', 'voice:toggle'),
-                              ('Personalize and set up access…', 'setup:wizard'),
-                              ('Set up AI and voice…', 'readiness'), ('Settings…', 'settings'), ('Quit companion', 'quit')]:
-            if action in ('vision:toggle', 'settings', 'quit'):
-                menu.addSeparator()
-            if action == 'settings':
-                looks = menu.addMenu('Face')
-                for key, name in faces.SKIN_NAMES.items():
-                    item = looks.addAction(name)
-                    item.setCheckable(True)
-                    item.setChecked(key == self.skin)
-                    item.triggered.connect(lambda checked=False, k=key: self.action_requested.emit('face:'+k))
-            item = menu.addAction(title)
-            item.triggered.connect(lambda checked=False, a=action: self.action_requested.emit(a))
-        menu.exec(position or self.character.mapToGlobal(self.character.rect().topLeft()))
+        self.fill_menu(menu, entries)
+        menu.exec(position)
         menu.deleteLater()
+
+    def fill_menu(self, menu, entries):
+        for entry in entries:
+            if entry is None:
+                menu.addSeparator()
+            elif isinstance(entry[1], list):
+                self.fill_menu(menu.addMenu(entry[0]), entry[1])
+            else:
+                item = menu.addAction(entry[0])
+                if len(entry) > 2:
+                    item.setCheckable(True)
+                    item.setChecked(entry[2])
+                item.triggered.connect(lambda checked=False, a=entry[1]: self.action_requested.emit(a))
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:

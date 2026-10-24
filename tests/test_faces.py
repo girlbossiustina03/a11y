@@ -96,6 +96,16 @@ class TerminalThemeTests(unittest.TestCase):
         self.assertEqual(terminal_theme.palette('no-such-theme'), terminal_theme.THEMES['clear_dark'])
         self.assertFalse(terminal_theme.palette('catppuccin_latte').dark)
 
+    @unittest.skipUnless(sys.platform == 'darwin', 'AppKit menus')
+    def test_reported_menu_is_a_real_macos_menu(self):
+        # Reported: her right-click menu didn't look like macOS (it was Qt imitating one).
+        from companion import mac_window
+        actions = []
+        menu = mac_window.build_menu([('Talk to me', 'talk'), None, ('Face', [('Blob', 'face:blob', True), ('Cat', 'face:cat')]),
+                                      ('Quit companion', 'quit')], actions)
+        self.assertEqual(mac_window.send(menu, 'numberOfItems', restype=mac_window.ctypes.c_long), 4)
+        self.assertEqual(actions, ['talk', 'face:blob', 'face:cat', 'quit'])
+
     def test_appearance_is_saved_in_the_data_folder(self):
         with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {'A11Y_DATA_DIR': folder}):
             self.assertEqual(terminal_theme.saved_appearance(), {'theme': 'terminal', 'face': 'blob'})

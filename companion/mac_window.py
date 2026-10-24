@@ -125,3 +125,82 @@ def set_blur(widget, radius):
         return graphics.CGSSetWindowBackgroundBlurRadius(graphics.CGSMainConnectionID(), number, int(radius)) == 0
     except (AttributeError, TypeError, ValueError, OSError, ctypes.ArgumentError):
         return False
+
+
+class Point(ctypes.Structure):
+    _fields_ = [('x', ctypes.c_double), ('y', ctypes.c_double)]
+
+
+_menu_target = None
+_menu_pick = None
+_menu_choice = []
+
+
+def _target():
+    """One Objective-C object whose pick: records the chosen item's tag."""
+    global _menu_target, _menu_pick
+    if _menu_target is None:
+        objc = runtime()
+        objc.objc_allocateClassPair.restype = ctypes.c_void_p
+        objc.objc_allocateClassPair.argtypes = (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t)
+        objc.class_addMethod.argtypes = (ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p)
+        objc.objc_registerClassPair.argtypes = (ctypes.c_void_p,)
+        name = b'A11yMenuTarget'
+        cls = objc.objc_getClass(name)
+        if not cls:
+            cls = objc.objc_allocateClassPair(objc.objc_getClass(b'NSObject'), name, 0)
+
+            def pick(this, selector, sender):
+                _menu_choice.append(send(sender, 'tag', restype=ctypes.c_long))
+            _menu_pick = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(pick)
+            objc.class_addMethod(cls, objc.sel_registerName(b'pick:'), ctypes.cast(_menu_pick, ctypes.c_void_p), b'v@:@')
+            objc.objc_registerClassPair(cls)
+        _menu_target = send(send(cls, 'alloc'), 'init')
+    return _menu_target
+
+
+def ns_string(text):
+    return send(runtime().objc_getClass(b'NSString'), 'stringWithUTF8String:', text.encode(), argtypes=(ctypes.c_char_p,))
+
+
+def build_menu(entries, actions):
+    """An NSMenu from entries: (title, action), (title, action, checked), (title, [entries])
+    for a submenu, or None for a separator. actions collects the action per item tag."""
+    ctypes.cdll.LoadLibrary('/System/Library/Frameworks/AppKit.framework/AppKit')
+    item_class = runtime().objc_getClass(b'NSMenuItem')
+    menu = send(send(runtime().objc_getClass(b'NSMenu'), 'alloc'), 'initWithTitle:', ns_string(''), argtypes=(ctypes.c_void_p,))
+    for entry in entries:
+        if entry is None:
+            send(menu, 'addItem:', send(item_class, 'separatorItem'), restype=None, argtypes=(ctypes.c_void_p,))
+            continue
+        title, action = entry[0], entry[1]
+        submenu = isinstance(action, list)
+        item = send(send(item_class, 'alloc'), 'initWithTitle:action:keyEquivalent:', ns_string(title),
+                    None if submenu else runtime().sel_registerName(b'pick:'), ns_string(''),
+                    argtypes=(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p))
+        if submenu:
+            send(item, 'setSubmenu:', build_menu(action, actions), restype=None, argtypes=(ctypes.c_void_p,))
+        else:
+            send(item, 'setTarget:', _target(), restype=None, argtypes=(ctypes.c_void_p,))
+            send(item, 'setTag:', len(actions), restype=None, argtypes=(ctypes.c_long,))
+            actions.append(action)
+            if len(entry) > 2 and entry[2]:
+                send(item, 'setState:', 1, restype=None, argtypes=(ctypes.c_long,))
+        send(menu, 'addItem:', item, restype=None, argtypes=(ctypes.c_void_p,))
+    return menu
+
+
+def popup_menu(entries, x, y, screen_height):
+    """Show a real macOS menu at a Qt global point (top-left origin) and wait for it.
+    Returns the chosen action, '' when dismissed, or None if it couldn't be shown."""
+    try:
+        if runtime() is None:
+            return None
+        actions = []
+        menu = build_menu(entries, actions)
+        _menu_choice.clear()
+        send(menu, 'popUpMenuPositioningItem:atLocation:inView:', None, Point(x, screen_height-y), None,
+             restype=ctypes.c_bool, argtypes=(ctypes.c_void_p, Point, ctypes.c_void_p))
+        return actions[_menu_choice[-1]] if _menu_choice else ''
+    except (AttributeError, TypeError, ValueError, OSError, ctypes.ArgumentError, IndexError):
+        return None
