@@ -263,6 +263,38 @@ NAMED_DAY = re.compile(r'\b(?:today|tonight|tomorrow|yesterday|monday|tuesday|we
                        r'next week|this week)\b|\d{1,2}[./-]\d{1,2}', re.I)
 
 
+STATED_TIME = re.compile(r"\bat\s+(\d{1,2})(?:[:.](\d{2}))?\s*(a\.?m\.?|p\.?m\.?)?(?![\d:])", re.I)
+
+
+def stated_time(when, request, now=None):
+    """The clock time the user said ("at 6", "at 7:30pm") wins over the model's. At 22:46 the
+    model set "remind me to call mom at 6" for 22:46, the time it was then (live). The day
+    stays the model's; upcoming() then moves a past time to its next occurrence."""
+    from .mac_apps import parse_when
+    match = STATED_TIME.search(request)
+    if not match or int(match.group(1)) > 23 or int(match.group(2) or 0) > 59:
+        return when
+    hour, minute, half = int(match.group(1)), int(match.group(2) or 0), (match.group(3) or '').casefold()[:1]
+    now = now or datetime.now()
+    start = parse_when(when) or now
+    if half:
+        hours = [hour % 12+(12 if half == 'p' else 0)]
+    elif hour <= 12:
+        hours = [hour % 12, hour % 12+12]
+    else:
+        hours = [hour]
+    if start.hour in hours and start.minute == minute and parse_when(when):
+        return when  # the model read it right
+    if len(hours) == 2 and parse_when(when) and start.date() != now.date():
+        hours = [hours[1] if 1 <= hour <= 6 else hours[0] if hour != 12 else 12]  # "Monday at 3" is 15:00
+    choices = [start.replace(hour=h, minute=minute, second=0, microsecond=0) for h in hours]
+    from datetime import timedelta
+    if parse_when(when) is None or start.date() == now.date():
+        choices += [choice+timedelta(days=1) for choice in choices]  # the next one, maybe tomorrow
+    future = [choice for choice in choices if choice > now]
+    return min(future or choices).strftime('%Y-%m-%dT%H:%M')
+
+
 def upcoming(when, request, now=None):
     """A reminder or event time the model placed in the past moves to its next occurrence.
 
@@ -879,7 +911,7 @@ class Companion:
                 target = str(interpreted.get('target', ''))
                 when = str(interpreted.get('when', '')).strip()
                 if interpreted['operation'] in ('add_event', 'add_reminder') and when:
-                    when = upcoming(when, request)
+                    when = upcoming(stated_time(when, request), request)
                     # The time has its own field: packed into target, a small model often wrote
                     # only "6 PM" and lost the reminder's title (live).
                     title, _, minutes = target.partition('|')

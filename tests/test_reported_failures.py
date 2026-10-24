@@ -1404,3 +1404,18 @@ class WeatherDayTests(unittest.TestCase):
                            ('tomorrow morning', 1), ('now', 0), ('', 0), ('saturday', 7)):
             self.assertEqual(day_offset(when, saturday), days, when)
         self.assertIsNone(day_offset('someday', saturday))
+
+
+class StatedTimeTests(unittest.TestCase):
+    def test_reported_at_6_is_six_not_the_time_it_is_now(self):
+        # Live, at 22:46: "remind me to call mom at 6" came back as today 22:46.
+        from datetime import datetime
+        from companion.service import stated_time, upcoming
+        late = datetime(2026, 10, 24, 22, 46)
+        when = upcoming(stated_time('2026-10-24T22:46:00', 'remind me to call mom at 6', late), 'remind me to call mom at 6', late)
+        self.assertEqual(when, '2026-10-25T06:00')
+        morning = datetime(2026, 10, 24, 9, 10)
+        self.assertEqual(stated_time('2026-10-24T18:00:00', 'remind me to call mom at 6', morning), '2026-10-24T18:00:00')  # right already
+        self.assertEqual(stated_time('', 'remind me at 7:30pm to stretch', morning), '2026-10-24T19:30')
+        self.assertEqual(stated_time('2026-10-26T10:00', 'meeting on monday at 3', morning), '2026-10-26T15:00')
+        self.assertEqual(stated_time('2026-10-24T18:00', 'call the 6 people', morning), '2026-10-24T18:00')  # no "at"
