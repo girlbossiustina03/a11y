@@ -58,6 +58,12 @@ def plan(request, catalog):
     if re.search(r'\b(play|pause|resume|skip|shuffle)\b', rest, re.I):
         return None  # "open Music and play X" uses the dedicated playback path.
     base = {'app_name': browser or '', 'browser_mode': parsed['mode'], 'remaining_request': rest}
+    query = re.fullmatch(r'(?:then\s+)?search(?:\s+the\s+web|\s+online)?\s+for\s+(.+)', rest, re.I) if rest else None
+    if browser is None and name.casefold() in BROWSER_WORDS and query and not FOLLOW_UP.search(query.group(1)):
+        # "Open Safari and search for lasagna recipe" is one web search in that browser; as an
+        # app launch plus a task it took ten seconds of clicking (live).
+        return dict(base, operation='browser_search', app_name=BROWSER_WORDS[name.casefold()],
+                    target=query.group(1).strip(' "\'“”'), remaining_request='')
     if browser is None:
         apps = resolve_app(name, catalog)
         if len(apps) == 1:

@@ -931,7 +931,8 @@ def run_case(app, case, attempt):
         record['closed'] = restore(opened)
     except (RuntimeError, subprocess.SubprocessError) as error:
         record['closed'] = ['error: '+str(error)[:100]]
-    if case.quiet and record['success'] and (record['closed'] or record['front_app'] not in (front_before, 'Python')):
+    # The terminal driving the run (or A11y itself) coming forward is not something she opened.
+    if case.quiet and record['success'] and (record['closed'] or record['front_app'] not in (front_before, 'Python', 'Terminal')):
         record.update(success=False, failure='opened '+(', '.join(record['closed']) or record['front_app'])+' for a question')
     return record
 

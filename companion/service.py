@@ -108,6 +108,9 @@ BARE_VERB = re.compile(r'^\W*(?:please\s+)?(open|launch|start|close|quit|click|s
 # Reads that A11y does in Apple's own apps, and the names that mean those apps.
 BUILT_IN_READS = {'read_mail': ('Mail', 'Apple Mail', 'email', 'inbox'), 'read_calendar': ('Calendar', 'my calendar'),
                   'read_reminders': ('Reminders',), 'read_notes': ('Notes', 'my notes'), 'find_contact': ('Contacts',)}
+# "Show me …" asks to see a thing where it lives: these reads open their app instead.
+SHOW_ME = re.compile(r'^\W*(?:(?:can|could|would)\s+you\s+|please\s+)?show\s+me\b', re.I)
+SHOWN_IN_APP = {'read_reminders': 'Reminders', 'read_calendar': 'Calendar', 'read_notes': 'Notes', 'read_mail': 'Mail'}
 # Questions about the conversation itself: "what did I just say", "what did I tell you".
 # Only questions: "remind me tomorrow about what I told you" is still a reminder.
 ABOUT_CONVERSATION = re.compile(r'^\W*(?:what|which|who|when|where|how|did|do|was|were)\b.*?(?:\b(?:I|we)\s+(?:just\s+|already\s+|earlier\s+)?'
@@ -857,6 +860,15 @@ class Companion:
                     r'\b(?:in|on)\s+(?:the\s+)?(?:%s)(?:\s+app)?\b' % '|'.join(map(re.escape, BUILT_IN_READS[interpreted['operation']][:1])), request, re.I)):
                 # "Show me July 2026 in Calendar" read the events aloud: it asks to see the app.
                 interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
+            if (interpreted.get('operation') in SHOWN_IN_APP and SHOW_ME.match(request)
+                    and not self.names_other_app(request, interpreted['operation'], str(interpreted.get('target', '')))):
+                # "Show me my reminders" read them out (live): showing means opening the app they live in.
+                # The whole list opens the app; one item ("show me my note about rent") is a task there.
+                if str(interpreted.get('target', '')).strip().casefold() in ('', 'all', 'today', 'latest', 'week', 'now'):
+                    interpreted = {'operation': 'launch_app', 'app_name': SHOWN_IN_APP[interpreted['operation']], 'target': '',
+                                   'browser_mode': 'default', 'remaining_request': ''}
+                else:
+                    interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
             if interpreted.get('operation') in BUILT_IN_READS and self.names_other_app(request, interpreted['operation'],
                                                                                          str(interpreted.get('target', ''))):
                 # "Check if I have new notifications on Teams" was read from Calendar or Mail (live):

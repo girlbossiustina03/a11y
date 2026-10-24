@@ -128,7 +128,8 @@ weather: any question about the weather or temperature ("what's the weather like
 rain in Paris tomorrow"): target the place named, empty when none; when now|today|tomorrow|a
 weekday. A11y answers it in the background; never open a browser or app for it.
 look_up: a factual question whose answer may have changed or be recent (who holds an office
-now, a population, a recent event, result, winner or release), or a fact you are not sure of:
+now, a population, a count that keeps changing, a recent event, result, winner or release), or
+a fact you are not sure of:
 target the topic in a few words ("mayor of Brasov", "Eurovision 2025 winner"), reply empty.
 A11y looks it up in the background. Ordinary questions you know are answer, with the reply.
 Open a browser only when the user asks to search, look up, google or open a website: "search

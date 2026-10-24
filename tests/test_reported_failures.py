@@ -453,6 +453,21 @@ class LiveRoutingTests(unittest.TestCase):
         self.route('read_mail', '1')
         self.assertEqual(self.app.ask('any new messages in Slack?')['desktop_action']['type'], 'start_task')
 
+    def test_reported_show_me_my_reminders_opens_reminders(self):
+        # Live (answers suite): "show me my reminders" read them out instead of opening the app.
+        self.route('read_reminders', 'all')
+        plan = self.app.prepare_request('show me my reminders')
+        self.assertEqual((plan['operation'], plan['app_name']), ('launch_app', 'Reminders'))
+        self.route('read_notes', 'rent')
+        self.assertEqual(self.app.prepare_request('show me my note about rent')['operation'], 'computer_task')
+
+    def test_reported_open_safari_and_search_is_one_search(self):
+        # Live (answers suite): an app launch plus ten seconds of clicking.
+        self.route('answer')
+        plan = self.app.prepare_request('open safari and search for lasagna recipe')
+        self.assertEqual((plan['operation'], plan['app_name'], plan['target']), ('browser_search', 'Safari', 'lasagna recipe'))
+        self.provider.interpret_request.assert_not_called()  # decided in code
+
     def test_built_in_reads_still_answer_when_they_name_their_own_app(self):
         self.route('read_calendar', 'tomorrow')
         response = self.app.ask("what's on my calendar tomorrow")
@@ -1377,3 +1392,15 @@ class MicrophonePermissionAnswerTests(unittest.TestCase):
         self.assertEqual(self.answer('Denied', frozen=True), ['denied'])
         # From source Qt always says no; macOS asks for the terminal when the microphone opens.
         self.assertEqual(self.answer('Denied', frozen=False), ['open'])
+
+
+class WeatherDayTests(unittest.TestCase):
+    def test_reported_this_friday_is_understood(self):
+        # Live (answers suite): "what's the weather in New York this Friday?" → "next week only".
+        import datetime
+        from companion.weather import day_offset
+        saturday = datetime.date(2026, 10, 24)
+        for when, days in (('this Friday', 6), ('on fri', 6), ('2026-10-30', 6), ('2026-10-30T09:00', 6),
+                           ('tomorrow morning', 1), ('now', 0), ('', 0), ('saturday', 7)):
+            self.assertEqual(day_offset(when, saturday), days, when)
+        self.assertIsNone(day_offset('someday', saturday))

@@ -6,6 +6,7 @@ Mac's time zone ("Europe/Bucharest" → Bucharest), which needs no location acce
 """
 import datetime
 import json
+import re
 import os
 import urllib.parse
 import urllib.request
@@ -74,15 +75,18 @@ def day_offset(when, today):
     text = (when or '').strip().casefold()
     if text in ('', 'now', 'today', 'tonight', 'this evening', 'this afternoon', 'this morning'):
         return 0
-    if text == 'tomorrow':
+    if 'tomorrow' in text:
         return 1
+    date = re.search(r'\d{4}-\d{2}-\d{2}', text)
+    if date:
+        try:
+            return (datetime.date.fromisoformat(date.group(0))-today).days
+        except ValueError:
+            return None
     for index, name in enumerate(WEEKDAYS):
-        if text.startswith(name[:3]):
+        if re.search(r'\b'+name[:3], text):  # "friday", "this Friday", "on fri"
             return (index-today.weekday()) % 7 or 7
-    try:
-        return (datetime.date.fromisoformat(text[:10])-today).days
-    except ValueError:
-        return None
+    return None
 
 
 def forecast(place, when='now'):
