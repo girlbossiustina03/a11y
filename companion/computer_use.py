@@ -34,7 +34,7 @@ class ComputerUse:
             self.vision.execute_click(self.provider, self.desktop, proposal)
         elif kind == 'press_control':
             self.desktop.press(proposal)
-        elif kind in ('launch_app', 'quit_app', 'new_window', 'close_window', 'close_tab', 'browse_url', 'play_media', 'type_text', 'press_key', 'scroll'):
+        elif kind in ('launch_app', 'quit_app', 'new_window', 'close_window', 'close_tab', 'choose_menu', 'browse_url', 'play_media', 'type_text', 'press_key', 'scroll'):
             native_result = self.desktop.application_action(proposal) or {}
         elif kind == 'focus_app':
             self.desktop.activate(proposal['bundle_id'])

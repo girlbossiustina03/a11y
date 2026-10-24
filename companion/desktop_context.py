@@ -157,6 +157,8 @@ class MacDesktopBridge:
                              *((action['window_hint'],) if action.get('window_hint') else ()))
         if kind == 'close_tab':
             return self.call('--close-tab', action['bundle_id'])
+        if kind == 'choose_menu':
+            return self.call('--menu', action['bundle_id'], action['path'])
         if kind == 'close_window':
             return self.call('--close-window', action['bundle_id'], action['window_id'].rsplit(':', 1)[1],
                              action['window_title'], json.dumps(action['bounds']))
@@ -316,6 +318,13 @@ class DesktopContext:
                     raise ValueError('New-window automation is currently available only for Terminal.')
                 verb = {'launch_app': 'Open ', 'quit_app': 'Quit ', 'new_window': 'Open a new window in '}[kind]
                 return {'type': kind, 'bundle_id': app['bundle_id'], 'label': verb+app['name']}
+        elif kind == 'choose_menu' and set(action) == {'type', 'path'} and isinstance(action['path'], str) \
+                and 0 < len(action['path']) <= 160 and not any(ord(c) < 32 for c in action['path']):
+            # A menu item of the app in front, pressed by its titles ("View > as List").
+            app = context.get('app') or {}
+            if app.get('bundle_id'):
+                path = ' > '.join(part.strip() for part in action['path'].split('>') if part.strip())
+                return {'type': kind, 'path': path, 'bundle_id': app['bundle_id'], 'label': 'Choose '+path.replace(' > ', ' › ')+' in '+app.get('name', 'the app')}
         elif kind == 'close_tab' and set(action) == {'type', 'bundle_id'} and action['bundle_id'] in ('com.apple.Safari', 'com.google.Chrome', 'com.microsoft.edgemac'):
             app = next((a for a in context.get('available_apps', []) if a['bundle_id'] == action['bundle_id']), None)
             if app:
@@ -390,6 +399,15 @@ class DesktopContext:
             result = self.bridge.application_action(self.authorize_browser(proposal))
             if not result.get('submitted'):
                 raise RuntimeError('The browser did not confirm accepting that address. Nothing will be retried automatically.')
+            self.collect_once()
+            return result
+        if proposal['type'] == 'choose_menu':
+            current = self.authorize_action({'type': 'choose_menu', 'path': proposal['path']})
+            if current['bundle_id'] != proposal.get('bundle_id'):
+                raise ValueError('A different app is in front now. Nothing was chosen.')
+            result = self.bridge.application_action(current)
+            if not result.get('submitted'):
+                raise RuntimeError('The menu item did not respond.')
             self.collect_once()
             return result
         fields = ('type', 'window_id') if proposal['type'] == 'close_window' else ('type', 'bundle_id')  # close_tab too

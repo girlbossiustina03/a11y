@@ -863,8 +863,11 @@ class NotificationLoopTests(Harness):
         task = ComputerTask('check my notifications', automatic=True, goal_mode='inspect')
         for label in ('Activity (1)', 'Bell icon', 'Activity (2)', 'Bell icon'):
             task.record({'type': 'click_point', 'label': label, 'status': 'submitted'})
+        # Twice each, alternating: one more try is allowed (opening two tabs is legitimate)…
+        self.assertEqual(task.repeats({'type': 'click_point', 'label': 'Activity'}), 1)
+        task.record({'type': 'click_point', 'label': 'Activity (1)', 'status': 'submitted'})
+        # …a third time anywhere is a loop.
         self.assertEqual(task.repeats({'type': 'click_point', 'label': 'Activity'}), 2)
-        self.assertEqual(task.repeats({'type': 'click_point', 'label': 'Bell icon'}), 2)
         self.assertEqual(task.repeats({'type': 'click_point', 'label': 'Calendar'}), 0)
 
 
@@ -1148,3 +1151,66 @@ class PlanStartTests(Harness):
                               'action': {'type': 'click_point', 'x': .5, 'y': .97, 'label': 'Calendar icon in Dock'}},
                              self.desktop, deepcopy(CALCULATOR), catalog=catalog, screen={'x': 0, 'y': 0, 'width': 1000, 'height': 700})
         self.assertEqual((step['action']['type'], step['action']['bundle_id']), ('launch_app', 'com.apple.iCal'))
+
+
+class TaskToolTests(Harness):
+    """v2 suite: a field was clicked but never typed into, menus were clicked as text, pop-ups
+    blocked tasks. Tools let one decision do several steps; code runs the rest, checked each time."""
+    snapshot = dict(CALCULATOR, controls=[], app={'name': 'Safari', 'bundle_id': 'com.apple.Safari', 'pid': 7},
+                    focused_role='AXTextField', focused_bounds={'x': 300, 'y': 200, 'width': 400, 'height': 30},
+                    targets=[{'role': 'AXTextField', 'label': 'Search Wikipedia', 'page': True,
+                              'bounds': {'x': 300, 'y': 200, 'width': 400, 'height': 30}},
+                             {'role': 'AXButton', 'label': "Don't Allow", 'bounds': {'x': 600, 'y': 400, 'width': 90, 'height': 30}}])
+
+    def model(self, action):
+        self.provider.complete_structured.return_value = {'status': 'action', 'message': 'Go.', 'risk': 'navigation', 'action': action}
+
+    def test_search_in_app_clicks_the_field_then_types_and_presses_enter_without_the_model(self):
+        task = ComputerTask('on Wikipedia, search for Bucharest', automatic=True, goal_mode='inspect')
+        self.model({'type': 'search_in_app', 'query': 'Bucharest'})
+        step = self.propose(task)
+        self.assertEqual((step['action']['type'], step['action']['label']), ('click_point', 'Search Wikipedia'))
+        task.record({'type': 'click_point', 'label': 'Search Wikipedia', 'status': 'submitted'})
+        self.provider.complete_structured.reset_mock()
+        typed = self.propose(task)
+        self.assertEqual((typed['action']['type'], typed['action']['text']), ('type_text', 'Bucharest'))
+        task.record({'type': 'type_text', 'label': 'Type', 'status': 'submitted'})
+        enter = self.propose(task)
+        self.assertEqual((enter['action']['type'], enter['action']['key']), ('press_key', 'enter'))
+        self.assertFalse(enter['review'])  # Enter in a search field, read-only goal
+        self.provider.complete_structured.assert_not_called()
+
+    def test_page_targets_are_marked_and_declining_needs_no_confirmation(self):
+        from companion.computer_task import screen_marks
+        marks = screen_marks(self.snapshot['targets'], [], {'x': 0, 'y': 0, 'width': 1000, 'height': 700})
+        self.assertEqual([m['kind'] for m in marks], ['page field', 'button'])
+        self.model({'type': 'click_target', 'target_id': 't2'})
+        step = self.propose(ComputerTask('check my notifications', automatic=True, goal_mode='inspect'))
+        self.assertEqual(step['action']['label'], "Don't Allow")
+        self.assertFalse(step['review'])
+
+    def test_menus_are_chosen_by_title_and_risky_items_wait(self):
+        self.model({'type': 'choose_menu', 'path': 'View > as List'})
+        step = self.propose(ComputerTask('show the files as a list', automatic=True, goal_mode='inspect'))
+        self.assertEqual((step['action']['type'], step['action']['path']), ('choose_menu', 'View > as List'))
+        self.assertFalse(step['review'])
+        self.model({'type': 'choose_menu', 'path': 'Finder > Empty Bin…'})
+        self.assertTrue(self.propose(ComputerTask('empty the bin', automatic=True, goal_mode='change'))['review'])
+
+
+class FileKindTests(unittest.TestCase):
+    def test_the_named_kind_of_file_is_opened(self):
+        import tempfile
+        from pathlib import Path
+        from companion import mac_apps
+        with tempfile.TemporaryDirectory() as home:
+            downloads = Path(home)/'Downloads'
+            downloads.mkdir()
+            (downloads/'report.pdf').write_text('x')
+            time.sleep(0.01)
+            (downloads/'A11y.dmg').write_text('x')
+            opened = []
+            reply = mac_apps.open_file('the last PDF I downloaded', home=Path(home), opener=lambda args, **k: opened.append(args))
+            self.assertEqual(reply, 'Opened report.pdf.')
+            (Path(home)/'Movies').mkdir()
+            self.assertEqual(mac_apps.open_file('my Movies folder', home=Path(home), opener=lambda args, **k: opened.append(args)), 'Opened Movies.')

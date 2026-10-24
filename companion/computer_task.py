@@ -8,7 +8,7 @@ import time
 from .models import RESPONSE_SCHEMA, ValidationError, validate_response, text
 from .timing import timing
 
-TOOLS = {'click_point', 'press_control', 'type_text', 'press_key', 'scroll', 'launch_app', 'focus_app', 'new_window', 'browse_url', 'wait'}
+TOOLS = {'click_point', 'press_control', 'type_text', 'press_key', 'scroll', 'launch_app', 'focus_app', 'new_window', 'browse_url', 'wait', 'choose_menu'}
 SCHEMA = {'type': 'object', 'additionalProperties': False,
           'required': ['status', 'message', 'risk', 'action'],
           'properties': {'status': {'enum': ['action', 'done', 'needs_user']},
@@ -56,10 +56,19 @@ def schema_for(platform, fast, control_ids=None, target_ids=None):
                 variant['properties']['control_id'] = {'enum': list(dict.fromkeys(control_ids))}
     if target_ids:
         # One of the numbered targets on screen: code knows exactly where it is.
-        schema['anyOf'][0]['properties']['action']['anyOf'].insert(0, {
+        variants = schema['anyOf'][0]['properties']['action']['anyOf']
+        variants.insert(0, {
             'type': 'object', 'additionalProperties': False, 'required': ['type', 'target_id'],
             'properties': {'type': {'enum': ['click_target']}, 'target_id': {'enum': list(target_ids)},
                            'button': {'enum': ['left', 'right']}, 'click_count': {'enum': [1, 2]}}})
+        # Tools that code finishes step by step (TaskTools): one decision instead of several.
+        variants.insert(1, {'type': 'object', 'additionalProperties': False, 'required': ['type', 'target_id', 'text'],
+                            'properties': {'type': {'enum': ['type_into']}, 'target_id': {'enum': list(target_ids)}, 'text': {'type': 'string'}}})
+    variants = schema['anyOf'][0]['properties']['action']['anyOf']
+    variants.append({'type': 'object', 'additionalProperties': False, 'required': ['type', 'query'],
+                     'properties': {'type': {'enum': ['search_in_app']}, 'query': {'type': 'string'}}})
+    variants.append({'type': 'object', 'additionalProperties': False, 'required': ['type', 'text'],
+                     'properties': {'type': {'enum': ['scroll_to']}, 'text': {'type': 'string'}}})
     if excluded:
         variants = schema['anyOf'][0]['properties']['action']['anyOf']
         for variant in variants:
@@ -159,7 +168,17 @@ use click_target with its id: the app knows exactly where it is. "The first resu
 is the first matching one in the page's content, not a link in a menu or navigation bar. Use click_point only for something visible that no target lists.
 visual_context.text_regions entries (when there are no targets) are "text|x,y"; desktop.controls
 entries are "control_id|role|label|x,y,w,h" (desktop points); running_apps are "name=bundle_id".
-To reach something not on screen, scroll, or open the menu, tab or page that leads to it.
+Targets whose kind starts with "page" are inside the web page; the others are the app's own
+buttons (toolbar, tabs, sidebar). To reach something not on screen, scroll, or open the menu,
+tab or page that leads to it.
+Tools that save steps: launch_app opens any installed app by name (never go through Finder or
+the Dock); type_into clicks a field target and types the text; search_in_app searches inside the
+app in front (its search field, else Command-F) and presses Enter; choose_menu presses a menu
+item by its titles, path "View > as List" (desktop.menus lists the menu bar); scroll_to scrolls
+until the text is on screen; press_key cmd_[ goes back a page and cmd_] forward; browse_url with
+browser_mode tab opens a site in a new tab.
+A pop-up, permission prompt or cookie banner in the way: decline or close it ("Not now",
+"Don't Allow", "Reject all", "Close") and continue; never accept tracking or grant permissions.
 Prefer press_control with a control_id from the CURRENT metadata for named buttons,
 menu items or links. It uses the native accessibility API, with no coordinate guessing
 or movement of the user's mouse. Calculator arithmetic can press its observed digit,
@@ -220,7 +239,18 @@ def search_field_focused(snapshot):
     return False
 
 
+# Buttons that only decline or dismiss ("Don't Allow", "Not now", "Reject all", "Close"): never a change.
+DECLINE = re.compile(r"^\W*(?:don'?t allow|do not allow|not now|no,? thanks|never|reject(?: all)?|decline|deny|close|cancel|dismiss|skip|"
+                     r"later|maybe later|only (?:necessary|essential)|(?:necessary|essential) only|use necessary cookies only|got it|ok,? got it)\b", re.I)
+# Menu items that change or end something; the user confirms them.
+MENU_CHANGES = re.compile(r'\b(quit|delete|empty|erase|log ?out|sign ?out|restart|shut ?down|sleep|force quit|move to (?:bin|trash)|send|remove|format|reset)\b', re.I)
+
+
 def needs_review(action, risk):
+    if action.get('type') == 'choose_menu':
+        return bool(MENU_CHANGES.search(action.get('path', '')))
+    if action.get('type') in ('click_point', 'press_control') and DECLINE.match(action.get('label', '')):
+        return False
     if risk != 'navigation':
         return True
     if action.get('type') == 'press_key' and action.get('key') in ('enter', 'cmd_w'):
@@ -277,7 +307,7 @@ def screen_marks(targets, regions, screen, limit=160):
             x, y = (b['x']-screen.get('x', 0))/screen['width'], (b['y']-screen.get('y', 0))/screen['height']
             width, height = b['width']/screen['width'], b['height']/screen['height']
             if 0 <= x+width/2 < 1 and 0 <= y+height/2 < 1:
-                marks.append({'kind': ROLE_NAMES.get(target.get('role'), 'control'), 'label': target['label'][:80],
+                marks.append({'kind': ('page ' if target.get('page') else '')+ROLE_NAMES.get(target.get('role'), 'control'), 'label': target['label'][:80],
                               'x': x, 'y': y, 'width': width, 'height': height})
     covered = list(marks)
     for region in regions:
@@ -311,7 +341,7 @@ def resolve_target(raw, marks):
 
 def compact_desktop(snapshot):
     """Current app, window and controls in a few tokens each; same facts as before."""
-    result = {key: snapshot[key] for key in ('status', 'focused_role', 'companion_focused') if key in snapshot}
+    result = {key: snapshot[key] for key in ('status', 'focused_role', 'companion_focused', 'menus') if key in snapshot}
     app, window = snapshot.get('app') or {}, snapshot.get('window') or {}
     if app:
         result['app'] = '%s (%s)' % (app.get('name', ''), app.get('bundle_id', ''))
@@ -583,14 +613,15 @@ def validate_step(raw, desktop, snapshot, *, goal_mode=None, screen=None, text_r
                     labels.append(control.get('label', ''))
         import re
         sensitive = r'\b(post|send|reply|compose|delete|remove|buy|pay|purchase|subscribe|install|download|upload|allow|permission|password|sign.?in|log.?in|submit|turn on|turn off|enable|disable|accept|block|unsubscribe)\b|\bnew message\b'
-        found = {match.group(0).casefold().replace(' ', '').replace('-', '') for label in labels for match in re.finditer(sensitive, label, re.I)}
+        found = {match.group(0).casefold().replace(' ', '').replace('-', '') for label in labels if not DECLINE.match(label)
+                 for match in re.finditer(sensitive, label, re.I)}
         # What the goal itself asks for ("sign me in") is proposed for the user's confirmation
         # (needs_review), not refused: refusing it left the user with no way forward (live).
         asked = {word for word in found if re.search(r'\b'+'.?'.join(map(re.escape, word.replace('signin', 'sign in').replace('login', 'log in').split()))+r'\b',
                                                      re.sub(r'\bsign (\w+ )?in\b', 'sign in', re.sub(r'\blog (\w+ )?in\b', 'log in', goal or '', flags=re.I), flags=re.I), re.I)}
         if action['type'] in ('click_point', 'press_control') and found and not found <= asked:
             raise ValidationError('This is an inspection-only goal. Do not open a composer, post/send, or change anything. Choose a reading/navigation target, or report a genuine blocker with action=null.')
-        if raw['risk'] == 'change' and not (found and found <= asked):
+        if raw['risk'] == 'change' and not (found and found <= asked) and not DECLINE.match(action.get('label', '')):
             raise ValidationError('This goal only authorizes inspection. Choose a navigation action or pause with action=null; do not propose a change.')
     return dict(raw, message=message, action=action)
 
@@ -637,6 +668,9 @@ class ComputerTask:
         self.click = click_goal(self.goal)
         self.clicked_text = None
         self.plan = None
+        # Primitive steps a tool still has to do (type after clicking a field, Enter after typing,
+        # scrolling until something shows); code runs them without asking the model again.
+        self.queue = []
         self.planned = opening is not None  # a known opening needs no plan for where to start
         # "Click the first email": the nth visible row of the window's list (see row_step).
         self.row = row_goal(self.goal)
@@ -822,6 +856,64 @@ class ComputerTask:
         check_active()
         return {'status': 'done', 'message': answer, 'action': None} if answer else None
 
+    def expand_tool(self, raw, marks):
+        """type_into / search_in_app / scroll_to → their first primitive now, the rest queued."""
+        action = raw.get('action') if isinstance(raw, dict) else None
+        if not isinstance(action, dict):
+            return raw
+        kind = action.get('type')
+        if kind == 'type_into' and isinstance(action.get('text'), str) and action['text'].strip():
+            self.queue = [{'type': 'type_text', 'text': action['text'][:2000]}]
+            return dict(raw, action={'type': 'click_target', 'target_id': action.get('target_id')})
+        if kind == 'search_in_app' and isinstance(action.get('query'), str) and action['query'].strip():
+            self.queue = [{'type': 'type_text', 'text': action['query'][:300]}, {'type': 'press_key', 'key': 'enter'}]
+            field = next((m for m in marks if 'search field' in m['kind']), None) or \
+                next((m for m in marks if 'field' in m['kind'] and 'search' in m['label'].casefold()), None)
+            if field:
+                return dict(raw, action={'type': 'click_target', 'target_id': field['id']})
+            return dict(raw, action={'type': 'press_key', 'key': 'cmd_f'})
+        if kind == 'scroll_to' and isinstance(action.get('text'), str) and action['text'].strip():
+            self.queue = [{'scroll_to': action['text'][:120], 'left': 6}]
+            return dict(raw, action={'type': 'scroll', 'direction': 'down'})
+        return raw
+
+    def queued_step(self, desktop, snapshot, regions, visual, image_data):
+        """The next step a tool queued, validated against the current screen, or None."""
+        while self.queue:
+            item = self.queue[0]
+            if 'scroll_to' in item:
+                wanted = item['scroll_to'].casefold()
+                seen = any(wanted in (r.get('text') or '').casefold() for r in regions) or \
+                    any(wanted in (t.get('label') or '').casefold() for t in snapshot.get('targets') or [])
+                if seen or item['left'] <= 0:
+                    self.queue.pop(0)
+                    continue
+                item['left'] -= 1
+                action = {'type': 'scroll', 'direction': 'down'}
+            else:
+                action = self.queue.pop(0)
+            try:
+                step = validate_step({'status': 'action', 'message': 'Continuing.', 'risk': 'navigation', 'action': action},
+                                     desktop, snapshot, goal_mode=self.goal_mode, screen=visual.get('screen'), text_regions=())
+            except ValidationError:
+                self.queue = []  # the screen is not what the tool expected: the model decides again
+                return None
+            action = step['action']
+            self.pending = action
+            return {'status': 'action', 'message': action.get('label', 'Continuing')+'…', 'action': action,
+                    'review': not self.automatic or self.review_needed(action, 'navigation', snapshot), 'visual_capture': visual}
+        return None
+
+    def review_needed(self, action, risk, snapshot):
+        """needs_review, except Enter that searches (a search field in a read-only goal) or that
+        starts a new line in a document being drafted."""
+        if action['type'] == 'press_key' and action.get('key') == 'enter' and risk == 'navigation':
+            if self.goal_mode == 'inspect' and search_field_focused(snapshot):
+                return False
+            if self.goal_mode == 'draft' and snapshot.get('focused_role') == 'AXTextArea':
+                return False
+        return needs_review(action, risk)
+
     def plan_start(self, desktop, snapshot, provider):
         """Plan once, with the text model, then take the start in code: open the app, go to the
         website or run the search. Without it the first vision steps clicked an app's name, a page
@@ -853,8 +945,10 @@ class ComputerTask:
                 running = {a.get('bundle_id') for a in snapshot.get('available_apps') or []}
                 kind = 'focus_app' if matches[0]['bundle_id'] in running else 'launch_app'
                 action = {'type': kind, 'bundle_id': matches[0]['bundle_id']}
-            elif not matches and (plan.get('url') or plan.get('query')):
-                start = 'website' if plan.get('url') else 'search'  # not installed: its website, or a search
+            elif not matches:
+                # Not installed: its website, else a search for it (GitHub went to Mail without one, live).
+                start = 'website' if plan.get('url') else 'search'
+                plan = dict(plan, query=plan.get('query') or plan.get('app') or self.goal)
         if start in ('website', 'search') and action is None:
             address = str(plan.get('url', '')).strip() if start == 'website' else ''
             if start == 'website' and '://' not in address and '.' in address:
@@ -935,7 +1029,8 @@ class ComputerTask:
             if not same(receipt):
                 break
             count += 1
-        return max(count, sum(map(same, self.receipts)) if target else 0)
+        # Twice in a row, or three times anywhere (opening two new tabs is not a loop).
+        return max(count, (sum(map(same, self.receipts))-1) if target else 0)
 
     def record(self, receipt):
         self.pending = None
@@ -1030,6 +1125,12 @@ class ComputerTask:
             step_shot(image_data, len(self.receipts)+1, clicked.get('action'), 'code')
             timing('task.step.summary', step_started, step=len(self.receipts)+1, status='action', code='click')
             return clicked
+        queued = self.queued_step(desktop, snapshot, regions, visual, image_data)
+        if queued is not None:
+            from .eval_control import step_shot
+            step_shot(image_data, len(self.receipts)+1, queued.get('action'), 'tool')
+            timing('task.step.summary', step_started, step=len(self.receipts)+1, status=queued['status'], code='tool')
+            return queued
         if self.goal_mode is None:
             classify_at = time.monotonic()
             classifier = getattr(type(provider), 'classify_task_goal', None)
@@ -1129,6 +1230,7 @@ class ComputerTask:
                 desktop.collect_once(targets=True)
                 snapshot = dict(desktop.context(), targets=snapshot.get('targets'))
             try:
+                raw = self.expand_tool(raw, marks)
                 numbered = isinstance(raw, dict) and isinstance(raw.get('action'), dict) and raw['action'].get('type') == 'click_target'
                 raw = resolve_target(raw, marks)
                 step = validate_step(raw, desktop, snapshot, goal_mode=self.goal_mode, screen=visual.get('screen'), snap=not numbered,
@@ -1212,9 +1314,7 @@ class ComputerTask:
         if action['type'] == 'click_point':
             action['capture_guard'] = vision.click_guard(image_data, visual, action)
         self.pending = action
-        searching = (action['type'] == 'press_key' and action.get('key') == 'enter' and raw['risk'] == 'navigation'
-                     and self.goal_mode == 'inspect' and search_field_focused(snapshot))
         # Enter in a search field during a read-only goal is a search, not a submission: it ran
         # nowhere before (Wikipedia, live) because every Enter waited for a confirmation.
-        review = not self.automatic or (needs_review(action, raw['risk']) and not searching)
+        review = not self.automatic or self.review_needed(action, raw['risk'], snapshot)
         return {'status': 'action', 'message': message, 'action': action, 'review': review, 'visual_capture': visual}

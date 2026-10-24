@@ -1865,7 +1865,7 @@ class CompanionWindow(QMainWindow):
                     worker.finished.connect(lambda: self.set_busy(False))
                     worker.start()
                     return
-                if proposed['type'] in ('focus_app', 'press_control', 'launch_app', 'quit_app', 'new_window', 'close_window', 'close_tab', 'browse_url', 'click_point', 'play_media', 'type_text', 'press_key', 'scroll', 'wait'):
+                if proposed['type'] in ('focus_app', 'press_control', 'launch_app', 'quit_app', 'new_window', 'close_window', 'close_tab', 'choose_menu', 'browse_url', 'click_point', 'play_media', 'type_text', 'press_key', 'scroll', 'wait'):
                     self.execute_desktop_action(proposed)
                     return
                 current = self.desktop_monitor.authorize_action({'type': 'highlight_control', 'control_id': proposed['control_id']})

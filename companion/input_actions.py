@@ -1,7 +1,7 @@
 """Bounded input primitives. Execution is bound to the observed window/focused field."""
 INPUT_TYPES = ('type_text', 'press_key', 'scroll')
 KEYS = ('enter', 'tab', 'escape', 'space', 'backspace', 'left', 'right', 'up', 'down',
-        'cmd_l', 'cmd_f', 'cmd_t', 'cmd_n', 'cmd_w', 'cmd_a', 'cmd_r')
+        'cmd_l', 'cmd_f', 'cmd_t', 'cmd_n', 'cmd_w', 'cmd_a', 'cmd_r', 'cmd_[', 'cmd_]')
 BLOCKED = {'com.apple.Terminal', 'com.googlecode.iterm2', 'dev.warp.Warp-Stable',
            'com.apple.Passwords', 'com.apple.keychainaccess', 'com.1password.1password', 'com.bitwarden.desktop',
            # Windows executables observed as app ids: shells, terminals and system editors.

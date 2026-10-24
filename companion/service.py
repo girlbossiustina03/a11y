@@ -712,6 +712,8 @@ class Companion:
             except (RuntimeError, ValueError, OSError):
                 catalog = []  # app list unavailable: a known web app ("Teams") still opens
             quick = bare_name(request, catalog)
+        if quick is not None and quick['operation'] == 'open_file' and not quick.get('remaining_request'):
+            return self.app_plan('open_file', quick['target'], request)
         if quick is not None:
             # "Open X" (or just "Microsoft Teams."): installed app first, then a known web
             # app/address, then a web search. Resolved in code, so no model call is needed.
@@ -807,6 +809,9 @@ class Companion:
                     and self.front_browser() and self.front_browser() == ((self.desktop_context.context().get('app') or {}).get('bundle_id')):
                 # "Give me the gist of this article" with a browser in front: read that page (live: "I can't retrieve articles").
                 interpreted = dict(interpreted, operation='read_page', app_name='', target='', remaining_request='')
+            if interpreted.get('operation') in ('read_notes', 'read_reminders', 'read_calendar') and re.search(r'\bsearch\b', request, re.I):
+                # "Search my notes for idea" looked for a note titled "idea": searching is done in the app.
+                interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
             if interpreted.get('operation') == 'create_note' and not re.search(r'\bnotes?\b', request, re.I):
                 # "Type '…' into a new text document" became a note in Notes (live).
                 interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')

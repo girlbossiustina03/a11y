@@ -123,6 +123,9 @@ way on screen. It is never answer, inspect_screen or movement of the companion. 
 of an app ("open the sound settings") is that task too, not just launch_app. inspect_screen
 only describes what is already on screen ("what's on my screen", "what does this say");
 read_page only answers about the web page open in the browser.
+Live information (the weather now, news, prices, scores, opening times) needs the computer:
+computer_task, never an answer from memory. Searching inside an app ("search my notes for X")
+is computer_task too.
 acts_on_computer: true when the user wants something opened, shown, found, looked up, searched,
 played, typed, written, clicked, closed or changed on the computer, in any app or website;
 false for conversation, questions you can answer yourself, and describing the screen.

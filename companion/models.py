@@ -247,6 +247,8 @@ RESPONSE_SCHEMA = {
              'properties': {'type': {'const': 'play_media'}, 'query': _TEXT, 'artist': _TEXT}},
             {'type': 'object', 'additionalProperties': False, 'required': ['type', 'window_id'],
              'properties': {'type': {'const': 'close_window'}, 'window_id': _TEXT}},
+            {'type': 'object', 'additionalProperties': False, 'required': ['type', 'path'],
+             'properties': {'type': {'const': 'choose_menu'}, 'path': _TEXT}},
             {'type': 'object', 'additionalProperties': False, 'required': ['type', 'control_id'],
              'properties': {'type': {'enum': ['highlight_control', 'press_control']}, 'control_id': _TEXT}}]}
     }

@@ -184,7 +184,7 @@ def build(eval_window, count, seed):
         newest = files[0].stem if files else ''
         request = pick(['what is the newest file in my {f} folder?', 'open {f} and tell me the most recent file there',
                         'which file did I add last to {f}?']).format(f=folder)
-        token = re.escape(newest[:20].casefold())
+        token = newest[:20].casefold()
         return Task('newest_file', request, [('names '+newest[:30], lambda s, e: bool(newest) and token in answer(e).casefold())],
                     setup=apps_setup)
 

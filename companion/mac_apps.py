@@ -335,6 +335,12 @@ def describe_files(paths, folder, now=None):
     return 'Newest in '+place+':\n'+'\n'.join(path.name+' ('+age(path)+')' for path in paths)
 
 
+FILE_KINDS = {'pdf': ('.pdf',), 'image': ('.png', '.jpg', '.jpeg', '.gif', '.heic', '.webp'), 'photo': ('.png', '.jpg', '.jpeg', '.heic'),
+              'picture': ('.png', '.jpg', '.jpeg', '.heic'), 'screenshot': ('.png', '.jpg'), 'video': ('.mov', '.mp4', '.m4v'),
+              'document': ('.pdf', '.doc', '.docx', '.pages', '.txt', '.rtf', '.md'), 'spreadsheet': ('.xlsx', '.xls', '.csv', '.numbers'),
+              'presentation': ('.pptx', '.key'), 'zip': ('.zip',)}
+
+
 def open_file(target, home=None, opener=subprocess.run):
     """Open the named or newest file from Downloads/Desktop/Documents; non-documents are only revealed."""
     wanted = (target or '').strip()
@@ -347,7 +353,12 @@ def open_file(target, home=None, opener=subprocess.run):
         return 'Opened '+folder_path.name+'.'
     folder = next((key for key in FOLDERS if key in wanted.casefold()), '')
     candidates = recent_files(folder, home, limit=200)
-    plain = re.sub(r'\b(latest|last|newest|recent|most recent|my|the|file|download|downloads|desktop|documents?)\b', ' ', wanted.casefold()).strip()
+    kinds = [suffixes for word, suffixes in FILE_KINDS.items() if re.search(r'\b'+word+r's?\b', wanted, re.I)]
+    if kinds:
+        # "The last PDF I downloaded" opened a .dmg (live): the kind the user named.
+        candidates = [path for path in candidates if path.suffix.casefold() in kinds[0]]
+        wanted = re.sub(r'\b(?:%s)s?\b' % '|'.join(FILE_KINDS), ' ', wanted, flags=re.I)
+    plain = re.sub(r'\b(latest|last|newest|recent|most recent|my|the|a|file|download|downloads|downloaded|desktop|documents?|i|got|saved|added|received|one|in|from)\b', ' ', wanted.casefold()).strip()
     path = candidates[0] if candidates and not plain else best_match(plain, candidates, lambda p: p.name)
     if path is None:
         return 'I could not find one file matching “'+wanted+'”.'

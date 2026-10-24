@@ -178,7 +178,7 @@ if let index = args.firstIndex(of: "--input"), index+1 < args.count {
     } else if kind == "press_key" {
         let keys: [String: CGKeyCode] = ["enter": 36, "tab": 48, "escape": 53, "space": 49, "backspace": 51,
             "left": 123, "right": 124, "up": 126, "down": 125, "cmd_l": 37, "cmd_f": 3, "cmd_t": 17,
-            "cmd_n": 45, "cmd_w": 13, "cmd_a": 0, "cmd_r": 15]
+            "cmd_n": 45, "cmd_w": 13, "cmd_a": 0, "cmd_r": 15, "cmd_[": 33, "cmd_]": 30]
         guard let name = action["key"] as? String, let key = keys[name],
               let down = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: true),
               let up = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: false) else {
@@ -579,6 +579,41 @@ if let index = args.firstIndex(of: "--close-window"), index+4 < args.count {
     let status = AXUIElementPerformAction(close, kAXPressAction as CFString)
     emit(["submitted": status == .success, "verification_required": true]); exit(0)
 }
+if let index = args.firstIndex(of: "--menu"), index+2 < args.count {
+    // choose_menu: press a menu item by its titles ("View > as List"), through accessibility.
+    guard AXIsProcessTrusted(), let owner = running.first(where: { $0.bundleIdentifier == args[index+1] }) else {
+        emit(["error": "That app is not open."]); exit(1)
+    }
+    let app = AXUIElementCreateApplication(owner.processIdentifier)
+    AXUIElementSetMessagingTimeout(app, 1)
+    func clean(_ title: String) -> String {
+        title.lowercased().replacingOccurrences(of: "…", with: "").replacingOccurrences(of: "...", with: "").trimmingCharacters(in: .whitespaces)
+    }
+    let path = args[index+2].components(separatedBy: ">").map { clean($0) }.filter { !$0.isEmpty }
+    guard !path.isEmpty, var level = element(attr(app, "AXMenuBar")) else { emit(["error": "That app has no menu bar."]); exit(1) }
+    var titles: [String] = []
+    for (depth, wanted) in path.enumerated() {
+        let items = depth == 0 ? ((attr(level, "AXChildren") as? [AXUIElement]) ?? [])
+            : (((attr(level, "AXChildren") as? [AXUIElement])?.first).flatMap { attr($0, "AXChildren") as? [AXUIElement] } ?? [])
+        let named = items.filter { !string($0, "AXTitle").isEmpty }
+        guard let match = named.first(where: { clean(string($0, "AXTitle")) == wanted })
+                ?? named.first(where: { clean(string($0, "AXTitle")).hasPrefix(wanted) }) else {
+            emit(["error": "No menu item “" + wanted + "”. Available: " + named.map { string($0, "AXTitle") }.prefix(30).joined(separator: ", ")]); exit(1)
+        }
+        if (attr(match, "AXEnabled") as? Bool) == false { emit(["error": "That menu item is not available right now."]); exit(1) }
+        titles.append(string(match, "AXTitle"))
+        level = match
+    }
+    owner.activate(options: [])
+    AXUIElementSetMessagingTimeout(level, 1)
+    if path.count == 1 {
+        // Just the menu: open it so its items show.
+        let status = AXUIElementPerformAction(level, kAXPressAction as CFString)
+        emit(["submitted": status == .success, "path": titles.joined(separator: " > ")]); exit(0)
+    }
+    let status = AXUIElementPerformAction(level, kAXPressAction as CFString)
+    emit(["submitted": status == .success, "path": titles.joined(separator: " > ")]); exit(0)
+}
 if let index = args.firstIndex(of: "--close-tab"), index+1 < args.count {
     // The tab in front, not its whole window. Fixed commands; no page content is read.
     let bundleID = args[index+1]
@@ -732,11 +767,11 @@ if pressIndex == nil, args.contains("--targets"), let window, let frame = bounds
         "AXDisclosureTriangle", "AXMenuItem", "AXTextField", "AXTextArea", "AXSearchField", "AXComboBox", "AXSlider", "AXSwitch", "AXCell", "AXRow"]
     let fields: Set<String> = ["AXTextField", "AXTextArea", "AXSearchField", "AXComboBox"]
     var targets: [[String: Any]] = []
-    var stack: [(AXUIElement, Int)] = [(window, 0)]
+    var stack: [(AXUIElement, Int, Bool)] = [(window, 0, false)]  // the Bool: inside a web page
     var seen = 0
     let started = CFAbsoluteTimeGetCurrent()
     while !stack.isEmpty && seen < 3000 && targets.count < 150 && CFAbsoluteTimeGetCurrent()-started < 0.6 {
-        let (node, depth) = stack.removeLast()
+        let (node, depth, inPage) = stack.removeLast()
         seen += 1
         let box = bounds(node).map { CGRect(x: $0["x"]!, y: $0["y"]!, width: $0["width"]!, height: $0["height"]!) }
         if let box, !box.intersects(windowRect) { continue }  // the off-screen part of a page
@@ -748,16 +783,21 @@ if pressIndex == nil, args.contains("--targets"), let window, let frame = bounds
             if label.isEmpty { label = string(node, "AXHelp") }
             if label.isEmpty && fields.contains(role) { label = string(node, "AXPlaceholderValue") }
             if !label.isEmpty {
-                targets.append(["role": role, "label": String(label.prefix(80)),
+                targets.append(["role": role, "label": String(label.prefix(80)), "page": inPage,
                                 "bounds": ["x": box.minX, "y": box.minY, "width": box.width, "height": box.height]])
                 if role != "AXRow" && role != "AXCell" { continue }  // a named button's parts are not separate targets
             }
         }
         if depth < 60, let children = attr(node, "AXChildren") as? [AXUIElement] {
-            stack.append(contentsOf: children.prefix(300).reversed().map { ($0, depth+1) })
+            let page = inPage || role == "AXWebArea"
+            stack.append(contentsOf: children.prefix(300).reversed().map { ($0, depth+1, page) })
         }
     }
     output["targets"] = targets
+    // The app's menu bar titles (File, Edit, View…), for choose_menu.
+    if let bar = element(attr(app, "AXMenuBar")) {
+        output["menus"] = ((attr(bar, "AXChildren") as? [AXUIElement]) ?? []).map { string($0, "AXTitle") }.filter { !$0.isEmpty }.dropFirst().map { $0 }
+    }
 }
 if let index = pressIndex {
     let controlID = args[index+2]
