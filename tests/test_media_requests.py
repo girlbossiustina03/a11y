@@ -47,10 +47,12 @@ class MediaRequestTests(CompanionFixture, unittest.TestCase):
         provider.complete_structured.assert_not_called()
 
     def test_other_player_is_not_silently_replaced_with_music(self):
+        # Never the Music library for another player: it is played there, as a task in that app or site.
         self.app.provider = StagedProvider('play_media', 'Spotify', 'Last Christmas')
         result = self.app.ask('play Last Christmas in Spotify')
-        self.assertIsNone(result['desktop_action'])
-        self.assertIn('have not', result['message'])
+        self.assertEqual(result['desktop_action']['type'], 'start_task')
+        self.assertIn('Spotify', result['desktop_action']['goal'])
+        self.assertNotEqual(result['desktop_action'].get('type'), 'play_media')
 
     def test_general_goal_proposes_task_mode_not_just_first_app(self):
         goal = 'Open Safari, find a video about accessibility and play it'

@@ -1527,3 +1527,24 @@ class RememberedRouteTests(unittest.TestCase):
                                                         {'type': 'click_point', 'label': 'Sound', 'status': 'executed'}])
             task = ComputerTask('open the sound settings for me', automatic=True)
         self.assertEqual(task.worked_before['steps'][-1], 'click_point Sound')
+
+
+
+class V3RoundTwoTests(LiveRoutingTests):
+    def test_reported_unread_count_comes_from_mail(self):
+        # Live (v3): "how many unread emails do I have?" was a guessed number.
+        with patch('companion.mail_reader.unread_count', return_value=3):
+            plan = self.app.prepare_request('how many unread emails do I have?')
+        self.assertEqual((plan['operation'], plan['reply']), ('answer', 'You have 3 unread emails.'))
+        self.provider.interpret_request.assert_not_called()
+
+    def test_reported_play_on_youtube_searches_youtube(self):
+        # Live (v3): "play Bohemian Rhapsody Queen on YouTube" went to the Music library player.
+        self.route('play_media', 'Bohemian Rhapsody', media_artist='Queen')
+        plan = self.app.prepare_request('play Bohemian Rhapsody Queen on YouTube')
+        self.assertEqual(plan['operation'], 'computer_task')
+        self.assertIn('youtube.com/results?search_query=Bohemian+Rhapsody+Queen', plan['opening']['target'])
+
+    def test_reported_take_me_back_one_page_is_one_press(self):
+        from companion.computer_task import HISTORY_GOAL
+        self.assertEqual(HISTORY_GOAL.match('take me back one page').group('count'), 'one')

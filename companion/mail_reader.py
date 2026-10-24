@@ -90,6 +90,16 @@ def run(script, argument, timeout):
     return result.stdout
 
 
+UNREAD = re.compile(r'\b(?:how many|any|do i have|count)\b.*\bunread\b|\bunread\b.*\b(?:e-?mails?|mails?|messages?)\b.*\?', re.I)
+
+
+def unread_count(runner=run):
+    """Unread messages in Mail's inbox (all accounts)."""
+    script = 'on run argv\ntell application id "com.apple.mail" to return unread count of inbox\nend run'
+    value = runner(script, '', 20).strip()
+    return int(value) if value.isdigit() else None
+
+
 def newest(n, runner=run):
     """(sender, subject, date, text) of the nth newest inbox message, or None if there are fewer."""
     rows = {}

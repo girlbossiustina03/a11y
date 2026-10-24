@@ -718,6 +718,16 @@ class Companion:
         nth = mail_reader.position(request) if mail_reader.available() else None
         if nth and not self.names_other_app(request, 'read_mail'):  # "in Outlook, read my latest email" is not Apple Mail
             return self.read_mail_plan(nth, request)
+        if mail_reader.available() and mail_reader.UNREAD.search(request) and not self.names_other_app(request, 'read_mail'):
+            # "How many unread emails do I have?" was a guessed number (live, v3): Mail counts them.
+            try:
+                count = mail_reader.unread_count()
+            except (PermissionError, RuntimeError, OSError, subprocess.TimeoutExpired) as error:
+                count, reply = None, str(error)
+            if count is not None:
+                reply = 'No unread emails.' if count == 0 else 'You have %d unread email%s.' % (count, '' if count == 1 else 's')
+            self.last_request_plan = {'operation': 'answer', 'app_name': '', 'target': '', 'reply': reply, 'computed': True}
+            return self.last_request_plan
         moving = MOVE_SELF.search(request)
         if moving and geometric_destination(moving.group(0)):
             # "Move to the left" / "go to the top right": moving the companion itself is decided
@@ -935,6 +945,18 @@ class Companion:
                 self.last_request_plan = {'operation': 'answer', 'app_name': '', 'target': '', 'computed': True,
                                           'reply': 'Reading emails directly works with Apple Mail on a Mac.'}
                 return self.last_request_plan
+            on_site = re.search(r'\b(?:on|in|from)\s+(youtube|spotify|soundcloud)\b', request, re.I)
+            if interpreted.get('operation') == 'play_media' and on_site:
+                # "Play Bohemian Rhapsody on YouTube" went to the Music library player and gave up (live,
+                # v3): playing on a site is that site's search, then the task plays the first result.
+                from .web_apps import SEARCH_URLS
+                from urllib.parse import quote_plus
+                song = ' '.join(filter(None, (str(interpreted.get('target', '')).strip(), str(interpreted.get('media_artist', '')).strip())))
+                site = on_site.group(1).casefold()
+                opening = ({'operation': 'browser_open', 'app_name': '', 'target': SEARCH_URLS[site].format(quote_plus(song)), 'browser_mode': 'default'}
+                           if site in SEARCH_URLS and song else None)
+                interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='',
+                                   **({'opening': opening} if opening else {}))
             if interpreted.get('operation') == 'move_object' and geometric_destination(str(interpreted.get('target', ''))) \
                     and not set(re.findall(r'[a-z]+', str(interpreted.get('target', '')).casefold())) - GEOMETRY_WORDS:
                 interpreted = dict(interpreted, operation='move_geometry')  # "the left" is a place, not an object

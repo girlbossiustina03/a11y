@@ -434,7 +434,7 @@ MENU_GOAL = re.compile(r"^\W*(?:please\s+)?(?:open|show(?: me)?|click(?: on)?)\s
 ORDINALS = {'first': 1, 'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5, 'sixth': 6, 'seventh': 7, 'eighth': 8,
             'ninth': 9, 'tenth': 10, '1st': 1, '2nd': 2, '3rd': 3, '4th': 4, '5th': 5, '6th': 6, '7th': 7, '8th': 8, '9th': 9, '10th': 10}
 # "Go back", "go back in Safari", "go forward two pages": the browser's own back/forward, in code.
-HISTORY_GOAL = re.compile(r'^\W*(?:please\s+|can you\s+)?go\s+(?P<way>back|forward)(?:\s+(?P<count>one|a|two|three|1|2|3)\s+pages?)?'
+HISTORY_GOAL = re.compile(r'^\W*(?:please\s+|can you\s+)?(?:go|take me|bring me|navigate|move)\s+(?P<way>back|forward)(?:\s+(?P<count>one|a|two|three|1|2|3)\s+pages?)?'
                           r'(?:\s+(?:a\s+page|to\s+the\s+(?:previous|last|next)\s+page))?(?:\s+(?:in|on)\s+(?P<app>safari|chrome|google chrome|the browser))?\W*$', re.I)
 ROW_GOAL = re.compile(r'^(?:the\s+|my\s+)?(?P<ordinal>' + '|'.join(ORDINALS) + r')\s+(?P<noun>[\w-]+)(?:\s+(?:in|on)\s+(?P<app>[\w .-]+))?$', re.I)
 
