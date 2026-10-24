@@ -348,6 +348,7 @@ class Mascot(QWidget):
         self.character.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.character.customContextMenuRequested.connect(
             lambda point: self.show_menu(self.character.mapToGlobal(point)))
+        frame.addSpacing(10)  # about half a line of room between the title bar and the face
         frame.addWidget(self.character, 0, Qt.AlignmentFlag.AlignHCenter)
         self.status = QLabel('')
         self.status.setObjectName('activityLabel')
