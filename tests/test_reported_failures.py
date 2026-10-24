@@ -1419,3 +1419,42 @@ class StatedTimeTests(unittest.TestCase):
         self.assertEqual(stated_time('', 'remind me at 7:30pm to stretch', morning), '2026-10-24T19:30')
         self.assertEqual(stated_time('2026-10-26T10:00', 'meeting on monday at 3', morning), '2026-10-26T15:00')
         self.assertEqual(stated_time('2026-10-24T18:00', 'call the 6 people', morning), '2026-10-24T18:00')  # no "at"
+
+
+class CalendarFallbackTests(unittest.TestCase):
+    """Reported: from source, calendar questions said "Allow A11y to use Calendars" with no
+    way to allow it (the terminal declares no calendar use, so macOS never asks)."""
+
+    def test_source_runs_ask_the_calendar_app_when_eventkit_refuses(self):
+        from types import SimpleNamespace
+        from companion import desktop_context
+        bridge = desktop_context.MacDesktopBridge('/private/tmp/a11y-bridge-unit')
+        refused = RuntimeError('Allow A11y to use Calendars in System Settings > Privacy & Security > Calendars, then ask again.')
+        listing = SimpleNamespace(returncode=0, stdout='Standup\t3600\t5400\tfalse\tWork\nLunch\t7200\t9000\tfalse\tHome\n')
+        with patch.object(bridge, 'call', side_effect=refused), patch('companion.paths.frozen', return_value=False), \
+                patch('companion.desktop_context.subprocess.run', return_value=listing) as run, patch('time.time', return_value=1000):
+            events = bridge.calendar_events(1000, 1000+86400)
+        self.assertEqual([(e['title'], e['start'], e['calendar']) for e in events], [('Standup', 4600, 'Work'), ('Lunch', 8200, 'Home')])
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[-2:], ['0', '86400'])          # values as argv, never spliced into the script
+        self.assertNotIn('Standup', ' '.join(argv))
+        with patch.object(bridge, 'call', side_effect=refused), patch('companion.paths.frozen', return_value=True):
+            with self.assertRaises(RuntimeError):            # the packaged app shows the real reason
+                bridge.calendar_events(1000, 2000)
+
+
+
+class BackLoopTests(unittest.TestCase):
+    def test_reported_going_back_over_and_over_is_a_loop(self):
+        # Live (v3 suite): "Go back" was clicked 13 times in a row; each page differed, so the
+        # repeat guard (same screen) never fired.
+        task = ComputerTask('switch to the Wikipedia tab', automatic=True)
+        back = {'type': 'click_point', 'label': 'Go back', 'x': 0.62, 'y': 0.06}
+        for screen in range(3):
+            task.screen_seen = 'page %d' % screen
+            task.record(dict(back, status='executed'))
+        task.screen_seen = 'page 3'
+        self.assertGreaterEqual(task.repeats(back), 2)                       # the fourth in a row stops
+        self.assertEqual(ComputerTask('go back two pages', automatic=True).repeats(back), 0)
+        self.assertTrue(task.is_history({'type': 'press_key', 'key': 'cmd_['}))
+        self.assertFalse(task.is_history({'type': 'click_point', 'label': 'Back to school sale'}))

@@ -118,7 +118,19 @@ class MacDesktopBridge:
         return self.call('--music-state')
 
     def calendar_events(self, start, end):
-        return self.call('--calendar-events', str(start), str(end)).get('events', [])
+        try:
+            return self.call('--calendar-events', str(start), str(end)).get('events', [])
+        except RuntimeError as error:
+            from .paths import frozen
+            # From source, macOS refuses EventKit silently (the terminal declares no calendar use,
+            # so no prompt is shown); the packaged app declares it. Ask the Calendar app instead:
+            # that is Automation, which macOS does ask about.
+            if frozen() or 'Calendars' not in str(error):
+                raise
+            events = calendar_app_events(start, end)
+            if events is None:
+                raise
+            return events
 
     def reminders(self):
         return self.call('--reminders').get('reminders', [])
@@ -446,3 +458,47 @@ class DesktopContext:
         if not result.get('activated'):
             raise RuntimeError('macOS did not activate the app.')
         return result
+
+
+CALENDAR_SCRIPT = (
+    'on run argv',
+    '  set base to current date',
+    '  set startDate to base + ((item 1 of argv) as integer)',
+    '  set endDate to base + ((item 2 of argv) as integer)',
+    '  set output to ""',
+    '  tell application "Calendar"',
+    '    repeat with c in calendars',
+    '      repeat with e in (every event of c whose start date < endDate and end date > startDate)',
+    '        set output to output & (summary of e) & tab & (((start date of e) - base) as integer) & tab & (((end date of e) - base) as integer) & tab & (allday event of e) & tab & (name of c) & linefeed',
+    '      end repeat',
+    '    end repeat',
+    '  end tell',
+    '  return output',
+    'end run')
+
+
+def calendar_app_events(start, end):
+    """Events between two epoch times from the Calendar app (AppleScript, values passed as
+    argv), in the helper's format; None when Calendar can't be asked. Recurring events show
+    only where AppleScript lists them, so this is a fallback for source runs only."""
+    import time
+    now = int(time.time())
+    try:
+        result = subprocess.run(['osascript', *sum((['-e', line] for line in CALENDAR_SCRIPT), []),
+                                 str(int(start)-now), str(int(end)-now)], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode:
+        return None
+    events = []
+    for line in result.stdout.splitlines():
+        parts = line.split('\t')
+        if len(parts) != 5:
+            continue
+        try:
+            begins, ends = now+int(parts[1]), now+int(parts[2])
+        except ValueError:
+            continue
+        events.append({'title': parts[0][:300], 'start': begins, 'end': ends, 'all_day': parts[3] == 'true',
+                       'location': '', 'calendar': parts[4][:100]})
+    return sorted(events, key=lambda event: event['start'])

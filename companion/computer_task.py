@@ -401,6 +401,9 @@ LABEL_FILLER = frozenset('icon tab button link the a menu item left right top bo
                          'click app navigation nav section option panel pane label text or'.split())
 
 
+HISTORY_LIMIT = 4  # back/forward steps in a row before it counts as a loop ("go back two pages" is fine)
+
+
 def label_words(label):
     import re
     return tuple(word for word in re.findall(r"[\w']+", label.casefold()) if word not in LABEL_FILLER)
@@ -1099,6 +1102,8 @@ class ComputerTask:
         """How many times this task already clicked/pressed this target: in a row, or anywhere
         when it was more than once ("Activity (1)" and "Bell icon" alternated for 24 steps, live).
         Badge counts are ignored: "Activity (1)" is "Activity"."""
+        if self.history_steps(action) >= HISTORY_LIMIT:
+            return 2  # back, back, back: each page differs, but it is still a loop (live, 13 times)
         if action['type'] not in ('click_point', 'press_control'):
             return 0
         label = action.get('label', '').casefold().strip()
@@ -1118,9 +1123,28 @@ class ComputerTask:
         # Twice in a row, or three times anywhere (opening two new tabs is not a loop).
         return max(count, (sum(map(same, self.receipts))-1) if target else 0)
 
+    @staticmethod
+    def is_history(step):
+        """A back/forward step: the Back button, or ⌘[ / ⌘]."""
+        if step.get('type') == 'press_key':
+            return str(step.get('key') or step.get('target') or step.get('label') or '').casefold() in ('cmd_[', 'cmd_]')
+        words = set(label_words(step.get('label') or ''))
+        return bool(words & {'back', 'forward'}) and words <= {'go', 'back', 'forward', 'previous', 'next', 'page', 'button', 'navigate'}
+
+    def history_steps(self, action):
+        """How many back/forward steps in a row this one would make."""
+        if not self.is_history(action):
+            return 0
+        count = 1
+        for receipt in reversed(self.receipts):
+            if not self.is_history(receipt):
+                break
+            count += 1
+        return count
+
     def record(self, receipt):
         self.pending = None
-        self.receipts.append(dict({key: deepcopy(receipt.get(key)) for key in ('type', 'label', 'status', 'before', 'after', 'native_result')},
+        self.receipts.append(dict({key: deepcopy(receipt.get(key)) for key in ('type', 'label', 'key', 'status', 'before', 'after', 'native_result')},
                                   screen=self.screen_seen))
 
     def propose(self, desktop, vision, provider, geometry, *, progress=None):
@@ -1336,8 +1360,9 @@ class ComputerTask:
                         stages['total_ms'] = round((time.monotonic()-step_started)*1000)
                         self.timings.append(stages)
                         return {'status': 'needs_user', 'action': None, 'message':
-                                'I clicked “'+step['action'].get('label', step['action']['type'])+'” twice and nothing changed, '
-                                'so I stopped rather than keep trying.'}
+                                ('I went back several pages without finding it, so I stopped.' if self.is_history(step['action']) else
+                                 'I clicked “'+step['action'].get('label', step['action']['type'])+'” twice and nothing changed, '
+                                 'so I stopped rather than keep trying.')}
                     raise ValidationError('“'+step['action'].get('label', step['action']['type'])+'” already ran twice in a row and the goal '
                         'did not progress. Do not repeat it. If the current screen already shows the requested information, '
                         'report it with status=done and quote the evidence; otherwise choose a different target.')
