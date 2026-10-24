@@ -1005,11 +1005,11 @@ class CharacterButton(QAbstractButton):
         self.raw = QRawFont.fromFont(self.font_)
         self.cell = QSize(8, 16)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # still reachable by keyboard, no ring drawn
+        self.setAttribute(Qt.WidgetAttribute.WA_MacShowFocusRect, False)
         self.clock = QElapsedTimer()
         self.clock.start()
         self.last_activity = 0
-        self.keyboard_focus = False
         self.hop_started = None
         self.hop_length = 0
         self.hop_height = 0.0
@@ -1086,12 +1086,6 @@ class CharacterButton(QAbstractButton):
         step = 600 if state == 'sleeping' else 180 if state == 'speaking' else self.FRAME_MS
         return faces.face(self.owner.skin, state, now//step)
 
-    def focusInEvent(self, event):
-        # The focus ring is for keyboard users; a click or a collapse doesn't draw it.
-        self.keyboard_focus = event.reason() in (Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason,
-                                                 Qt.FocusReason.ShortcutFocusReason)
-        super().focusInEvent(event)
-
     def mousePressEvent(self, event):
         self.wake()
         self.press_position = event.globalPosition().toPoint()
@@ -1136,7 +1130,3 @@ class CharacterButton(QAbstractButton):
                 for column, character in enumerate(line):
                     if character != ' ':
                         painter.drawText(QPoint(left+column*cw, y), character)
-        if self.hasFocus() and self.keyboard_focus:
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-            painter.setPen(QPen(QColor(self.owner.colors.cyan), 1.2, Qt.PenStyle.DotLine))
-            painter.drawRoundedRect(QRectF(self.rect()).adjusted(2, 2, -2, -2), 6, 6)
