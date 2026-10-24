@@ -3,6 +3,8 @@
 These use explicit model/native doubles. See scripts/evaluate_movement.py for live
 Ollama interpretation checks; unit tests do not claim to measure model intelligence.
 """
+import os
+os.environ.setdefault('A11Y_WEB_ANSWERS', '0')  # tests never look things up online unless a test turns it on
 from copy import deepcopy
 import json
 import unittest

@@ -2,6 +2,7 @@
 import http.client
 import json
 import os
+import re
 import socket
 import sys
 import threading
@@ -88,6 +89,8 @@ class Planner:
     """Routing and goal classification shared by every model transport.
 
     Subclasses provide complete(system, messages, *, response_schema, max_tokens, thinking)."""
+    supports_logprobs = False  # Ollama overrides: it reports token probabilities (reply_confidence)
+
     def interpret_request(self, request, recent_users=(), context=None):
         from .request_plan import INTENT_SCHEMA, INTENT_SYSTEM, validate_plan
         payload = {'recent_user_requests': list(recent_users)[-2:], 'current_request': request}
@@ -95,8 +98,14 @@ class Planner:
             payload = dict(context, **payload)  # user_profile/preferences for direct replies
         # The same small call routes the request and, for plain conversation, writes
         # the reply: chat no longer needs a second, desktop-sized prompt.
-        plan = validate_plan(self.complete(INTENT_SYSTEM, [{'role': 'user', 'content': json.dumps(payload)}],
-                                          response_schema=INTENT_SCHEMA, max_tokens=700, thinking=False))
+        extra = {'logprobs': True} if self.supports_logprobs else {}
+        result = self.complete(INTENT_SYSTEM, [{'role': 'user', 'content': json.dumps(payload)}],
+                               response_schema=INTENT_SCHEMA, max_tokens=700, thinking=False, **extra)
+        plan, tokens = result if isinstance(result, tuple) else (result, [])
+        plan = validate_plan(plan)
+        sure = reply_confidence(tokens)
+        if sure is not None:
+            plan = dict(plan, confidence=sure)  # set by code, from how sure the model was of its reply
         is_shortcut = plan['operation'] in ('browser_open', 'browser_search', 'new_window', 'launch_app', 'focus_app')
         if is_shortcut and not plan.get('remaining_request', '').strip():
             # Independently check goal coverage before the direct shortcut can
@@ -146,6 +155,8 @@ class Planner:
 
 
 class OllamaProvider(Planner):
+    supports_logprobs = True
+
     def __init__(self, config=None):
         if config is None:
             from .paths import saved_ai_settings
@@ -219,7 +230,7 @@ class OllamaProvider(Planner):
                                 pass
                     return
         watcher = threading.Thread(target=watch, daemon=True) if cancel is not None else None
-        content, result, size = [], {}, 0
+        content, result, size, logprobs = [], {}, 0, []
         try:
             connection.request('POST', path, json.dumps(body).encode(), {'Content-Type': 'application/json'})
             held.append(connection.sock)
@@ -246,6 +257,8 @@ class OllamaProvider(Planner):
                 message = chunk.get('message') or {}
                 if isinstance(message.get('content'), str):
                     content.append(message['content'])
+                if isinstance(chunk.get('logprobs'), list):
+                    logprobs.extend(chunk['logprobs'])
                 if chunk.get('done'):
                     result = chunk
                     break
@@ -270,6 +283,8 @@ class OllamaProvider(Planner):
         if not result:
             raise ProviderError('Ollama response was incomplete. Try a shorter request.')
         result = dict(result, message={'role': 'assistant', 'content': ''.join(content)})
+        if logprobs:
+            result['logprobs'] = logprobs
         return result
 
     def model_info(self, name):
@@ -313,7 +328,9 @@ class OllamaProvider(Planner):
             except ProviderError:
                 pass  # a one-token reply is incomplete by design; the cache is filled either way
 
-    def complete(self, system, messages, *, image_data=None, response_schema=None, max_tokens=3000, thinking=None, cancel=None):
+    def complete(self, system, messages, *, image_data=None, response_schema=None, max_tokens=3000, thinking=None, cancel=None,
+                 logprobs=False):
+        """The model's JSON reply. With logprobs, (reply, token probabilities) instead."""
         local_url(self.config.base_url)
         if not self.config.model:
             raise ProviderError('Select a local model in Settings → Advanced → AI model → Find installed models.')
@@ -339,6 +356,8 @@ class OllamaProvider(Planner):
         body = {'model': model, 'messages': [{'role': 'system', 'content': system}] + messages,
             'stream': True, 'format': wire_schema, 'keep_alive': keep_alive(),
             'options': {'temperature': 0, 'seed': 7, 'num_ctx': context_length, 'num_predict': max_tokens}}
+        if logprobs:
+            body['logprobs'] = True
         requested_thinking = thinking
         thinking = os.getenv('A11Y_OLLAMA_THINKING', 'default').lower()
         if thinking not in ('default', 'true', 'false'):
@@ -397,9 +416,36 @@ class OllamaProvider(Planner):
             if result.get('done') is not True or result.get('done_reason') not in (None, 'stop'):
                 raise ProviderError('Ollama response was incomplete. Try a shorter request.')
             content = result['message']['content']
-            return json.loads(content)
+            value = json.loads(content)
+            return (value, result.get('logprobs') or []) if logprobs else value
         except (KeyError, TypeError, ValueError):
             raise ProviderError('The local model did not return valid JSON. No actions were applied.') from None
+
+
+def reply_confidence(tokens):
+    """How sure the model was of the reply it wrote (the plan's "reply" text): the mean
+    probability of its three least likely tokens, 0-1, or None without a reply. Measured on
+    qwen3:4b: answers it knows score 0.85-1.0; made-up mayors and CEOs 0.3-0.45."""
+    import math
+    texts = [t.get('token', '') for t in tokens if isinstance(t, dict)]
+    text = ''.join(texts)
+    match = re.search(r'"reply"\s*:\s*"', text)
+    if not match:
+        return None
+    start, end = match.end(), match.end()
+    while end < len(text) and not (text[end] == '"' and text[end-1] != '\\'):
+        end += 1
+    if end == start:
+        return None
+    probabilities, position = [], 0
+    for token, piece in zip(tokens, texts):
+        if position < end and position+len(piece) > start and piece.strip():
+            probabilities.append(math.exp(float(token.get('logprob', 0))))
+        position += len(piece)
+    if not probabilities:
+        return None
+    lowest = sorted(probabilities)[:3]
+    return round(sum(lowest)/len(lowest), 3)
 
 
 def provider_from_env():

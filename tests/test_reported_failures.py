@@ -3,6 +3,8 @@
 Model replies and native submission are doubled here. These tests prove the loop's
 control flow and validation for each reported failure; they do not prove that a
 live model makes the right choice on a real desktop."""
+import os
+os.environ.setdefault('A11Y_WEB_ANSWERS', '0')  # tests never look things up online unless a test turns it on
 from copy import deepcopy
 import importlib.util
 import json

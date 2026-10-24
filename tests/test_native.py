@@ -1,4 +1,6 @@
 """Actual Qt widget/controller tests, rendered offscreen; no desktop capture or AI network calls."""
+import os
+os.environ.setdefault('A11Y_WEB_ANSWERS', '0')  # tests never look things up online unless a test turns it on
 import importlib.util
 import os
 from pathlib import Path

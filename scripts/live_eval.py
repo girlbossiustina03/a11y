@@ -400,7 +400,7 @@ class App:
                if not key.startswith(('ANTHROPIC_', 'OPENAI_')) and key not in ('A11Y_AI_BASE_URL', 'A11Y_AI_KEY')}
         if getattr(self, 'shots', None):
             env['A11Y_EVAL_SHOTS'] = str(self.shots)
-        env.update(A11Y_EVAL='1', A11Y_EVAL_SOCKET=str(self.socket), A11Y_AI_PROVIDER='ollama', A11Y_WEB_ANSWERS='0', PYTHONUNBUFFERED='1')
+        env.update(A11Y_EVAL='1', A11Y_EVAL_SOCKET=str(self.socket), A11Y_AI_PROVIDER='ollama', A11Y_WEB_ANSWERS=os.getenv('A11Y_WEB_ANSWERS', '1'), PYTHONUNBUFFERED='1')
         if self.socket.exists():
             self.socket.unlink()
         self.process = subprocess.Popen([sys.executable, str(ROOT/'a11y_desktop.py')], cwd=ROOT, env=env,
@@ -485,8 +485,43 @@ def check_task_done(state, events):
 
 
 class Case:
-    def __init__(self, request, check, *, setup=None, timeout=120, routes=()):
+    def __init__(self, request, check, *, setup=None, timeout=120, routes=(), quiet=False):
         self.request, self.check, self.setup, self.timeout, self.routes = request, check, setup, timeout, routes
+        self.quiet = quiet  # answered in place: opening or switching to anything is a failure
+
+
+def build_answers(eval_window):
+    """Questions she should just answer (weather, facts, things that changed since the model
+    was trained), and the few requests that should open something."""
+    def says(pattern):
+        def answer_check(state, events):
+            message = final_message(events)
+            return None if re.search(pattern, message, re.I) else 'reply: '+message[:160]
+        return answer_check
+
+    def searched(pattern):
+        def search_check(state, events):
+            url, _ = safari_front_tab()
+            return None if front_app() == 'Safari' and re.search(pattern, url, re.I) else 'front '+front_app()+' '+url[:80]
+        return search_check
+
+    def shows(app):
+        def app_check(state, events):
+            return None if front_app() == app else 'front is '+front_app()
+        return app_check
+    quiet = [('what is the weather like?', r'°'), ('will it rain in Paris tomorrow?', r'Paris'),
+             ('what is the temperature in Tokyo right now?', r'Tokyo.*°|°.*Tokyo'),
+             ("what's the weather in New York this Friday?", r'Friday'),
+             ('who wrote Romeo and Juliet?', r'Shakespeare'), ('what is the capital of Australia?', r'Canberra'),
+             ('who won the 2025 Eurovision Song Contest?', r'Austria|JJ|Wasted Love'),
+             ('who is the CEO of Bitdefender?', r'Talpe'), ('what is the population of Cluj-Napoca?', r'28\d|286'),
+             ('how many moons does Neptune have?', r'16'), ('when did the Berlin Wall fall?', r'1989'),
+             ('who directed Anatomy of a Fall?', r'Triet'), ('how tall is Mount Everest?', r'8,?8[0-9]{2}')]
+    cases = [Case(request, says(pattern), quiet=True, timeout=90) for request, pattern in quiet]
+    cases += [Case('search for romeo and juliet', searched(r'romeo')),
+              Case('open safari and search for lasagna recipe', searched(r'lasagna')),
+              Case('show me my reminders', shows('Reminders'), timeout=150)]
+    return cases
 
 
 def build_cases(eval_window):
@@ -867,6 +902,7 @@ def run_case(app, case, attempt):
         case.setup(app)
     before = safari_windows()
     opened = snapshot()
+    front_before = front_app()
     state, events, timed_out = app.run(case.request, case.timeout)
     asked = next((event['t'] for event in events if event['kind'] == 'ask'), None)
     # Until the companion went quiet: the last reply, action or animation, whichever ended last.
@@ -895,6 +931,8 @@ def run_case(app, case, attempt):
         record['closed'] = restore(opened)
     except (RuntimeError, subprocess.SubprocessError) as error:
         record['closed'] = ['error: '+str(error)[:100]]
+    if case.quiet and record['success'] and (record['closed'] or record['front_app'] not in (front_before, 'Python')):
+        record.update(success=False, failure='opened '+(', '.join(record['closed']) or record['front_app'])+' for a question')
     return record
 
 
@@ -934,7 +972,7 @@ def main():
     parser.add_argument('--only', action='append', help='run only requests containing this text (repeatable)')
     parser.add_argument('--out', default=str(ROOT/'.data'/'live_eval'))
     parser.add_argument('--compare', help='an earlier summary.json to show next to the results')
-    parser.add_argument('--suite', choices=('requests', 'navigation', 'varied', 'v2', 'all'), default='requests',
+    parser.add_argument('--suite', choices=('requests', 'navigation', 'varied', 'v2', 'answers', 'all'), default='requests',
                         help='requests: the reported requests; navigation: getting somewhere by clicking; '
                              'varied: new random tasks across many apps every run')
     parser.add_argument('--tasks', type=int, default=14, help='varied suite: how many random tasks')
@@ -952,7 +990,7 @@ def main():
     if args.suite in ('varied', 'all'):
         PANES[:] = settings_panes()
         print('varied seed', seed, '·', len(PANES), 'settings panes', flush=True)
-    suites = {'requests': build_cases, 'navigation': build_navigation,
+    suites = {'requests': build_cases, 'navigation': build_navigation, 'answers': build_answers,
               'varied': lambda window: build_varied(window, args.tasks, seed)}
     chosen = [suites[name](eval_window) for name in (suites if args.suite == 'all' else [args.suite])]
     cases = [case for group in chosen for case in group if not args.only or any(text.casefold() in case.request.casefold() for text in args.only)]

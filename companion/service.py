@@ -846,7 +846,7 @@ class Companion:
             if interpreted.get('operation') == 'read_mail' and not MAIL_WORDS.search(request) and not after_mail:
                 # "Are there any notifications that require my attention" read the last email (live).
                 interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
-            if (interpreted.get('operation') == 'answer' and not interpreted.get('computed')
+            if (interpreted.get('operation') == 'answer' and not interpreted.get('computed') and not self.unsure(interpreted, request)
                     and (str(interpreted.get('reply', '')).strip() or not self.knowledge.retrieve(self.identity, request))):
                 # Conversation is answered knowing this conversation; company questions (the router
                 # leaves their reply empty and documents match) keep the cited path.
@@ -888,6 +888,56 @@ class Companion:
                 interpreted = dict(interpreted, operation='move_geometry')  # "the left" is a place, not an object
         self.last_request_plan = preserve_desktop_goal(interpreted, request)
         return self.last_request_plan
+
+    UNSURE = 0.7  # reply confidence below which an answer is checked online (see reply_confidence)
+
+    def unsure(self, plan, request):
+        """The router answered a question but wasn't sure of its reply: check it online
+        (when lookups are on) rather than rewrite the guess with conversation memory."""
+        from . import web_lookup
+        return bool(plan.get('operation') == 'answer' and not plan.get('computed')
+                    and type(plan.get('confidence')) in (int, float) and plan['confidence'] < self.UNSURE
+                    and str(plan.get('reply', '')).strip() and web_lookup.plain_question(request) and web_lookup.enabled())
+
+    def background_answer(self, request, plan):
+        """Weather, and facts that change or the model wasn't sure of, answered without
+        opening anything: Open-Meteo and Wikipedia, only the place or topic sent. None leaves
+        the request to the usual path."""
+        import sys
+        import time
+        from . import web_lookup
+        from .timing import timing
+        operation = plan['operation']
+        online = web_lookup.enabled()
+        if operation == 'weather':
+            if not online:
+                return 'The weather needs online lookups, which are turned off in Preferences.'
+            from . import weather
+            from .paths import saved_ai_settings
+            place = plan.get('target', '').strip() or weather.home_place(saved_ai_settings().get('home_place', ''))
+            if not place:
+                return 'Which city should I check?'
+            try:
+                return weather.forecast(place, plan.get('when') or 'now')['sentence']
+            except weather.WeatherError as error:
+                return str(error)
+        unsure = self.unsure(plan, request)
+        if operation != 'look_up' and not unsure:
+            return None
+        if not online:
+            return None if unsure else ('I’d need to look that up online, and online lookups are turned off in Preferences. '
+                                        'Say “search for …” and I’ll open it in Safari.')
+        try:
+            found = web_lookup.answer(self.provider, request, plan.get('target', '') if operation == 'look_up' else '')
+        except Exception as error:  # a lookup that fails must never lose the request
+            print('A11y background lookup failed:', type(error).__name__, file=sys.stderr, flush=True)
+            found = None
+        timing('lookup.finished', time.monotonic(), found=bool(found), unsure=bool(unsure))
+        if found:
+            return found[0]+'\n\nSource: Wikipedia, '+found[1]['title']
+        if unsure:
+            return None  # nothing better online: keep the model's own reply
+        return 'I couldn’t find that online. Say “search for …” and I’ll open it in Safari.'
 
     def ask(self, request, *, mode='answer', workflow_id=None, image_data=None, visual_context=None, screen_geometry=None, request_plan=None):
         request = text(request, 'request', 6000)
@@ -1033,17 +1083,12 @@ class Companion:
         # Keep the actual instruction in natural language at the end, after bulky evidence.
         messages.append({'role': 'user', 'content': request})
         prebuilt = None
-        from . import web_lookup
-        if request_plan and web_lookup.enabled() and not sources and not image_data and mode in ('answer', 'assist'):
-            phrase = web_lookup.lookup_phrase(request) if request_plan['operation'] in ('browser_search', 'answer') else None
-            if phrase is None and request_plan['operation'] == 'answer' and not request_plan.get('reply', '').strip() \
-                    and web_lookup.plain_question(request):
-                phrase = request
-            found = web_lookup.summary(phrase) if phrase else None
-            if found:
-                # Answered in the background (opt-in) instead of opening a browser window.
-                prebuilt = {'request_kind': 'answer', 'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None,
-                            'message': found['extract']+'\n\nSource: Wikipedia — '+found['title']+' ('+found['url']+')'}
+        if request_plan and not sources and not image_data and mode in ('answer', 'assist'):
+            message = self.background_answer(request, request_plan)
+            if message:
+                # Answered in the background instead of opening a browser window.
+                prebuilt = {'request_kind': 'answer', 'source_ids': [], 'workflow': None, 'target': None,
+                            'desktop_action': None, 'message': message}
         if prebuilt is None and (request_plan and request_plan['operation'] == 'answer' and request_plan.get('reply', '').strip()
                 and (request_plan.get('computed') or not sources and not workflow) and not image_data and mode in ('answer', 'assist')):
             # Plain conversation was already answered by the routing call; company

@@ -1,4 +1,6 @@
 """Arithmetic in code: direct answers, and exact Calculator key presses when asked."""
+import os
+os.environ.setdefault('A11Y_WEB_ANSWERS', '0')  # tests never look things up online unless a test turns it on
 from copy import deepcopy
 import time
 import unittest

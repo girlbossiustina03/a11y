@@ -1,3 +1,5 @@
+import os
+os.environ.setdefault('A11Y_WEB_ANSWERS', '0')  # tests never look things up online unless a test turns it on
 import unittest
 from unittest.mock import patch
 from companion.vision import ScreenVision

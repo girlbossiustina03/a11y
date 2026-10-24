@@ -6,7 +6,8 @@ from .models import RESPONSE_SCHEMA, ValidationError
 OPERATIONS = ('answer', 'plan', 'inspect_screen', 'move_object', 'move_geometry',
               'computer_task', 'inspect_media', 'play_media', 'type_text', 'press_key', 'scroll', 'capture_once', 'click_point', 'browser_search', 'browser_open', 'launch_app', 'new_window', 'close_window', 'close_tab', 'quit_app', 'focus_app', 'press_control', 'highlight', 'read_mail',
               'read_calendar', 'add_event', 'read_reminders', 'add_reminder', 'complete_reminder', 'delete_reminder', 'read_notes',
-              'create_note', 'find_contact', 'recent_files', 'open_file', 'read_page', 'list_shortcuts', 'run_shortcut', 'system_info')
+              'create_note', 'find_contact', 'recent_files', 'open_file', 'read_page', 'list_shortcuts', 'run_shortcut', 'system_info',
+              'weather', 'look_up')
 INTENT_SCHEMA = {'type': 'object', 'additionalProperties': False,
     'required': ['operation', 'app_name', 'target', 'browser_mode', 'remaining_request'], 'properties': {
         'operation': {'enum': list(OPERATIONS)}, 'app_name': {'type': 'string'}, 'target': {'type': 'string'},
@@ -85,7 +86,7 @@ system_info for questions about this Mac itself, target one of macos_version, ba
 memory, appearance, wifi, uptime, model ("what macOS am I on", "how much battery is left").
 when: for add_event and add_reminder the time as YYYY-MM-DDTHH:MM worked out from "now"
 ("at 6" is the next 6 o'clock; "tomorrow at 3" is 15:00 tomorrow), empty if no time is given;
-empty for every other operation.
+for weather the day; empty for every other operation.
 "Mark/show me where" and "highlight" request highlight only, even for a close or
 delete button. They never request clicking/closing. "Mark where the left terminal's
 close button is" is highlight, not computer_task or close_window.
@@ -123,12 +124,20 @@ way on screen. It is never answer, inspect_screen or movement of the companion. 
 of an app ("open the sound settings") is that task too, not just launch_app. inspect_screen
 only describes what is already on screen ("what's on my screen", "what does this say");
 read_page only answers about the web page open in the browser.
-Live information (the weather now, news, prices, scores, opening times) needs the computer:
-computer_task, never an answer from memory. Searching inside an app ("search my notes for X")
-is computer_task too.
+weather: any question about the weather or temperature ("what's the weather like", "will it
+rain in Paris tomorrow"): target the place named, empty when none; when now|today|tomorrow|a
+weekday. A11y answers it in the background; never open a browser or app for it.
+look_up: a factual question whose answer may have changed or be recent (who holds an office
+now, a population, a recent event, result, winner or release), or a fact you are not sure of:
+target the topic in a few words ("mayor of Brasov", "Eurovision 2025 winner"), reply empty.
+A11y looks it up in the background. Ordinary questions you know are answer, with the reply.
+Open a browser only when the user asks to search, look up, google or open a website: "search
+for romeo and juliet" is browser_search; "open Safari and search for X" is browser_search with
+app_name Safari. "Show me X" opens the app or page where X is (computer_task). Searching inside
+an app ("search my notes for X") is computer_task too.
 acts_on_computer: true when the user wants something opened, shown, found, looked up, searched,
 played, typed, written, clicked, closed or changed on the computer, in any app or website;
-false for conversation, questions you can answer yourself, and describing the screen.
+false for conversation, questions (weather and look_up too) and describing the screen.
 front_app is the app and window the user is looking at now. A question that names no app
 ("any notifications for me?", "anything new here?", "what does this say?") is about front_app:
 computer_task for checking notifications, messages or activity in it.
@@ -159,7 +168,7 @@ def with_opening(plan, request):
 
 
 def validate_plan(value):
-    if not isinstance(value, dict) or not {'operation', 'app_name', 'target'} <= set(value) or set(value) - {'operation', 'app_name', 'target', 'browser_mode', 'window_hint', 'remaining_request', 'media_artist', 'goal_mode', 'opening', 'reply', 'when', 'acts_on_computer', 'computed', 'full_text', 'read_aloud', 'app_write'}:
+    if not isinstance(value, dict) or not {'operation', 'app_name', 'target'} <= set(value) or set(value) - {'operation', 'app_name', 'target', 'browser_mode', 'window_hint', 'remaining_request', 'media_artist', 'goal_mode', 'opening', 'reply', 'when', 'acts_on_computer', 'computed', 'full_text', 'read_aloud', 'app_write', 'confidence'}:
         raise ValidationError('The request could not be interpreted reliably. Please name the action and target.')
     if value['operation'] not in OPERATIONS or any(not isinstance(value[key], str) or len(value[key]) > (2000 if key == 'target' else 500) for key in ('app_name', 'target')):
         raise ValidationError('The request planner returned an invalid operation.')
@@ -176,6 +185,8 @@ def validate_plan(value):
     for field in ('remaining_request', 'media_artist', 'when'):
         if not isinstance(value.get(field, ''), str) or len(value.get(field, '')) > 500:
             raise ValidationError('Invalid remaining request, media artist or time.')
+    if 'confidence' in value and not (type(value['confidence']) in (int, float) and 0 <= value['confidence'] <= 1):
+        raise ValidationError('Invalid reply confidence.')
     return value
 
 

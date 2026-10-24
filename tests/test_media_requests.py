@@ -1,4 +1,6 @@
 """Compound goals and playback are grounded in native evidence, not process names."""
+import os
+os.environ.setdefault('A11Y_WEB_ANSWERS', '0')  # tests never look things up online unless a test turns it on
 import unittest
 from unittest.mock import Mock
 from companion.desktop_context import DesktopContext

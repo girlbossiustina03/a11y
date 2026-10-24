@@ -1,4 +1,6 @@
 """Browser/name contracts and image-bound click checks; no actual clicks/network."""
+import os
+os.environ.setdefault('A11Y_WEB_ANSWERS', '0')  # tests never look things up online unless a test turns it on
 import base64
 import importlib.util
 import json

@@ -2,6 +2,8 @@
 
 The interpreter picks the operation and fills in details; these tests cover what code then
 does with them: reads answer right away, changes wait for confirmation, nothing else runs."""
+import os
+os.environ.setdefault('A11Y_WEB_ANSWERS', '0')  # tests never look things up online unless a test turns it on
 from datetime import datetime
 import os
 import shutil

@@ -582,6 +582,20 @@ class CompanionWindow(QMainWindow):
         self.face_select.setCurrentIndex(max(0, self.face_select.findData(appearance['face'])))
         self.face_select.currentIndexChanged.connect(lambda: self.set_appearance(face=self.face_select.currentData()))
         looks.addRow('Face', self.face_select)
+        from .paths import saved_ai_settings
+        from .weather import home_place
+        saved = saved_ai_settings()
+        self.web_lookups = QCheckBox('Look up the weather and facts online')
+        self.web_lookups.setToolTip('Only the place or topic goes to Open-Meteo or Wikipedia, never your screen, mail or files. '
+                                    'Without it, ask me to “search for …” and I open it in Safari.')
+        self.web_lookups.setChecked(saved.get('web_lookups', 'on') != 'off')
+        self.web_lookups.toggled.connect(lambda on: self.save_lookup_settings())
+        looks.addRow('Online', self.web_lookups)
+        self.home_place = QLineEdit(saved.get('home_place', ''))
+        self.home_place.setPlaceholderText(home_place() or 'Your city')
+        self.home_place.setAccessibleName('Where the weather is for when you name no place')
+        self.home_place.editingFinished.connect(self.save_lookup_settings)
+        looks.addRow('Weather for', self.home_place)
         self.learning = QCheckBox('Suggest ways to adapt to me')
         self.learning.setToolTip('Learn interaction preferences and suggest changes. Nothing is adopted without your approval.')
         layout.addWidget(self.learning)
@@ -2215,6 +2229,11 @@ class CompanionWindow(QMainWindow):
             self.ask(mode='plan' if action == 'plan' else 'assist', from_mascot=True)
         except (ValueError, PermissionError) as e:
             self.note(str(e))
+
+    def save_lookup_settings(self):
+        from .paths import save_ai_settings
+        save_ai_settings(web_lookups='on' if self.web_lookups.isChecked() else 'off',
+                         home_place=self.home_place.text().strip()[:100])
 
     def set_appearance(self, **values):
         """Save the companion's colours or face and redraw her."""

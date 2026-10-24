@@ -1,4 +1,6 @@
 """Questions are answered directly; optional background lookups replace browser searches."""
+import os
+os.environ.setdefault('A11Y_WEB_ANSWERS', '0')  # tests never look things up online unless a test turns it on
 import unittest
 from unittest.mock import Mock, patch
 from companion.desktop_context import DesktopContext
@@ -55,22 +57,57 @@ class DirectAnswerServiceTests(CompanionFixture, unittest.TestCase):
             result = self.app.ask('how do I set up the VPN?')
         self.assertEqual(result['message'], 'From the docs.')
 
-    def test_opt_in_lookup_answers_in_the_background_instead_of_opening_safari(self):
-        found = {'title': 'Great Wall of China', 'extract': 'A series of fortifications.', 'url': 'https://en.wikipedia.org/wiki/Great_Wall_of_China'}
-        with patch.dict('os.environ', {'A11Y_WEB_ANSWERS': '1'}), patch('companion.web_lookup.summary', return_value=found) as summary:
-            result = self.ask('look up the great wall of china', {'operation': 'browser_search', 'app_name': '', 'target': 'great wall of china'})
-        summary.assert_called_once_with('the great wall of china')
+    def test_weather_is_answered_in_code_without_opening_anything(self):
+        with patch.dict('os.environ', {'A11Y_WEB_ANSWERS': '1'}), \
+                patch('companion.weather.forecast', return_value={'place': 'Paris', 'sentence': 'Tomorrow in Paris: rain, 10° to 17°C.'}) as forecast:
+            result = self.ask('will it rain in Paris tomorrow?', {'operation': 'weather', 'app_name': '', 'target': 'Paris', 'when': 'tomorrow'})
+        forecast.assert_called_once_with('Paris', 'tomorrow')
         self.assertIsNone(result['desktop_action'])
-        self.assertIn('A series of fortifications.', result['message'])
-        self.assertIn('Source: Wikipedia', result['message'])
+        self.assertEqual(result['message'], 'Tomorrow in Paris: rain, 10° to 17°C.')
+        # No place named: the saved home place, else this Mac's time-zone city.
+        with patch.dict('os.environ', {'A11Y_WEB_ANSWERS': '1'}), patch('companion.weather.home_place', return_value='Bucharest'), \
+                patch('companion.weather.forecast', return_value={'place': 'Bucharest', 'sentence': '10°C and cloudy in Bucharest.'}) as forecast:
+            self.ask('what is the weather like?', {'operation': 'weather', 'app_name': '', 'target': '', 'when': ''})
+        forecast.assert_called_once_with('Bucharest', 'now')
 
-    def test_lookup_is_off_by_default_and_failure_falls_back_to_the_browser(self):
-        with patch('companion.web_lookup.summary') as summary:
-            result = self.ask('look up the great wall of china', {'operation': 'browser_search', 'app_name': '', 'target': 'great wall of china'})
-        summary.assert_not_called()
-        self.assertEqual(result['desktop_action']['type'], 'browse_url')
-        with patch.dict('os.environ', {'A11Y_WEB_ANSWERS': '1'}), patch('companion.web_lookup.summary', return_value=None):
-            result = self.ask('look up the great wall of china', {'operation': 'browser_search', 'app_name': '', 'target': 'great wall of china'})
+    def test_changing_facts_are_looked_up_in_the_background(self):
+        found = ('Austria won with "Wasted Love" by JJ.', {'title': 'Eurovision Song Contest 2025', 'extract': '', 'url': ''})
+        with patch.dict('os.environ', {'A11Y_WEB_ANSWERS': '1'}), patch('companion.web_lookup.answer', return_value=found) as lookup:
+            result = self.ask('who won Eurovision 2025?', {'operation': 'look_up', 'app_name': '', 'target': 'Eurovision 2025 winner'})
+        lookup.assert_called_once()
+        self.assertIsNone(result['desktop_action'])
+        self.assertIn('Wasted Love', result['message'])
+        self.assertIn('Source: Wikipedia, Eurovision Song Contest 2025', result['message'])
+        with patch.dict('os.environ', {'A11Y_WEB_ANSWERS': '1'}), patch('companion.web_lookup.answer', return_value=None):
+            result = self.ask('who won Eurovision 2025?', {'operation': 'look_up', 'app_name': '', 'target': 'Eurovision 2025 winner'})
+        self.assertIsNone(result['desktop_action'])                 # never a browser unasked
+        self.assertIn('search for', result['message'])
+        with patch.dict('os.environ', {'A11Y_WEB_ANSWERS': '0'}), patch('companion.web_lookup.answer') as lookup:
+            result = self.ask('who won Eurovision 2025?', {'operation': 'look_up', 'app_name': '', 'target': 'Eurovision 2025 winner'})
+        lookup.assert_not_called()
+        self.assertIn('turned off', result['message'])
+
+    def test_an_unsure_answer_is_checked_online_and_a_sure_one_is_not(self):
+        found = ('Florin Talpeș is the CEO of Bitdefender.', {'title': 'Bitdefender', 'extract': '', 'url': ''})
+        plan = {'operation': 'answer', 'app_name': '', 'target': '', 'reply': 'Bitdefender has no public CEO.'}
+        with patch.dict('os.environ', {'A11Y_WEB_ANSWERS': '1'}), patch('companion.web_lookup.answer', return_value=found) as lookup:
+            unsure = self.ask('who is the CEO of Bitdefender?', dict(plan, confidence=0.28))
+            # A sure reply is written with the conversation in mind, as before, and not looked up.
+            provider = self.app.provider = StagedProvider('answer')
+            provider.interpret_request.return_value = dict(plan, confidence=0.97)
+            provider.complete_structured.return_value = {'message': 'Bitdefender has no public CEO.'}
+            sure = self.app.ask('who is the CEO of Bitdefender?')
+        self.assertEqual(lookup.call_count, 1)
+        self.assertIn('Florin Talpeș', unsure['message'])
+        self.assertEqual(sure['message'], 'Bitdefender has no public CEO.')
+        with patch.dict('os.environ', {'A11Y_WEB_ANSWERS': '1'}), patch('companion.web_lookup.answer', return_value=None):
+            kept = self.ask('who is the CEO of Bitdefender?', dict(plan, confidence=0.28))
+        self.assertEqual(kept['message'], 'Bitdefender has no public CEO.')  # nothing better online
+
+    def test_asking_to_search_still_opens_the_browser(self):
+        with patch.dict('os.environ', {'A11Y_WEB_ANSWERS': '1'}), patch('companion.web_lookup.answer') as lookup:
+            result = self.ask('search for romeo and juliet', {'operation': 'browser_search', 'app_name': '', 'target': 'romeo and juliet'})
+        lookup.assert_not_called()
         self.assertEqual(result['desktop_action']['type'], 'browse_url')
 
 
