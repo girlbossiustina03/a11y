@@ -5,7 +5,6 @@
 **An adaptive workplace AI companion with floating desktop presence, computer use, and strict local privacy**
 
    ![macOS](https://img.shields.io/badge/macOS-000000?style=flat-sqircle&logo=apple&logoColor=white)
-    ![Windows](https://img.shields.io/badge/Windows-0078D6?style=flat-sqircle&logo=windows&logoColor=white)
     ![Ollama](https://img.shields.io/badge/Ollama-000000?style=flat-sqircle&logo=ollama&logoColor=white)
 
 </div>
