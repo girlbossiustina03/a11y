@@ -6,13 +6,15 @@ to her right shows. Both are drawn in one frameless window, so they move togethe
 stacking never depends on the window manager. Colours and font follow the user's terminal
 (terminal_theme); faces come from faces.py and are interchangeable.
 """
+import os
 import sys
 from .theme import MENU_STYLE
-from . import faces
+from . import faces, mac_window
 from .terminal_theme import palette as load_palette, saved_appearance
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QFrame, QVBoxLayout, QHBoxLayout, QPushButton,
     QPlainTextEdit, QLabel, QAbstractButton, QMenu, QScrollArea, QGraphicsDropShadowEffect)
+from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtCore import (Qt, QTimer, QPoint, QPointF, QRectF, QElapsedTimer, pyqtSignal, QRect, QSize, QEvent,
                           QVariantAnimation, QEasingCurve)
 from PyQt6.QtGui import (QPainter, QPainterPath, QColor, QPen, QShortcut, QKeySequence, QFontMetrics, QFontMetricsF,
@@ -21,8 +23,8 @@ from PyQt6.QtGui import (QPainter, QPainterPath, QColor, QPen, QShortcut, QKeySe
 MARGIN = 10          # room for her shadow around the windows
 TITLE_HEIGHT = 28
 RADIUS = 11
-WIDTH = 300          # her window while the conversation is open
-REPLY_WIDTH = 320    # how far the reply window shows to her right
+WIDTH = 250          # her window, open or collapsed
+REPLY_WIDTH = 280    # how far the reply window shows beside her
 TYPE_STEP_MS = 16
 TYPE_CHARS = 3       # ~190 characters a second
 SLEEP_AFTER_MS = 10*60*1000
@@ -162,10 +164,12 @@ class DotButton(QAbstractButton):
 
 
 class Surface(QFrame):
-    """A terminal window: rounded body, border and the line under its title strip."""
-    def __init__(self, owner, name):
+    """A terminal window: rounded body, border and the line under its title strip. As her
+    real macOS window (system=True) macOS draws the corners, border and shadow."""
+    def __init__(self, owner, name, *, system=False):
         super().__init__(owner)
         self.owner = owner
+        self.system = system
         self.setObjectName(name)
 
     def paintEvent(self, event):
@@ -174,13 +178,26 @@ class Surface(QFrame):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         body = QRectF(self.rect()).adjusted(.5, .5, -.5, -.5)
         background = QColor(p.background)
-        background.setAlphaF(p.opacity)
-        path = QPainterPath()
-        path.addRoundedRect(body, RADIUS, RADIUS)
-        painter.fillPath(path, background)
+        # A frameless window of its own (the reply beside her real window) shows far more of
+        # what's behind than its alpha says on macOS, so it is painted solid.
+        background.setAlphaF(1.0 if self.owner.native and not self.system else p.opacity)
         painter.setPen(QPen(QColor(p.border), 1.2))
-        painter.drawPath(path)
-        painter.drawLine(QPointF(body.left(), TITLE_HEIGHT), QPointF(body.right(), TITLE_HEIGHT))
+        if self.system:
+            painter.fillRect(self.rect(), background)
+        else:
+            path = QPainterPath()
+            path.addRoundedRect(body, RADIUS, RADIUS)
+            painter.fillPath(path, background)
+            painter.drawPath(path)
+        line = self.owner.title_height
+        painter.drawLine(QPointF(body.left(), line), QPointF(body.right(), line))
+
+
+def native_window():
+    """Her window is a real macOS window (real title bar and traffic lights) on macOS;
+    elsewhere, and in tests, a frameless window with drawn dots."""
+    return (sys.platform == 'darwin' and QGuiApplication.platformName() == 'cocoa'
+            and os.getenv('A11Y_FRAMELESS') != '1')
 
 
 class Mascot(QWidget):
@@ -193,8 +210,17 @@ class Mascot(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle('a11y')
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint |
-                            Qt.WindowType.Tool | Qt.WindowType.NoDropShadowWindowHint)
+        self.native = native_window()
+        self.margin = 0 if self.native else MARGIN  # a real window gets its shadow from macOS
+        self.title_height = TITLE_HEIGHT
+        self.titlebar_styled = False
+        if self.native:
+            # Close only: red collapses her (closeEvent); she can't be minimised or zoomed.
+            self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.CustomizeWindowHint |
+                                Qt.WindowType.WindowTitleHint | Qt.WindowType.WindowCloseButtonHint)
+        else:
+            self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint |
+                                Qt.WindowType.Tool | Qt.WindowType.NoDropShadowWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         # Qt Tool windows otherwise hide when another macOS app activates.
         self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
@@ -216,9 +242,24 @@ class Mascot(QWidget):
         self.colors = load_palette(appearance['theme'])
         self.mono = monospace_font(self.colors.font, self.colors.font_size)
 
-        # Underneath: the reply window. Its text sits in the part that shows to her right.
+        # Underneath: the reply window. Its text sits in the part that shows beside her. With
+        # a real macOS window it is its own window, attached below hers; otherwise both are
+        # painted in this one frameless window.
+        self.reply_shown = False
+        self.reply_window = None
+        if self.native:
+            self.reply_window = QWidget(None, Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool |
+                                        Qt.WindowType.WindowStaysOnTopHint)
+            self.reply_window.setWindowTitle('a11y reply')
+            self.reply_window.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+            self.reply_window.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
+            self.reply_window.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+            self.reply_window.setObjectName('mascotRoot')
+            self.destroyed.connect(self.reply_window.deleteLater)
         self.reply_panel = Surface(self, 'replyPanel')
-        self.reply_panel.hide()
+        if self.reply_window is not None:
+            self.reply_panel.setParent(self.reply_window)
+        self.set_reply_shown(False)
         self.reply_content = QWidget(self.reply_panel)
         reply = QVBoxLayout(self.reply_content)
         self.reply_layout = reply
@@ -276,7 +317,7 @@ class Mascot(QWidget):
         reply.addWidget(self.footer)
 
         # On top: her window.
-        self.window_frame = Surface(self, 'companionWindow')
+        self.window_frame = Surface(self, 'companionWindow', system=self.native)
         frame = QVBoxLayout(self.window_frame)
         frame.setContentsMargins(0, 0, 0, 0)
         frame.setSpacing(0)
@@ -293,7 +334,9 @@ class Mascot(QWidget):
         self.prompt_settings.clicked.connect(self.opened)
         for dot in (self.close_dot, self.menu_dot, self.prompt_settings):
             title.addWidget(dot)
-        title.addSpacing(8)
+            dot.setVisible(not self.native)
+        # The real traffic lights sit here on macOS.
+        title.addSpacing(66 if self.native else 8)
         self.window_title = QLabel('a11y')
         self.window_title.setObjectName('windowTitle')
         title.addWidget(self.window_title)
@@ -303,6 +346,13 @@ class Mascot(QWidget):
         self.vision_badge.setToolTip('Screen vision is on: each prompt includes a local screen image')
         self.vision_badge.hide()
         title.addWidget(self.vision_badge)
+        self.more_button = QPushButton('⋯')
+        self.more_button.setObjectName('quietButton')
+        self.more_button.setAccessibleName('Companion actions and settings')
+        self.more_button.setToolTip('Actions and settings')
+        self.more_button.clicked.connect(lambda: self.show_menu())
+        self.more_button.setVisible(self.native)  # yellow and green do this when drawn
+        title.addWidget(self.more_button)
         frame.addWidget(self.title_bar)
         frame.addStretch(1)
         self.character = CharacterButton(self)
@@ -419,6 +469,11 @@ class Mascot(QWidget):
             dot.color = QColor(color)
             dot.update()
         self.character.set_font(self.mono)
+        if self.reply_window is not None:
+            self.reply_window.setFont(self.mono)
+            self.reply_window.setStyleSheet(self.styleSheet())
+        if self.titlebar_styled:
+            self.style_titlebar()
         self.input.setFixedHeight(self.line_height()+2)
         # The ❯ mark and ⏎ sit on the first and last line of the input, centred on it.
         self.prompt_mark.setFixedHeight(self.line_height()+2)
@@ -456,17 +511,44 @@ class Mascot(QWidget):
         self.window_frame.layout().invalidate()
         self.window_frame.layout().activate()
         height = self.window_frame.sizeHint().height()
-        showing_reply = self.reply_panel.isVisibleTo(self)
-        left = MARGIN+(REPLY_WIDTH if showing_reply and self.reply_side == 'left' else 0)
+        showing_reply = self.reply_shown
+        beside = showing_reply and not self.native  # the reply is drawn in this window
+        m = self.margin
+        left = m+(REPLY_WIDTH if beside and self.reply_side == 'left' else 0)
         self.window_frame.setFixedHeight(height)
-        self.window_frame.setGeometry(left, MARGIN, width, height)
-        if showing_reply:
-            self.layout_reply(left, width, height)
-        self.setFixedSize(2*MARGIN+width+(REPLY_WIDTH if showing_reply else 0), 2*MARGIN+height)
+        self.window_frame.setGeometry(left, m, width, height)
+        if beside:
+            self.layout_reply(left, m, width, height)
+        elif showing_reply:
+            self.layout_reply(REPLY_WIDTH if self.reply_side == 'left' else 0, 0, width, height)
+        self.setFixedSize(2*m+width+(REPLY_WIDTH if beside else 0), 2*m+height)
         self.reply_panel.lower()
         self.window_frame.raise_()
+        self.place_reply_window()
 
-    def layout_reply(self, left, width, height):
+    def place_reply_window(self):
+        """As its own window: over her, its top on her top edge and its side on hers."""
+        if self.reply_window is None or not self.reply_shown:
+            return
+        mine = self.geometry()
+        base = REPLY_WIDTH if self.reply_side == 'left' else 0
+        self.reply_window.setGeometry(mine.x()-base, mine.y(), self.frame_width()+REPLY_WIDTH,
+                                      self.reply_panel.geometry().bottom()+1)
+
+    def set_reply_shown(self, shown):
+        self.reply_shown = shown
+        self.reply_panel.setVisible(shown)
+        if self.reply_window is None:
+            return
+        if shown:
+            self.place_reply_window()
+            self.reply_window.show()
+            mac_window.keep_below(self, self.reply_window)
+        else:
+            mac_window.detach(self, self.reply_window)
+            self.reply_window.hide()
+
+    def layout_reply(self, left, top, width, height):
         """Shorter than her window, as tall as its text needs. It shares her top edge and the
         edge on the side it opens from, and slides out from under her (reply_open)."""
         inner = REPLY_WIDTH-30
@@ -476,10 +558,10 @@ class Mascot(QWidget):
         reply_height = max(TITLE_HEIGHT+56, min(height-24, wanted))
         shown = round(REPLY_WIDTH*self.reply_open)
         if self.reply_side == 'left':
-            self.reply_panel.setGeometry(left-shown, MARGIN, width+shown, reply_height)
+            self.reply_panel.setGeometry(left-shown, top, width+shown, reply_height)
             self.reply_content.setGeometry(14-(REPLY_WIDTH-shown), 0, inner, reply_height)
         else:
-            self.reply_panel.setGeometry(left, MARGIN, width+shown, reply_height)
+            self.reply_panel.setGeometry(left, top, width+shown, reply_height)
             self.reply_content.setGeometry(width+16, 0, inner, reply_height)
 
     def choose_reply_side(self):
@@ -493,12 +575,12 @@ class Mascot(QWidget):
 
     def open_reply(self):
         """Show the reply window on the side with room, sliding out from under her."""
-        if self.reply_panel.isVisibleTo(self):
+        if self.reply_shown:
             return
         anchor = self.character.mapToGlobal(QPoint())
         self.choose_reply_side()
         self.reply_open = 0.0
-        self.reply_panel.show()
+        self.set_reply_shown(True)
         self.fit_on_screen(anchor)
         self.animate('reply_open', 1.0, REPLY_OPEN_MS)
 
@@ -544,7 +626,7 @@ class Mascot(QWidget):
     def begin_stretch(self):
         self.finish_animations()
         self.stretching = True
-        self.reply_panel.hide()
+        self.set_reply_shown(False)
         self.setMinimumSize(0, 0)
         self.setMaximumSize(16777215, 16777215)
         self.window_frame.setMinimumSize(0, 0)
@@ -553,7 +635,8 @@ class Mascot(QWidget):
     def stretch_to(self, rect):
         """Show her window filling rect (global coordinates, shadow margin included)."""
         self.setGeometry(rect)
-        self.window_frame.setGeometry(MARGIN, MARGIN, rect.width()-2*MARGIN, rect.height()-2*MARGIN)
+        m = self.margin
+        self.window_frame.setGeometry(m, m, rect.width()-2*m, rect.height()-2*m)
 
     def end_stretch(self, position):
         self.stretching = False
@@ -614,7 +697,7 @@ class Mascot(QWidget):
         self.reply_available = bool(message) or bool(choices)
         showing = self.reply_available and not self.user_collapsed
         if not showing:
-            self.reply_panel.hide()
+            self.set_reply_shown(False)
         self.grow_prompt()
         self.fit_on_screen(anchor)
         if showing:
@@ -751,7 +834,34 @@ class Mascot(QWidget):
 
     def moveEvent(self, event):
         self.character.owner_moved(self.pos())
+        self.place_reply_window()
         super().moveEvent(event)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self.native and not self.titlebar_styled:
+            self.titlebar_styled = True
+            QTimer.singleShot(0, self.style_titlebar)
+
+    def style_titlebar(self):
+        """Real title bar over her own background; its height sets her title strip."""
+        color = QColor(self.colors.background)
+        if mac_window.style_titlebar(self, color.redF(), color.greenF(), color.blueF(), self.colors.opacity):
+            self.title_height = mac_window.titlebar_height(self) or TITLE_HEIGHT
+            self.title_bar.setFixedHeight(self.title_height)
+            self.reply_title.setFixedHeight(self.title_height)
+            self.fit_on_screen(self.character.mapToGlobal(QPoint()))
+            self.update()
+
+    def closeEvent(self, event):
+        # The red traffic light collapses her; quitting the app still closes her.
+        if self.native and event.spontaneous():
+            event.ignore()
+            self.toggle_chat()
+            return
+        if self.reply_window is not None:
+            self.set_reply_shown(False)
+        super().closeEvent(event)
 
     STATUS = {'thinking': 'thinking', 'speaking': 'speaking', 'guiding': 'working', 'listening': 'listening'}
 
@@ -768,7 +878,7 @@ class Mascot(QWidget):
                 self.fit_on_screen(self.character.mapToGlobal(QPoint()))
         if message:
             self.show_message(message)
-            if self.reply_panel.isVisible():
+            if self.reply_shown:
                 self.fit_on_screen(self.character.mapToGlobal(QPoint()))
 
     def set_reduced_motion(self, enabled):
@@ -783,7 +893,7 @@ class Mascot(QWidget):
         at once, so her size is final; a click on her slides it shut."""
         anchor = self.character.mapToGlobal(QPoint())
         self.user_collapsed = True
-        self.reply_panel.hide()
+        self.set_reply_shown(False)
         if animate:
             self.fit_on_screen(anchor)
             self.animate('drawer_open', 0.0, OPEN_MS)
@@ -797,7 +907,7 @@ class Mascot(QWidget):
         """Slide the input open under the face."""
         anchor = self.character.mapToGlobal(QPoint())
         self.user_collapsed = False
-        self.reply_panel.hide()
+        self.set_reply_shown(False)
         self.grow_prompt()
         self.fit_on_screen(anchor)
         self.animate('drawer_open', 1.0, OPEN_MS)
@@ -820,7 +930,7 @@ class Mascot(QWidget):
 
     def hide_reply(self):
         anchor = self.character.mapToGlobal(QPoint())
-        self.reply_panel.hide()
+        self.set_reply_shown(False)
         self.fit_on_screen(anchor)
 
     def show_reply(self):

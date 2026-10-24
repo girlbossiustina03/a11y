@@ -125,9 +125,13 @@ Windows capture) and are never written to disk.
 ## The companion's look
 
 She is a small terminal window titled "a11y" (`mascot.py`): a text face, the last prompt and
-the input. Replies open in a shorter window lying under hers (same top and left edges, text
-only in the part that shows to her right); both are painted in one frameless window, so
-stacking never depends on the window manager. Faces are multi-line text skins in `faces.py`
+the input, the same width open or collapsed. On macOS it is a real window: real title bar and
+traffic lights over her own background (`mac_window.py`, AppKit through the Objective-C
+runtime with ctypes; red collapses her, yellow and green are off). Replies open in a shorter
+window under hers (same top edge and the edge of the side it opens from, right when there's
+room, else left), attached with `addChildWindow:ordered:NSWindowBelow` so it never comes in
+front. Elsewhere, and in offscreen tests, both are painted in one frameless window with drawn
+dots (`A11Y_FRAMELESS=1` forces that on macOS). Faces are multi-line text skins in `faces.py`
 (slots `1` eyes, `2` mouth, `3` mark, per state; every line the same width, one cell per
 character). Colours and font come from the default Terminal.app profile (`terminal_theme.py`
 reads the archived NSColor/NSFont in Terminal's plist) or a built-in theme; the choice lives in

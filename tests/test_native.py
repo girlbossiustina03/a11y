@@ -15,7 +15,7 @@ if HAS_QT:
     from PyQt6.QtWidgets import QApplication, QPushButton
     from companion import faces
     from companion.desktop import CompanionWindow
-    from companion.mascot import MARGIN, TITLE_HEIGHT, SLEEP_AFTER_MS, REPLY_WIDTH
+    from companion.mascot import MARGIN, TITLE_HEIGHT, SLEEP_AFTER_MS, REPLY_WIDTH, WIDTH
     from companion.terminal_theme import saved_appearance
     from companion.models import Identity
     from companion.service import Companion
@@ -796,8 +796,8 @@ class NativeTests(unittest.TestCase):
         self.qt.processEvents()
         self.assertFalse(mascot.card.isVisible())
         # Collapsed: the title bar and the face, at the same width as when open.
-        self.assertEqual(mascot.window_frame.width(), 300)
-        self.assertEqual(mascot.width(), 300+2*MARGIN)
+        self.assertEqual(mascot.window_frame.width(), WIDTH)
+        self.assertEqual(mascot.width(), WIDTH+2*MARGIN)
         self.assertLessEqual(mascot.height(), mascot.character.height()+TITLE_HEIGHT+2*MARGIN+12)
         self.assertEqual(mascot.character.mapToGlobal(QPoint()), anchor)
         self.assertFalse(any(b.isVisible() for b in mascot.findChildren(QPushButton)))
@@ -813,7 +813,7 @@ class NativeTests(unittest.TestCase):
         self.qt.processEvents()
         self.assertFalse(mascot.card.isVisible())
         self.assertFalse(mascot.reply_panel.isVisible())
-        self.assertEqual(mascot.width(), 300+2*MARGIN)
+        self.assertEqual(mascot.width(), WIDTH+2*MARGIN)
         mascot.character.click()
         self.qt.processEvents()
         self.assertIn('A response arrived', mascot.bubble.toPlainText())
@@ -852,8 +852,8 @@ class NativeTests(unittest.TestCase):
     def test_prompt_is_compact_and_menu_controls_are_not_in_normal_chat(self):
         mascot = self.window.mascot
         self.assertTrue(mascot.compact)
-        self.assertEqual(mascot.window_frame.width(), 300)
-        self.assertEqual(mascot.width(), 300+2*MARGIN)
+        self.assertEqual(mascot.window_frame.width(), WIDTH)
+        self.assertEqual(mascot.width(), WIDTH+2*MARGIN)
         self.assertFalse(mascot.choice_area.isVisible())
         self.assertFalse(mascot.stage.isVisible())
         self.assertFalse(mascot.settings_button.isVisible())
@@ -963,7 +963,8 @@ class NativeTests(unittest.TestCase):
         QTest.keyClick(mascot.input, Qt.Key.Key_Return)
         self.qt.processEvents()
         self.assertTrue(mascot.last_prompt.isVisible())
-        self.assertIn('what is the weather like?', mascot.last_prompt.text())
+        self.assertTrue(mascot.last_prompt.text().startswith('› what is the weather'))
+        self.assertEqual(mascot.last_prompt.toolTip(), 'what is the weather like?')  # the whole of it
 
     def test_reply_window_lies_under_hers_and_shows_to_the_right(self):
         mascot = self.window.mascot
