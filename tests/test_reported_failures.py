@@ -1300,6 +1300,11 @@ class ReviewFixTests(unittest.TestCase):
             self.assertIn('error', control.run({'cmd': 'confirm'}))
         window.pending_desktop_action = {'type': 'app_write', 'kind': 'delete_reminder', 'title': 'A11y test 4821 buy stamps', 'label': 'Delete'}
         self.assertEqual(control.run({'cmd': 'confirm'}), {'ok': True})
+        # Test notes too (the owner allowed test notes and reminders), never another note.
+        window.pending_desktop_action = {'type': 'app_write', 'kind': 'create_note', 'title': 'A11y test 4709', 'body': 'x'}
+        self.assertEqual(control.run({'cmd': 'confirm'}), {'ok': True})
+        window.pending_desktop_action = {'type': 'app_write', 'kind': 'create_note', 'title': 'Groceries', 'body': 'A11y test'}
+        self.assertIn('error', control.run({'cmd': 'confirm'}))
 
 
 class GuessedAddressTests(LiveRoutingTests):
@@ -1458,3 +1463,36 @@ class BackLoopTests(unittest.TestCase):
         self.assertEqual(ComputerTask('go back two pages', automatic=True).repeats(back), 0)
         self.assertTrue(task.is_history({'type': 'press_key', 'key': 'cmd_['}))
         self.assertFalse(task.is_history({'type': 'click_point', 'label': 'Back to school sale'}))
+
+
+
+class QuestionsDoNotOpenTests(LiveRoutingTests):
+    def test_reported_a_question_about_a_file_is_answered_not_opened(self):
+        # Live (v3): "what's the size of the last thing I downloaded?" opened Untitled_Artwork.png.
+        self.route('open_file', 'latest download')
+        with patch('companion.mac_apps.recent_files', return_value=[]) as listing:
+            response = self.app.ask("what's the size of the last thing I downloaded?")
+        listing.assert_called_once_with('downloads')
+        self.assertIsNone(response.get('desktop_action'))
+
+    def test_reported_a_named_site_is_where_the_task_starts(self):
+        # Live (v3): Preview in front, the planner kept "current", and the task gave up.
+        from companion.web_apps import site_address
+        self.assertEqual(site_address('on Wikipedia, what does the History section of the Coffee article start with?'),
+                         'https://en.wikipedia.org/w/index.php?search=Coffee')
+        self.assertEqual(site_address('open the Wikipedia article on Penguin and tell me the first sentence'),
+                         'https://en.wikipedia.org/w/index.php?search=Penguin')
+        self.assertEqual(site_address('check my GitHub notifications'), 'https://github.com')
+        self.assertIsNone(site_address('what is the weather like'))
+
+
+class GoBackTests(unittest.TestCase):
+    def test_reported_go_back_is_one_press(self):
+        # Live (v3): "go back in Safari" pressed Back 13 times.
+        from companion.computer_task import HISTORY_GOAL
+        for goal, way, count in (('go back in Safari', 'back', None), ('go back', 'back', None), ('go back two pages', 'back', 'two'),
+                                 ('go forward a page in chrome', 'forward', 'a'), ('please go back to the previous page', 'back', None)):
+            match = HISTORY_GOAL.match(goal)
+            self.assertIsNotNone(match, goal)
+            self.assertEqual((match.group('way'), match.group('count')), (way, count), goal)
+        self.assertIsNone(HISTORY_GOAL.match('go back to the Teams tab and check my chat'))

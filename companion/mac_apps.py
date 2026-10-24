@@ -332,7 +332,20 @@ def describe_files(paths, folder, now=None):
         minutes = int((now-path.stat().st_mtime)//60)
         return str(minutes)+' min ago' if minutes < 60 else str(minutes//60)+' h ago' if minutes < 1440 else str(minutes//1440)+' days ago'
     place = FOLDERS.get((folder or '').casefold(), 'Downloads, Desktop and Documents')
-    return 'Newest in '+place+':\n'+'\n'.join(path.name+' ('+age(path)+')' for path in paths)
+    return 'Newest in '+place+':\n'+'\n'.join(path.name+' ('+size(path)+', '+age(path)+')' for path in paths)
+
+
+def size(path):
+    """A file's size as people say it ("2.4 MB"); folders say "folder"."""
+    if path.is_dir():
+        return 'folder'
+    value = path.stat().st_size
+    if value < 1000:
+        return '%d bytes' % value
+    for unit in ('KB', 'MB', 'GB'):
+        value /= 1000
+        if value < 1000 or unit == 'GB':
+            return ('%.1f' % value).rstrip('0').rstrip('.')+' '+unit
 
 
 FILE_KINDS = {'pdf': ('.pdf',), 'image': ('.png', '.jpg', '.jpeg', '.gif', '.heic', '.webp'), 'photo': ('.png', '.jpg', '.jpeg', '.heic'),

@@ -909,6 +909,12 @@ class Companion:
                 # Apple's own apps cannot answer about another app, so look in that app instead.
                 interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
             from . import mac_apps
+            from .web_lookup import plain_question
+            if interpreted.get('operation') == 'open_file' and plain_question(request):
+                # "What's the size of the last thing I downloaded?" opened the file (live, v3): a
+                # question about files is answered from the listing, which has sizes and ages.
+                folder = next((name for name in ('downloads', 'desktop', 'documents') if name[:-1] in request.casefold()), '')
+                interpreted = dict(interpreted, operation='recent_files', target=folder)
             if interpreted.get('operation') in mac_apps.OPERATIONS:
                 target = str(interpreted.get('target', ''))
                 when = str(interpreted.get('when', '')).strip()

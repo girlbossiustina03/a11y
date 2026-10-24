@@ -431,6 +431,9 @@ MENU_GOAL = re.compile(r"^\W*(?:please\s+)?(?:open|show(?: me)?|click(?: on)?)\s
                        r"(?P<menu2>[\w&'-]+(?:\s+[\w&'-]+)?)\s+menu[\s.!?]*$", re.I)
 ORDINALS = {'first': 1, 'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5, 'sixth': 6, 'seventh': 7, 'eighth': 8,
             'ninth': 9, 'tenth': 10, '1st': 1, '2nd': 2, '3rd': 3, '4th': 4, '5th': 5, '6th': 6, '7th': 7, '8th': 8, '9th': 9, '10th': 10}
+# "Go back", "go back in Safari", "go forward two pages": the browser's own back/forward, in code.
+HISTORY_GOAL = re.compile(r'^\W*(?:please\s+|can you\s+)?go\s+(?P<way>back|forward)(?:\s+(?P<count>one|a|two|three|1|2|3)\s+pages?)?'
+                          r'(?:\s+(?:a\s+page|to\s+the\s+(?:previous|last|next)\s+page))?(?:\s+(?:in|on)\s+(?P<app>safari|chrome|google chrome|the browser))?\W*$', re.I)
 ROW_GOAL = re.compile(r'^(?:the\s+|my\s+)?(?P<ordinal>' + '|'.join(ORDINALS) + r')\s+(?P<noun>[\w-]+)(?:\s+(?:in|on)\s+(?P<app>[\w .-]+))?$', re.I)
 
 
@@ -868,6 +871,38 @@ class ComputerTask:
         check_active()
         return {'status': 'done', 'message': answer, 'action': None} if answer else None
 
+    def history_step(self, desktop, snapshot):
+        """"Go back in Safari" is one press of ⌘[ in the browser, then done. The model went back
+        13 times in a row instead (v3 suite, live)."""
+        match = HISTORY_GOAL.match(self.goal)
+        if not match:
+            return None
+        wanted = {'one': 1, 'a': 1, 'two': 2, 'three': 3}.get((match.group('count') or '1').casefold(), None) or int(match.group('count') or 1)
+        done = 0
+        for receipt in reversed(self.receipts):
+            if not self.is_history(receipt):
+                break
+            done += 1
+        way = match.group('way').casefold()
+        if done >= wanted:
+            return {'status': 'done', 'action': None, 'message': 'Went %s%s.' % (way, ' %d pages' % wanted if wanted > 1 else '')}
+        from .desktop_context import BROWSER_IDS
+        front = snapshot.get('app') or {}
+        named = (match.group('app') or '').casefold()
+        browser = 'Google Chrome' if 'chrome' in named else 'Safari'
+        try:
+            if front.get('bundle_id') not in BROWSER_IDS:
+                action = validate_step({'status': 'action', 'message': 'Switching to '+browser+'.', 'risk': 'navigation',
+                                        'action': {'type': 'focus_app', 'app_name': browser}}, desktop, snapshot)['action']
+            else:
+                action = validate_step({'status': 'action', 'message': 'Going '+way+'.', 'risk': 'navigation',
+                                        'action': {'type': 'press_key', 'key': 'cmd_[' if way == 'back' else 'cmd_]'}}, desktop, snapshot)['action']
+        except ValidationError:
+            return None
+        self.pending = action
+        return {'status': 'action', 'message': action.get('label') or 'Going '+way+'.', 'action': action,
+                'review': not self.automatic, 'visual_capture': None}
+
     def menu_step(self, desktop, snapshot):
         """"Show me the View menu in Finder": choose_menu in code once that app is in front (the
         model clicked "icon view" twice instead, live). Done after it opened."""
@@ -1022,6 +1057,12 @@ class ComputerTask:
         from urllib.parse import urlencode, urlsplit
         action = None
         start = plan['start']
+        from .web_apps import site_address
+        named_site = site_address(self.goal)
+        if start == 'current' and named_site and (snapshot.get('app') or {}).get('bundle_id') not in BROWSER_IDS:
+            # "On Wikipedia, what does the History section of the Coffee article start with?" with
+            # Preview in front: the planner kept the current app and the task gave up (live, v3).
+            start, plan = 'website', dict(plan, url=named_site)
         if start == 'app' and plan.get('url') and any(a['bundle_id'] in BROWSER_IDS for a in resolve_app(str(plan.get('app', '')), self._catalog or [])):
             start = 'website'  # "Google Chrome" + an address is the address, in the user's own default browser
         if start == 'app':
@@ -1231,7 +1272,7 @@ class ComputerTask:
         if read is not None:
             timing('task.step.summary', step_started, step=len(self.receipts)+1, status=read['status'], code='view_answer')
             return read
-        opened = self.menu_step(desktop, snapshot)
+        opened = self.history_step(desktop, snapshot) or self.menu_step(desktop, snapshot)
         if opened is not None:
             timing('task.step.summary', step_started, step=len(self.receipts)+1, status=opened['status'], code='menu')
             return opened

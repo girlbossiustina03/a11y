@@ -59,6 +59,25 @@ def find_site(text):
     return None
 
 
+# "the article on Penguin" first, then "the Coffee article" (which also matches "the Wikipedia article").
+ARTICLES = (re.compile(r"\b(?:article|page)\s+(?:on|about|for)\s+(?:the\s+)?([\w'’\- ]+?)(?=\s+(?:and|then|to|in)\b|[,.?!]|$)", re.I),
+            re.compile(r"\bthe\s+([\w'’\-]+(?:\s+[\w'’\-]+){0,2})\s+(?:article|page)\b", re.I))
+
+
+def site_address(goal):
+    """Where a goal that names a known site starts: the article it names when the site has a
+    search page ("the Coffee article on Wikipedia"), else the site itself; None without a site."""
+    from urllib.parse import quote_plus
+    site = find_site(goal)
+    if site is None:
+        return None
+    for match in (match for pattern in ARTICLES for match in pattern.finditer(goal)):
+        topic = match.group(1).strip()
+        if site[0] in SEARCH_URLS and topic.casefold() not in (site[0], 'this', 'that', 'current'):  # not "the Wikipedia article"
+            return SEARCH_URLS[site[0]].format(quote_plus(topic))
+    return site[1]
+
+
 def browser_named(text):
     """The browser the request names ('' for a generic browser/web mention), else None."""
     lowered = text.casefold()
