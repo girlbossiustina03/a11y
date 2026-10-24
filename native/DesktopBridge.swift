@@ -596,8 +596,7 @@ if let index = args.firstIndex(of: "--menu"), index+2 < args.count {
         let items = depth == 0 ? ((attr(level, "AXChildren") as? [AXUIElement]) ?? [])
             : (((attr(level, "AXChildren") as? [AXUIElement])?.first).flatMap { attr($0, "AXChildren") as? [AXUIElement] } ?? [])
         let named = items.filter { !string($0, "AXTitle").isEmpty }
-        guard let match = named.first(where: { clean(string($0, "AXTitle")) == wanted })
-                ?? named.first(where: { clean(string($0, "AXTitle")).hasPrefix(wanted) }) else {
+        guard let match = named.first(where: { clean(string($0, "AXTitle")) == wanted }) else {
             emit(["error": "No menu item “" + wanted + "”. Available: " + named.map { string($0, "AXTitle") }.prefix(30).joined(separator: ", ")]); exit(1)
         }
         if (attr(match, "AXEnabled") as? Bool) == false { emit(["error": "That menu item is not available right now."]); exit(1) }

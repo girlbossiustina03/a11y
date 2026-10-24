@@ -64,13 +64,36 @@ def quit_if_new(names, before):
 
 
 def close_textedit_untitled():
-    """Close TextEdit's front document without saving (System Events keystrokes; no Automation prompt)."""
-    if le.front_app() != 'TextEdit':
+    """Close TextEdit's test documents without saving: the sheet's own Delete/Don't Save button
+    (System Events; ⌘D is not that button's shortcut on this macOS, and a Save click once wrote
+    a test document to the Desktop)."""
+    if 'TextEdit' not in running_apps():
         return
-    le.osa('tell application "System Events" to keystroke "w" using {command down}')
-    time.sleep(0.8)
-    le.osa('tell application "System Events" to keystroke "d" using {command down}')  # Delete / Don't Save
-    time.sleep(0.5)
+    for _ in range(6):
+        try:
+            count = int(le.osa('tell application "System Events" to tell process "TextEdit" to return count of windows') or 0)
+        except (RuntimeError, ValueError):
+            return
+        if not count:
+            return
+        le.osa('tell application "System Events" to tell process "TextEdit" to set frontmost to true')
+        if not dismiss_textedit_sheet():
+            le.osa('tell application "System Events" to keystroke "w" using {command down}')
+            time.sleep(0.8)
+            dismiss_textedit_sheet()
+        time.sleep(0.4)
+
+
+def dismiss_textedit_sheet():
+    """Press Delete / Don't Save on a TextEdit save sheet, if one is open. True when one was."""
+    for button in ('Delete', "Don’t Save", "Don't Save"):
+        try:
+            le.osa('tell application "System Events" to tell process "TextEdit" to click button "%s" of sheet 1 of front window' % button)
+            time.sleep(0.5)
+            return True
+        except RuntimeError:
+            continue
+    return False
 
 
 def answer(events):
@@ -463,6 +486,8 @@ def run_task(app, task, shots_dir):
     """Run one task: setup, the request, its checks (confirming test items when a check asks),
     then cleanup through A11y. Returns the record."""
     app.before_apps = running_apps()
+    if 'TextEdit' in app.before_apps and not getattr(app, 'textedit_was_open', False):
+        dismiss_textedit_sheet()  # a save sheet left by an earlier task would catch the next task's clicks
     if task.setup:
         task.setup(app)
     before = le.safari_windows()

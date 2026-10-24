@@ -155,7 +155,8 @@ class EvalControl:
         if kind == 'confirm':
             # Only the harness's own test items ("A11y test 4821"): never a real change.
             pending = window.pending_desktop_action or {}
-            if pending.get('type') != 'app_write' or TEST_MARKER not in str(pending.get('label', '')):
+            if (pending.get('type') != 'app_write' or pending.get('kind') not in ('add_reminder', 'delete_reminder')
+                    or TEST_MARKER not in str(pending.get('title', ''))):
                 return {'error': 'nothing to confirm that the evaluation created'}
             window.mascot_action('desktop:apply')
             return {'ok': True}

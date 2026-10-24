@@ -352,12 +352,14 @@ def open_file(target, home=None, opener=subprocess.run):
         opener(['open', str(folder_path)], capture_output=True, timeout=15)
         return 'Opened '+folder_path.name+'.'
     folder = next((key for key in FOLDERS if key in wanted.casefold()), '')
-    candidates = recent_files(folder, home, limit=200)
-    kinds = [suffixes for word, suffixes in FILE_KINDS.items() if re.search(r'\b'+word+r's?\b', wanted, re.I)]
+    # "The last PDF I downloaded" opened a .dmg (live): the kind the user named. A folder's name
+    # ("Documents") is not a kind ("document").
+    kind_text = re.sub(r'\b(?:downloads|documents|desktop)\b', ' ', wanted, flags=re.I)
+    kinds = [suffixes for word, suffixes in FILE_KINDS.items() if re.search(r'\b'+word+r's?\b', kind_text, re.I)]
+    candidates = recent_files(folder, home, limit=5000 if kinds else 200)
     if kinds:
-        # "The last PDF I downloaded" opened a .dmg (live): the kind the user named.
-        candidates = [path for path in candidates if path.suffix.casefold() in kinds[0]]
-        wanted = re.sub(r'\b(?:%s)s?\b' % '|'.join(FILE_KINDS), ' ', wanted, flags=re.I)
+        candidates = [path for path in candidates if path.suffix.casefold() in kinds[0]][:200]
+        wanted = re.sub(r'\b(?:%s)s?\b' % '|'.join(FILE_KINDS), ' ', kind_text, flags=re.I)
     plain = re.sub(r'\b(latest|last|newest|recent|most recent|my|the|a|file|download|downloads|downloaded|desktop|documents?|i|got|saved|added|received|one|in|from)\b', ' ', wanted.casefold()).strip()
     path = candidates[0] if candidates and not plain else best_match(plain, candidates, lambda p: p.name)
     if path is None:
@@ -386,7 +388,10 @@ def system_info(topic, runner=subprocess.run):
         level = re.search(r'(\d+)%', text)
         if not level:
             return 'This Mac has no battery reading.'
-        state = 'charging' if 'charging;' in text or 'AC Power' in text and 'discharging' not in text else 'on battery'
+        status = re.search(r'%;\s*([a-z ]+);', text)
+        status = status.group(1).strip() if status else ''
+        state = {'charging': 'charging', 'discharging': 'on battery', 'charged': 'fully charged', 'finishing charge': 'almost full',
+                 'ac attached': 'plugged in, not charging'}.get(status, 'plugged in' if 'AC Power' in text else 'on battery')
         return 'Your battery is at '+level.group(1)+'% ('+state+').'
     if 'storage' in topic or 'disk' in topic or 'space' in topic:
         usage = shutil.disk_usage('/')

@@ -1214,3 +1214,93 @@ class FileKindTests(unittest.TestCase):
             self.assertEqual(reply, 'Opened report.pdf.')
             (Path(home)/'Movies').mkdir()
             self.assertEqual(mac_apps.open_file('my Movies folder', home=Path(home), opener=lambda args, **k: opened.append(args)), 'Opened Movies.')
+
+
+class SafetyReviewTests(Harness):
+    """v2 suite and review: a left-over save sheet's Save was clicked and wrote a test document to the
+    Desktop; Notion's "Continue as <name>" signed in; prefix matches made destructive labels harmless."""
+    snapshot = dict(CALCULATOR, controls=[], app={'name': 'Safari', 'bundle_id': 'com.apple.Safari', 'pid': 7})
+    regions = [region('Save', .5, .5), region('Continue as Ana', .5, .6), region('Close Account', .5, .7), region("Don't Allow", .5, .8)]
+
+    def click(self, label, y, goal_mode='inspect', risk='navigation'):
+        self.provider.complete_structured.return_value = {'status': 'action', 'message': 'Click.', 'risk': risk,
+                                                         'action': {'type': 'click_point', 'x': .54, 'y': y, 'label': label}}
+        return self.propose(ComputerTask('look around', automatic=True, goal_mode=goal_mode))
+
+    def test_saving_and_signing_in_are_never_silent(self):
+        from companion.computer_task import needs_review
+        for label in ('Save', 'Continue as Ana', 'Continue with Google'):
+            self.assertTrue(needs_review({'type': 'click_point', 'label': label}, 'navigation'), label)
+        with self.assertRaises(Exception):
+            self.click('Save', .515)  # a look-only goal never saves
+
+    def test_only_whole_dismissive_labels_count_as_declining(self):
+        from companion.computer_task import DECLINE
+        for label in ("Don't Allow", 'Not now', 'Reject all', 'Close', 'Cancel'):
+            self.assertTrue(DECLINE.match(label), label)
+        for label in ('Close Account', 'Cancel Subscription', 'Never Allow', 'Closed'):
+            self.assertFalse(DECLINE.match(label), label)
+
+    def test_a_rejected_first_step_starts_no_tool_queue(self):
+        task = ComputerTask('look around', automatic=True, goal_mode='inspect')
+        self.provider.complete_structured.return_value = {'status': 'action', 'message': 'Type.', 'risk': 'navigation',
+                                                         'action': {'type': 'type_into', 'target_id': 't99', 'text': 'secret'}}
+        with self.assertRaises(Exception):
+            self.propose(task)
+        self.assertEqual(task.queue, [])
+
+
+class ReviewFixTests(unittest.TestCase):
+    def test_battery_status_is_read_exactly(self):
+        from companion.mac_apps import system_info
+        run = lambda text: (lambda command, **kwargs: Mock(stdout=text))
+        self.assertIn('on battery', system_info('battery', run("Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1)\t80%; discharging; 4:10 remaining")))
+        self.assertIn('charging', system_info('battery', run("Now drawing from 'AC Power'\n -InternalBattery-0 (id=1)\t50%; charging; 1:00 remaining")))
+        self.assertIn('fully charged', system_info('battery', run("Now drawing from 'AC Power'\n -InternalBattery-0 (id=1)\t100%; charged; 0:00 remaining")))
+
+    def test_a_folder_name_is_not_a_file_kind(self):
+        import tempfile
+        from pathlib import Path
+        from companion import mac_apps
+        with tempfile.TemporaryDirectory() as home:
+            documents = Path(home)/'Documents'
+            documents.mkdir()
+            (documents/'budget.xlsx').write_text('x')
+            reply = mac_apps.open_file('newest file in Documents', home=Path(home), opener=lambda args, **k: None)
+            self.assertIn('budget.xlsx', reply)
+
+    def test_eval_confirm_only_takes_test_reminders(self):
+        from companion.eval_control import EvalControl
+        control = EvalControl.__new__(EvalControl)
+        control.events, control.lock = [], __import__('threading').Lock()
+        window = Mock()
+        control.window = window
+        control.event = lambda *a: None
+        for pending in ({'type': 'app_write', 'kind': 'run_shortcut', 'label': 'Run shortcut “A11y test 1”', 'name': 'A11y test 1'},
+                        {'type': 'app_write', 'kind': 'delete_reminder', 'title': 'Pay rent', 'label': 'Delete the reminder “Pay rent” A11y test'}):
+            window.pending_desktop_action = pending
+            self.assertIn('error', control.run({'cmd': 'confirm'}))
+        window.pending_desktop_action = {'type': 'app_write', 'kind': 'delete_reminder', 'title': 'A11y test 4821 buy stamps', 'label': 'Delete'}
+        self.assertEqual(control.run({'cmd': 'confirm'}), {'ok': True})
+
+
+class GuessedAddressTests(LiveRoutingTests):
+    def test_an_invented_address_becomes_a_task(self):
+        # "Where can I see the sites I visited? open it" opened https://www.safari.com/visited-sites (live).
+        self.route('browser_open', 'https://www.safari.com/visited-sites')
+        self.assertEqual(self.app.prepare_request('where can I see the sites I visited? open it')['operation'], 'computer_task')
+        from companion.service import Companion
+        self.assertFalse(Companion.guessed_address('go to github.com/iediot', 'https://github.com/iediot'))  # the user's own address
+        self.assertFalse(Companion.guessed_address('open youtube', 'https://www.youtube.com'))  # a known site
+
+
+class MenuGoalTests(Harness):
+    snapshot = dict(CALCULATOR, controls=[], app={'name': 'Finder', 'bundle_id': 'com.apple.finder', 'pid': 7}, menus=['Finder', 'File', 'Edit', 'View', 'Go'])
+
+    def test_a_named_menu_is_opened_in_code(self):
+        task = ComputerTask('show me the View menu in Finder', automatic=True)
+        step = self.propose(task)
+        self.assertEqual((step['action']['type'], step['action']['path']), ('choose_menu', 'View'))
+        self.provider.complete_structured.assert_not_called()
+        task.record({'type': 'choose_menu', 'label': 'Choose View in Finder', 'status': 'submitted'})
+        self.assertEqual(self.propose(task)['status'], 'done')

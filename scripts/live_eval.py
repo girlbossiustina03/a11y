@@ -247,10 +247,20 @@ def screen_lines(window_only=True):
 
 
 def shows(text, window_only=True):
-    """True when the text (letters and digits only, any case) is on screen in the front window."""
+    """True when the text (letters and digits only, any case) is on screen in the front window,
+    allowing fast OCR's one-letter slips in longer words ("ideo" for "idea")."""
+    import difflib
     wanted = re.sub(r'[^\w]', '', text.casefold())
-    return any(wanted in re.sub(r'[^\w]', '', line.casefold()) for line in screen_lines(window_only)) or \
-        wanted in re.sub(r'[^\w]', '', ''.join(screen_lines(window_only)).casefold())
+    lines = [re.sub(r'[^\w]', '', line.casefold()) for line in screen_lines(window_only)]
+    if any(wanted in line for line in lines) or wanted in ''.join(lines):
+        return True
+    if len(wanted) < 4:
+        return False
+    for line in lines:
+        for start in range(0, max(1, len(line)-len(wanted)+1)):
+            if difflib.SequenceMatcher(None, wanted, line[start:start+len(wanted)]).ratio() >= 1-1.5/len(wanted):
+                return True
+    return False
 
 
 def settings_panes():

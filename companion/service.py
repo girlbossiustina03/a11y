@@ -480,6 +480,10 @@ class Companion:
             self.last_request_plan = {'operation': 'answer', 'app_name': '', 'target': '', 'reply': reply, 'computed': True}
             return self.last_request_plan
         browser = self.front_browser() if operation == 'read_page' else None
+        if operation == 'open_file':
+            from .mac_apps import FILE_KINDS
+            named = [word for word in FILE_KINDS if re.search(r'\b'+word+r's?\b', request, re.I) and word not in target.casefold()]
+            target = (target+' '+' '.join(named[:1])).strip()  # the router dropped "PDF" from "the last PDF I downloaded" (live)
         try:
             kind, value = mac_apps.prepare(operation, target, bridge=self.desktop_context.bridge, browser=browser)
         except (PermissionError, mac_apps.AppError) as error:
@@ -528,6 +532,19 @@ class Companion:
         name = (observed.get('app') or {}).get('name', '')
         title = re.sub(r'^\(\d+\)\s*', '', (observed.get('window') or {}).get('title', ''))[:120]
         return (name+(' — '+title if title else '')) if name else ''
+
+    @staticmethod
+    def guessed_address(request, target):
+        """True when a browser_open address is neither in the request nor a known site's."""
+        from urllib.parse import urlsplit
+        from .web_apps import WEB_APPS
+        parts = urlsplit(target if '://' in target else 'https://'+target)
+        host = (parts.hostname or '').casefold().removeprefix('www.')
+        if not host or parts.scheme not in ('http', 'https') or parts.username or parts.password:
+            return False  # not a web address at all: rejected as before, not guessed
+        known = {(urlsplit(url).hostname or '').casefold().removeprefix('www.') for url in WEB_APPS.values()}
+        site = host.split('.')[-2] if host.count('.') >= 1 else host
+        return host not in known and host not in request.casefold() and site not in request.casefold()
 
     @staticmethod
     def beyond_app_name(request, app_name):
@@ -773,6 +790,10 @@ class Companion:
                                                 'remaining_request': ''}, request)
             if interpreted.get('operation') in ('create_note', 'add_reminder', 'add_event') and self.named_installed_app(request, writes=True):
                 # "Write '…' in a new TextEdit document" became a note in Notes (live).
+                interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
+            if interpreted.get('operation') == 'browser_open' and self.guessed_address(request, str(interpreted.get('target', ''))):
+                # "Where can I see the sites I visited?" opened https://www.safari.com/visited-sites (live): an
+                # address the user did not give and no known site has is a guess; find the way on screen instead.
                 interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
             if interpreted.get('operation') in ('browser_search', 'browser_open'):
                 current, hint = current_tab(request)
