@@ -20,7 +20,7 @@ SEP, END = '\x1f', '\x1e'
 # Operations the interpreter can choose; see request_plan.INTENT_SYSTEM.
 READS = ('read_calendar', 'read_reminders', 'read_notes', 'find_contact', 'recent_files', 'open_file',
          'read_page', 'list_shortcuts')
-WRITES = ('add_event', 'add_reminder', 'complete_reminder', 'create_note', 'run_shortcut')
+WRITES = ('add_event', 'add_reminder', 'complete_reminder', 'delete_reminder', 'create_note', 'run_shortcut')
 OPERATIONS = READS+WRITES
 FOLDERS = {'downloads': 'Downloads', 'download': 'Downloads', 'desktop': 'Desktop', 'documents': 'Documents', 'document': 'Documents'}
 # Opened directly when asked; anything else (installers, apps, scripts) is only shown in Finder.
@@ -418,6 +418,12 @@ def prepare(operation, target, *, bridge, browser=None, script=None, runner=None
         label = 'Add reminder “'+title[:80]+'”'+(' for '+spoken_day(when, now)+' at '+clock(when) if when else '')
         return 'confirm', {'type': 'app_write', 'kind': 'add_reminder', 'title': title[:200],
                            'due': int(when.timestamp()) if when else 0, 'label': label}
+    if operation == 'delete_reminder':
+        item = best_match(target or '', bridge.reminders(), lambda r: r.get('title', ''))
+        if item is None:
+            return 'answer', 'I could not find one open reminder called “'+(target or '')+'”.'
+        return 'confirm', {'type': 'app_write', 'kind': 'delete_reminder', 'id': item['id'], 'title': item['title'],
+                           'label': 'Delete the reminder “'+item['title'][:80]+'”'}
     if operation == 'complete_reminder':
         item = best_match(target or '', bridge.reminders(), lambda r: r.get('title', ''))
         if item is None:
@@ -449,6 +455,9 @@ def perform(action, *, bridge, script=None, runner=None):
     if kind == 'add_reminder':
         result = bridge.add_reminder(action['title'], action.get('due') or 0)
         return 'Added the reminder to '+(result.get('list') or 'Reminders')+'.'
+    if kind == 'delete_reminder':
+        bridge.delete_reminder(action['id'])
+        return 'Deleted “'+action['title']+'”.'
     if kind == 'complete_reminder':
         bridge.complete_reminder(action['id'])
         return 'Marked “'+action['title']+'” as done.'

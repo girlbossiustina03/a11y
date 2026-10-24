@@ -371,6 +371,16 @@ if let index = args.firstIndex(of: "--complete-reminder"), index+1 < args.count 
     }
     emit(["submitted": true]); exit(0)
 }
+if let index = args.firstIndex(of: "--delete-reminder"), index+1 < args.count {
+    guard let store = eventStore(.reminder) else { emit(accessError(.reminder)); exit(1) }
+    guard let reminder = store.calendarItem(withIdentifier: args[index+1]) as? EKReminder else {
+        emit(["error": "That reminder no longer exists."]); exit(1)
+    }
+    do { try store.remove(reminder, commit: true) } catch {
+        emit(["error": "Reminders did not delete the reminder."]); exit(1)
+    }
+    emit(["submitted": true]); exit(0)
+}
 if args.contains("--catalog") { emit(["installed_apps": installedApps()]); exit(0) }
 if let index = args.firstIndex(of: "--app-state"), index+1 < args.count {
     let bundleID = args[index+1]

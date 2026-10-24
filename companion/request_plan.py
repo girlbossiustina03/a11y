@@ -5,7 +5,7 @@ from .models import RESPONSE_SCHEMA, ValidationError
 
 OPERATIONS = ('answer', 'plan', 'inspect_screen', 'move_object', 'move_geometry',
               'computer_task', 'inspect_media', 'play_media', 'type_text', 'press_key', 'scroll', 'capture_once', 'click_point', 'browser_search', 'browser_open', 'launch_app', 'new_window', 'close_window', 'close_tab', 'quit_app', 'focus_app', 'press_control', 'highlight', 'read_mail',
-              'read_calendar', 'add_event', 'read_reminders', 'add_reminder', 'complete_reminder', 'read_notes',
+              'read_calendar', 'add_event', 'read_reminders', 'add_reminder', 'complete_reminder', 'delete_reminder', 'read_notes',
               'create_note', 'find_contact', 'recent_files', 'open_file', 'read_page', 'list_shortcuts', 'run_shortcut')
 INTENT_SCHEMA = {'type': 'object', 'additionalProperties': False,
     'required': ['operation', 'app_name', 'target', 'browser_mode', 'remaining_request'], 'properties': {
@@ -74,7 +74,8 @@ read_calendar target today|tomorrow|week|next|a weekday|YYYY-MM-DD ("any meeting
 "what's my next meeting"); add_event target = the event's title (add " | minutes" only for
 a stated length); read_reminders target today|all ("what do I have to do"); add_reminder
 target = what to be reminded of, in the user's words ("call mom"), never the time;
-complete_reminder target = the reminder's title;
+complete_reminder target = the reminder's title (mark it done); delete_reminder target = the
+title of a reminder to delete;
 read_notes target = a note's title, "latest", or empty to list them; create_note target
 "title | text"; find_contact target = a person's name ("what's Ana's number");
 recent_files target downloads|desktop|documents|empty; open_file target = a file name

@@ -36,6 +36,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 NEUTRAL = 'https://example.com/'
+TEST_MARKER = 'A11y test'  # the only changes the harness may confirm (see companion/eval_control.py)
 TEAMS_HOSTS = ('teams.microsoft.com', 'teams.cloud.microsoft', 'teams.live.com')
 
 
@@ -301,6 +302,8 @@ class App:
     def launch(self):
         env = {key: value for key, value in os.environ.items()
                if not key.startswith(('ANTHROPIC_', 'OPENAI_')) and key not in ('A11Y_AI_BASE_URL', 'A11Y_AI_KEY')}
+        if getattr(self, 'shots', None):
+            env['A11Y_EVAL_SHOTS'] = str(self.shots)
         env.update(A11Y_EVAL='1', A11Y_EVAL_SOCKET=str(self.socket), A11Y_AI_PROVIDER='ollama', A11Y_WEB_ANSWERS='0', PYTHONUNBUFFERED='1')
         if self.socket.exists():
             self.socket.unlink()
@@ -339,6 +342,13 @@ class App:
                 if 'busy' not in str(error):
                     raise
                 time.sleep(0.3)
+        return self.wait(timeout, start)
+
+    def wait(self, timeout, start=None):
+        """Until the companion is quiet: (state, events since start, timed out)."""
+        if start is None:
+            start = self.call({'cmd': 'state', 'since': 10**9})['event_count']
+            time.sleep(0.3)
         deadline, events, state = time.monotonic()+timeout, [], {}
         while time.monotonic() < deadline:
             state = self.call({'cmd': 'state', 'since': start+len(events)})
@@ -827,7 +837,7 @@ def main():
     parser.add_argument('--only', action='append', help='run only requests containing this text (repeatable)')
     parser.add_argument('--out', default=str(ROOT/'.data'/'live_eval'))
     parser.add_argument('--compare', help='an earlier summary.json to show next to the results')
-    parser.add_argument('--suite', choices=('requests', 'navigation', 'varied', 'all'), default='requests',
+    parser.add_argument('--suite', choices=('requests', 'navigation', 'varied', 'v2', 'all'), default='requests',
                         help='requests: the reported requests; navigation: getting somewhere by clicking; '
                              'varied: new random tasks across many apps every run')
     parser.add_argument('--tasks', type=int, default=14, help='varied suite: how many random tasks')
@@ -839,6 +849,8 @@ def main():
     print('build', build_id(), '→', out, flush=True)
     app = App(ROOT/'.data', out/'app.log')
     eval_window = EvalWindow()
+    if args.suite == 'v2':
+        return run_v2(app, eval_window, out, args.tasks, args.seed if args.seed is not None else int(time.time()) % 100000)
     seed = args.seed if args.seed is not None else int(time.time()) % 100000
     if args.suite in ('varied', 'all'):
         PANES[:] = settings_panes()
@@ -875,6 +887,38 @@ def main():
     print('\n'+table(summary, earlier))
     total = sum(row['success'] for row in summary.values()), sum(row['runs'] for row in summary.values())
     print('\noverall %d/%d' % total)
+
+
+def run_v2(app, eval_window, out, count, seed):
+    """Harder, varied tasks, each once (scripts/live_tasks.py); writes runs.jsonl and report.md."""
+    import live_tasks
+    PANES[:] = settings_panes()
+    tasks = live_tasks.build(eval_window, count, seed)
+    print('v2 seed', seed, '·', len(tasks), 'tasks', flush=True)
+    app.shots = out/'shots'
+    records = []
+    app.launch()
+    try:
+        for task in tasks:
+            try:
+                record = live_tasks.run_task(app, task, app.shots)
+            except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as error:
+                record = {'family': task.family, 'request': task.request, 'success': False, 'score': 0, 'seconds': None, 'checks': [],
+                          'route': '', 'reply': 'harness: '+str(error)[:200], 'steps': 0, 'detours': 0, 'shots': [], 'model_calls': 0, 'cleanup': []}
+                if app.process and app.process.poll() is not None:
+                    app.launch()
+            records.append(record)
+            with open(out/'runs.jsonl', 'a') as file:
+                file.write(json.dumps(record, ensure_ascii=False)+'\n')
+            print('%s %.2f %-58s %6ss %2s steps %s detours  %s' % ('✓' if record['success'] else '✗', record['score'], task.request[:58],
+                  record['seconds'], record['steps'], record['detours'], '; '.join(n for n, ok in record['checks'] if not ok)[:90]), flush=True)
+            live_tasks.report(records, out/'report.md', seed)
+    finally:
+        app.quit()
+        eval_window.close()
+    done = sum(r['success'] for r in records)
+    print('\noverall %d/%d · mean score %.2f · detours %d · report %s' % (done, len(records), sum(r['score'] for r in records)/max(1, len(records)),
+          sum(r['detours'] for r in records), out/'report.md'))
 
 
 if __name__ == '__main__':

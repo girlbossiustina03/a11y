@@ -486,7 +486,7 @@ class Companion:
         except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as error:
             message = str(error)
             app = {'read_calendar': 'Calendar', 'add_event': 'Calendar', 'read_reminders': 'Reminders', 'add_reminder': 'Reminders',
-                   'complete_reminder': 'Reminders'}.get(operation, 'That app')
+                   'complete_reminder': 'Reminders', 'delete_reminder': 'Reminders'}.get(operation, 'That app')
             # Permission instructions are shown as they are; anything else becomes a plain retry hint.
             kind, value = 'answer', message[:300] if message.startswith('Allow ') else app+' didn’t answer in time. Try again in a moment.'
         if kind == 'page':

@@ -44,7 +44,7 @@ def default_browser_id():
 
 
 # Calendar/Reminders calls may wait for the user to answer the macOS permission prompt.
-EVENTKIT_FLAGS = ('--calendar-events', '--reminders', '--add-event', '--add-reminder', '--complete-reminder')
+EVENTKIT_FLAGS = ('--calendar-events', '--reminders', '--add-event', '--add-reminder', '--complete-reminder', '--delete-reminder')
 
 
 class MacDesktopBridge:
@@ -131,6 +131,9 @@ class MacDesktopBridge:
 
     def complete_reminder(self, identifier):
         return self.call('--complete-reminder', identifier)
+
+    def delete_reminder(self, identifier):
+        return self.call('--delete-reminder', identifier)
 
     def application_action(self, action):
         kind = action['type']

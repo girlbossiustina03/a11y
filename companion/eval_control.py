@@ -21,6 +21,38 @@ def enabled():
     return os.getenv('A11Y_EVAL', '').strip() == '1' and not frozen()
 
 
+TEST_MARKER = 'A11y test'  # only changes whose label carries it can be confirmed by the harness
+_shots = {'count': 0}
+
+
+def step_shot(image_data, step, action=None, status=''):
+    """Evaluation only: the step's screenshot (960 px, the click drawn in red) and what was done,
+    in the run folder the harness gave (A11Y_EVAL_SHOTS). The normal app never writes screenshots."""
+    folder = os.getenv('A11Y_EVAL_SHOTS', '')
+    if not enabled() or not folder or not isinstance(image_data, str) or ',' not in image_data:
+        return
+    import base64
+    from PyQt6.QtCore import QPointF
+    from PyQt6.QtGui import QColor, QImage, QPainter, QPen
+    from PyQt6.QtCore import Qt
+    image = QImage.fromData(base64.b64decode(image_data.split(',', 1)[1]))
+    if image.isNull():
+        return
+    image = image.scaledToWidth(960, Qt.TransformationMode.SmoothTransformation)
+    action = action or {}
+    if isinstance(action.get('x'), (int, float)) and isinstance(action.get('y'), (int, float)):
+        painter = QPainter(image)
+        painter.setPen(QPen(QColor('red'), 3))
+        painter.drawEllipse(QPointF(action['x']*image.width(), action['y']*image.height()), 14, 14)
+        painter.end()
+    _shots['count'] += 1
+    name = 'shot-%04d.jpg' % _shots['count']
+    os.makedirs(folder, exist_ok=True)
+    image.save(os.path.join(folder, name), 'JPG', 70)
+    timing_module.timing('eval.shot', time.monotonic(), file=name, step=step, status=status,
+                         action={key: action.get(key) for key in ('type', 'label', 'x', 'y', 'key', 'text', 'url', 'bundle_id') if key in action})
+
+
 class _Bridge(QObject):
     call = pyqtSignal(object)
 
@@ -119,6 +151,13 @@ class EvalControl:
             return {'ok': True, 'event_index': len(self.events)}
         if kind == 'stop':
             window.stop_computer_task(announce=False)
+            return {'ok': True}
+        if kind == 'confirm':
+            # Only the harness's own test items ("A11y test 4821"): never a real change.
+            pending = window.pending_desktop_action or {}
+            if pending.get('type') != 'app_write' or TEST_MARKER not in str(pending.get('label', '')):
+                return {'error': 'nothing to confirm that the evaluation created'}
+            window.mascot_action('desktop:apply')
             return {'ok': True}
         if kind == 'quit':
             window.request_quit()

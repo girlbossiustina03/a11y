@@ -939,6 +939,8 @@ class ComputerTask:
         clicked = (self.row_step(desktop, snapshot, visual, image_data, vision)
                    or self.click_step(desktop, snapshot, regions, visual, image_data, vision))
         if clicked is not None:
+            from .eval_control import step_shot
+            step_shot(image_data, len(self.receipts)+1, clicked.get('action'), 'code')
             timing('task.step.summary', step_started, step=len(self.receipts)+1, status='action', code='click')
             return clicked
         if self.goal_mode is None:
@@ -1109,6 +1111,8 @@ class ComputerTask:
             answer = self.screen_answer(provider, snapshot, regions, step['message'], cancel_kwargs)
             check_active()  # access paused meanwhile: the screen's text is not shown
             step = dict(step, message=answer or step['message'])
+        from .eval_control import step_shot
+        step_shot(image_data, len(self.receipts)+1, step.get('action'), step['status'])
         if step['status'] != 'action':
             return {'status': step['status'], 'message': step['message'], 'action': None}
         action, message = step['action'], step['message']

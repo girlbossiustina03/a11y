@@ -52,6 +52,10 @@ class FakeBridge:
         self.calls.append(('complete', identifier))
         return {'submitted': True}
 
+    def delete_reminder(self, identifier):
+        self.calls.append(('delete', identifier))
+        return {'submitted': True}
+
 
 class CalendarAndRemindersTests(unittest.TestCase):
     def test_today_lists_events_with_times_and_places(self):
@@ -107,6 +111,14 @@ class CalendarAndRemindersTests(unittest.TestCase):
         self.assertEqual(bridge.calls[-1], ('complete', 'r2'))
         kind, reply = mac_apps.prepare('complete_reminder', 'walk the dog', bridge=bridge, now=NOW)
         self.assertEqual(kind, 'answer')
+
+    def test_a_reminder_can_be_deleted_after_confirming(self):
+        bridge = FakeBridge()
+        kind, action = mac_apps.prepare('delete_reminder', 'plan trip', bridge=bridge, now=NOW)
+        self.assertEqual((kind, action['kind'], action['id'], action['label']), ('confirm', 'delete_reminder', 'r3', 'Delete the reminder “Plan trip”'))
+        self.assertEqual(mac_apps.perform(action, bridge=bridge), 'Deleted “Plan trip”.')
+        self.assertEqual(bridge.calls[-1], ('delete', 'r3'))
+        self.assertEqual(mac_apps.prepare('delete_reminder', 'walk the dog', bridge=bridge, now=NOW)[0], 'answer')
 
     def test_injected_or_malformed_changes_are_rejected(self):
         base = {'request_kind': 'answer', 'message': 'x', 'source_ids': [], 'workflow': None, 'target': None}

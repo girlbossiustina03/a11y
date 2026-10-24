@@ -114,7 +114,7 @@ def validate_response(value, allowed_sources, *, planning=False, has_screen=Fals
             # A change to Calendar/Reminders/Notes/Shortcuts, built in code from the user's
             # request (mac_apps.prepare) and run only after the user confirms it.
             allowed = {'add_event': ('title', 'start', 'end'), 'add_reminder': ('title', 'due'),
-                       'complete_reminder': ('id', 'title'), 'create_note': ('title', 'body'), 'run_shortcut': ('name',)}
+                       'complete_reminder': ('id', 'title'), 'delete_reminder': ('id', 'title'), 'create_note': ('title', 'body'), 'run_shortcut': ('name',)}
             fields = allowed.get(action.get('kind'))
             if fields is None or set(action) != {'type', 'kind', 'label', *fields}:
                 raise ValidationError('Unsupported app change.')
