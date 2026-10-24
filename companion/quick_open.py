@@ -77,7 +77,7 @@ def plan(request, catalog):
     if LOCAL_THINGS & {word.casefold() for word in name.split()}:
         return None  # "open downloads folder", "open last email": not a web search.
     from pathlib import Path
-    if browser is None and '/' not in name and (Path.home()/name).is_dir() and not name.startswith('.'):
+    if browser is None and not rest and '/' not in name and (Path.home()/name).is_dir() and not name.startswith('.'):
         # "Can you open Movies?": a folder in the home folder (it became a web search, live).
         return {'operation': 'open_file', 'app_name': '', 'target': name, 'browser_mode': 'default', 'remaining_request': rest}
     if not rest and browser is None and len(name.split()) <= 3:

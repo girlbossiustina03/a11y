@@ -679,6 +679,7 @@ class ComputerTask:
         # Primitive steps a tool still has to do (type after clicking a field, Enter after typing,
         # scrolling until something shows); code runs them without asking the model again.
         self.queue = []
+        self.screen_seen = None  # what the screen read when the latest step was chosen (see repeats)
         self.planned = opening is not None  # a known opening needs no plan for where to start
         # "Click the first email": the nth visible row of the window's list (see row_step).
         self.row = row_goal(self.goal)
@@ -888,12 +889,21 @@ class ComputerTask:
         self.pending = action
         return {'status': 'action', 'message': 'Opening the '+menu+' menu.', 'action': action, 'review': not self.automatic, 'visual_capture': None}
 
-    def expand_tool(self, raw, marks):
+    def expand_tool(self, raw, marks, snapshot=None):
         """type_into / search_in_app / scroll_to → their first primitive now, the rest queued."""
         action = raw.get('action') if isinstance(raw, dict) else None
         if not isinstance(action, dict):
             return raw
         kind = action.get('type')
+        from .desktop_context import BROWSER_IDS
+        if kind in ('click_target', 'type_into') and ((snapshot or {}).get('app') or {}).get('bundle_id') in BROWSER_IDS:
+            mark = next((m for m in marks if m['id'] == action.get('target_id')), None)
+            if mark and mark['kind'] in ('field', 'search field') and re.search(r'address|search|url', mark['label'], re.I):
+                # The browser's own address bar: a click left focus on the page, so typing was refused
+                # and the bar was clicked again and again (live). Command-L focuses it for real.
+                if kind == 'type_into' and isinstance(action.get('text'), str) and action['text'].strip():
+                    self.next_queue = [{'type': 'type_text', 'text': action['text'][:2000]}, {'type': 'press_key', 'key': 'enter'}]
+                return dict(raw, action={'type': 'press_key', 'key': 'cmd_l'})
         if kind == 'type_into' and isinstance(action.get('text'), str) and action['text'].strip():
             self.next_queue = [{'type': 'type_text', 'text': action['text'][:2000]}]
             return dict(raw, action={'type': 'click_target', 'target_id': action.get('target_id')})
@@ -954,6 +964,20 @@ class ComputerTask:
                 return False
         return needs_review(action, risk)
 
+    def named_app(self, snapshot):
+        """The installed app the goal names (longest name wins; not browsers), None if none, False if
+        it is already in front."""
+        from .app_names import normalized
+        words = re.findall(r"[\w.&+'-]+", self.goal.casefold())
+        spans = {normalized(' '.join(words[i:i+n])) for n in (1, 2, 3) for i in range(len(words)-n+1)}
+        from .desktop_context import BROWSER_IDS
+        apps = [a for a in self._catalog or [] if len(normalized(a['name'])) > 3 and normalized(a['name']) in spans
+                and a['name'] not in ('Finder',) and a['bundle_id'] not in BROWSER_IDS]  # a browser named is about a site
+        if not apps:
+            return None
+        app = max(apps, key=lambda a: len(a['name']))
+        return False if app['bundle_id'] == (snapshot.get('app') or {}).get('bundle_id') else app
+
     def plan_start(self, desktop, snapshot, provider):
         """Plan once, with the text model, then take the start in code: open the app, go to the
         website or run the search. Without it the first vision steps clicked an app's name, a page
@@ -963,6 +987,22 @@ class ComputerTask:
         self.planned = True
         names = self.app_names(desktop, snapshot)
         front = (snapshot.get('app') or {}).get('name', '')
+        named = self.named_app(snapshot)
+        if named:
+            # The goal names an installed app ("in the Calculator app", "a new TextEdit document"):
+            # open it in code. The model kept asking the user to open it from the Dock (live).
+            running = {a.get('bundle_id') for a in snapshot.get('available_apps') or []}
+            action = {'type': 'focus_app' if named['bundle_id'] in running else 'launch_app', 'bundle_id': named['bundle_id']}
+            try:
+                action = validate_step({'status': 'action', 'message': 'Opening.', 'risk': 'navigation', 'action': action}, desktop, snapshot,
+                                       catalog=self._catalog or (), goal=self.goal)['action']
+            except (ValueError, ValidationError):
+                return None
+            self.pending = action
+            return {'status': 'action', 'message': action.get('label', 'Opening')+'…', 'action': action, 'review': not self.automatic,
+                    'visual_capture': None}
+        if named is False:
+            return None  # the named app is already in front: nothing to plan for where to start
         planner = getattr(type(provider), 'plan_task', None)
         if planner is None:
             return None
@@ -979,6 +1019,8 @@ class ComputerTask:
         from urllib.parse import urlencode, urlsplit
         action = None
         start = plan['start']
+        if start == 'app' and plan.get('url') and any(a['bundle_id'] in BROWSER_IDS for a in resolve_app(str(plan.get('app', '')), self._catalog or [])):
+            start = 'website'  # "Google Chrome" + an address is the address, in the user's own default browser
         if start == 'app':
             matches = resolve_app(str(plan.get('app', '')), self._catalog or [])
             if len(matches) == 1 and matches[0]['name'] != front:
@@ -1063,8 +1105,11 @@ class ComputerTask:
         if len(label) <= 1:
             return 0  # Calculator digits and keys can legitimately repeat.
         target = tuple(word for word in label_words(label) if not word.isdigit())
+        # Only when the screen looked the same as at that click: "next month" five times to reach
+        # March changes the screen each time and is progress, not a loop (live).
         same = lambda receipt: (receipt.get('type') in ('click_point', 'press_control')
-                                and tuple(word for word in label_words(receipt.get('label') or '') if not word.isdigit()) == target)
+                                and tuple(word for word in label_words(receipt.get('label') or '') if not word.isdigit()) == target
+                                and (receipt.get('screen') is None or self.screen_seen is None or receipt.get('screen') == self.screen_seen))
         count = 0
         for receipt in reversed(self.receipts):
             if not same(receipt):
@@ -1075,7 +1120,8 @@ class ComputerTask:
 
     def record(self, receipt):
         self.pending = None
-        self.receipts.append({key: deepcopy(receipt.get(key)) for key in ('type', 'label', 'status', 'before', 'after', 'native_result')})
+        self.receipts.append(dict({key: deepcopy(receipt.get(key)) for key in ('type', 'label', 'status', 'before', 'after', 'native_result')},
+                                  screen=self.screen_seen))
 
     def propose(self, desktop, vision, provider, geometry, *, progress=None):
         if self.cancelled.is_set():
@@ -1135,6 +1181,8 @@ class ComputerTask:
         if self.cancelled.is_set() or not desktop.enabled or not vision.enabled or desktop.generation != desktop_generation or vision.generation != vision_generation:
             raise ValueError('Computer task stopped or access was paused. No next action was submitted.')
         regions = screen_text(visual, snapshot)
+        import hashlib
+        self.screen_seen = hashlib.sha256('\n'.join(sorted(r.get('text', '') for r in regions)).encode()).hexdigest()[:16]
         result = self.click_result(regions, image_data, visual, vision)
         if result is not None:
             for _ in range(3):  # a page can take a moment to show what the click opened
@@ -1276,7 +1324,7 @@ class ComputerTask:
                 snapshot = dict(desktop.context(), targets=snapshot.get('targets'))
             try:
                 self.next_queue = []
-                raw = self.expand_tool(raw, marks)
+                raw = self.expand_tool(raw, marks, snapshot)
                 numbered = isinstance(raw, dict) and isinstance(raw.get('action'), dict) and raw['action'].get('type') == 'click_target'
                 raw = resolve_target(raw, marks)
                 step = validate_step(raw, desktop, snapshot, goal_mode=self.goal_mode, screen=visual.get('screen'), snap=not numbered,

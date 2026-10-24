@@ -1304,3 +1304,49 @@ class MenuGoalTests(Harness):
         self.provider.complete_structured.assert_not_called()
         task.record({'type': 'choose_menu', 'label': 'Choose View in Finder', 'status': 'submitted'})
         self.assertEqual(self.propose(task)['status'], 'done')
+
+
+class NamedAppStartTests(Harness):
+    """v2 suite: "in the Calculator app, what is 832 divided by 705?" ended with "Calculator not visible,
+    open it from the Dock"; the named app is now opened in code before anything else."""
+
+    def test_the_app_the_goal_names_is_opened_first(self):
+        weather = [{'name': 'Weather', 'bundle_id': 'com.apple.weather'}, {'name': 'Safari', 'bundle_id': 'com.apple.Safari'}]
+        self.desktop.bridge.catalog = Mock(return_value=weather)
+        self.desktop.bridge.value['installed_apps'] = weather
+        step = self.propose(ComputerTask("what's the weather in Oslo? use the Weather app", automatic=True))
+        self.assertEqual((step['action']['type'], step['action']['bundle_id']), ('launch_app', 'com.apple.weather'))
+        self.provider.complete_structured.assert_not_called()
+
+    def test_a_click_that_changed_the_screen_is_progress_not_a_loop(self):
+        # "next month" twice to reach March was stopped as "nothing changed" (live).
+        task = ComputerTask('go to March in Calendar', automatic=True, goal_mode='inspect')
+        for month in ('November', 'December'):
+            task.screen_seen = month
+            task.record({'type': 'click_point', 'label': 'next month', 'status': 'submitted'})
+        task.screen_seen = 'January'
+        self.assertEqual(task.repeats({'type': 'click_point', 'label': 'next month'}), 0)
+        task.screen_seen = 'December'
+        self.assertGreaterEqual(task.repeats({'type': 'click_point', 'label': 'next month'}), 1)
+
+
+class AddressBarTests(Harness):
+    """v2 suite: Safari's address bar was clicked again and again: a click left focus on the page, so
+    typing was refused. The browser's own address field is focused with Command-L."""
+    snapshot = dict(CALCULATOR, controls=[], app={'name': 'Safari', 'bundle_id': 'com.apple.Safari', 'pid': 7},
+                    targets=[{'role': 'AXTextField', 'label': 'smart search field', 'bounds': {'x': 300, 'y': 20, 'width': 400, 'height': 30}}])
+
+    def test_the_address_bar_is_focused_with_command_l_and_typing_follows(self):
+        task = ComputerTask('go to the Wikipedia article on Albert Einstein', automatic=True, goal_mode='inspect')
+        self.provider.complete_structured.return_value = {'status': 'action', 'message': 'Go.', 'risk': 'navigation',
+                                                         'action': {'type': 'type_into', 'target_id': 't1', 'text': 'en.wikipedia.org/wiki/Albert_Einstein'}}
+        step = self.propose(task)
+        self.assertEqual((step['action']['type'], step['action']['key']), ('press_key', 'cmd_l'))
+        self.assertEqual([item.get('type') for item in task.queue], ['type_text', 'press_key'])
+
+
+class SettingsVersusInfoTests(LiveRoutingTests):
+    def test_a_settings_pane_request_is_not_a_reading(self):
+        # "Show me Battery in System Settings" answered "Your battery is at 100%".
+        self.route('system_info', 'battery')
+        self.assertEqual(self.app.prepare_request('show me Battery in System Settings')['operation'], 'computer_task')

@@ -826,12 +826,15 @@ class Companion:
             if interpreted.get('operation') in ('move_object', 'move_geometry') and not MOVING_WORDS.search(request):
                 # "Go to my Pictures folder" was routed to moving the companion: going somewhere is a task.
                 interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
-            if interpreted.get('operation') in ('answer', 'inspect_screen', 'computer_task') and THIS_PAGE.search(request) \
+            if interpreted.get('operation') in ('answer', 'inspect_screen') and THIS_PAGE.search(request) \
                     and self.front_browser() and self.front_browser() == ((self.desktop_context.context().get('app') or {}).get('bundle_id')):
                 # "Give me the gist of this article" with a browser in front: read that page (live: "I can't retrieve articles").
                 interpreted = dict(interpreted, operation='read_page', app_name='', target='', remaining_request='')
             if interpreted.get('operation') in ('read_notes', 'read_reminders', 'read_calendar') and re.search(r'\bsearch\b', request, re.I):
                 # "Search my notes for idea" looked for a note titled "idea": searching is done in the app.
+                interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
+            if interpreted.get('operation') == 'system_info' and re.search(r'\bsettings?\b|\bpreferences\b', request, re.I):
+                # "Show me Battery in System Settings" answered the battery level: it asks for the pane.
                 interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
             if interpreted.get('operation') == 'create_note' and not re.search(r'\bnotes?\b', request, re.I):
                 # "Type '…' into a new text document" became a note in Notes (live).
