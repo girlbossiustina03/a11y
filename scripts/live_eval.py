@@ -85,6 +85,92 @@ def safari_windows():
     return {int(a): int(b) for a, b in (item.split(':') for item in out.split(',') if ':' in item)}
 
 
+# Apps a run never quits: the desktop itself, the terminal driving the run, A11y (a Python
+# process from source) and the assistants working in it.
+KEEP_RUNNING = {'Finder', 'Terminal', 'Python', 'A11y', 'Claude', 'Codex', 'Dock', 'SystemUIServer', 'loginwindow'}
+# Apps whose windows have ids AppleScript can close one by one.
+WINDOW_APPS = {'Safari': 'windows', 'Google Chrome': 'windows', 'Finder': 'Finder windows',
+               'TextEdit': 'windows', 'Preview': 'windows'}
+TAB_APPS = ('Safari', 'Google Chrome')
+
+
+def app_names():
+    """Names of the running apps that have a Dock presence."""
+    out = osa('tell application "System Events" to return name of every process whose background only is false')
+    return {name.strip() for name in out.split(',') if name.strip()}
+
+
+def window_ids(app):
+    try:
+        out = osa('tell application "%s" to return id of every %s' % (app, WINDOW_APPS[app][:-1] if WINDOW_APPS[app].endswith('s') else WINDOW_APPS[app]))
+    except RuntimeError:
+        return set()
+    return {int(item) for item in out.replace(' ', '').split(',') if item.strip().isdigit()}
+
+
+def tab_counts(app):
+    counts = {}
+    for window in window_ids(app):
+        try:
+            counts[window] = int(osa('tell application "%s" to return count of tabs of (window id %d)' % (app, window)))
+        except (RuntimeError, ValueError):
+            pass
+    return counts
+
+
+def snapshot():
+    """What is open before a test: running apps, window ids, browser tab counts."""
+    apps = app_names()
+    return {'apps': apps, 'windows': {app: window_ids(app) for app in WINDOW_APPS if app in apps},
+            'tabs': {app: tab_counts(app) for app in TAB_APPS if app in apps}}
+
+
+def restore(before):
+    """Close what a test opened and leave what was there: tabs added to windows that were
+    open, windows that are new, test mail drafts, and apps that weren't running (quit without
+    saving). Returns what it closed, for the run record."""
+    closed = []
+    now = app_names()
+
+    def quietly(script):
+        try:
+            osa(script, timeout=15)
+            return True
+        except (RuntimeError, subprocess.TimeoutExpired):
+            return False
+    for app in TAB_APPS:
+        if app in before['apps'] and app in now:
+            for window, count in before['tabs'].get(app, {}).items():
+                try:
+                    current = int(osa('tell application "%s" to return count of tabs of (window id %d)' % (app, window)))
+                except (RuntimeError, ValueError):
+                    continue
+                for index in range(current, count, -1):
+                    if quietly('tell application "%s" to close tab %d of (window id %d)' % (app, index, window)):
+                        closed.append('%s tab' % app)
+    for app, kind in WINDOW_APPS.items():
+        if app in before['apps'] and app in now:
+            for window in sorted(window_ids(app)-before['windows'].get(app, set())):
+                saving = ' saving no' if app in ('TextEdit', 'Preview') else ''
+                if quietly('tell application "%s" to close (%s id %d)%s' % (app, kind[:-1], window, saving)):
+                    closed.append('%s window' % app)
+    if 'Mail' in now:
+        # Only drafts a test wrote (to the test address); never send, never touch other drafts.
+        script = ('tell application "Mail"', 'set n to 0', 'repeat with m in (every outgoing message)',
+                  'if (address of every to recipient of m) contains "test@example.com" then',
+                  'close m saving no', 'set n to n + 1', 'end if', 'end repeat', 'end tell', 'return n')
+        try:
+            if int(osa(*script, timeout=15) or 0):
+                closed.append('test mail draft')
+        except (RuntimeError, ValueError, subprocess.TimeoutExpired):
+            pass
+    for app in sorted(now-before['apps']-KEEP_RUNNING):
+        if not quietly('tell application "%s" to quit saving no' % app) and not quietly('tell application "%s" to quit' % app):
+            subprocess.run(['pkill', '-x', app])
+        closed.append('quit '+app)
+    return closed
+
+
 def safari_restore(before):
     """Close the Safari windows and tabs a run added; never one that existed before it.
 
@@ -780,6 +866,7 @@ def run_case(app, case, attempt):
     if case.setup:
         case.setup(app)
     before = safari_windows()
+    opened = snapshot()
     state, events, timed_out = app.run(case.request, case.timeout)
     asked = next((event['t'] for event in events if event['kind'] == 'ask'), None)
     # Until the companion went quiet: the last reply, action or animation, whichever ended last.
@@ -801,13 +888,13 @@ def run_case(app, case, attempt):
     record = {'request': case.request, 'attempt': attempt, 'success': failure is None, 'seconds': seconds,
               'route': route_of(state, events), 'failure': failure, 'reply': final_message(events)[:300],
               'task_status': task_status(state), **metrics(events)}
-    try:
-        record['closed'] = safari_restore(before)
-    except RuntimeError as error:
-        record['closed'] = ['error: '+str(error)[:100]]
     record['front_app'] = front_app()
     if state.get('task') and state['task']['status'] == 'running':
         app.call({'cmd': 'stop'})
+    try:
+        record['closed'] = restore(opened)
+    except (RuntimeError, subprocess.SubprocessError) as error:
+        record['closed'] = ['error: '+str(error)[:100]]
     return record
 
 

@@ -56,13 +56,6 @@ def reminders():
     return desktop_bridge(le.ROOT/'.data').reminders()
 
 
-def quit_if_new(names, before):
-    """Quit apps a task opened (never one the user had open, never TextEdit with a document)."""
-    for name in names:
-        if name not in before and name in running_apps():
-            subprocess.run(['pkill', '-x', name])
-
-
 def close_textedit_untitled():
     """Close TextEdit's test documents without saving: the sheet's own Delete/Don't Save button
     (System Events; ⌘D is not that button's shortcut on this macOS, and a Save click once wrote
@@ -488,9 +481,9 @@ def run_task(app, task, shots_dir):
     app.before_apps = running_apps()
     if 'TextEdit' in app.before_apps and not getattr(app, 'textedit_was_open', False):
         dismiss_textedit_sheet()  # a save sheet left by an earlier task would catch the next task's clicks
+    opened = le.snapshot()  # before setup, so pages the setup opens are closed too
     if task.setup:
         task.setup(app)
-    before = le.safari_windows()
     state, events, timed_out = app.run(task.request, task.timeout)
     asked = next((event['t'] for event in events if event['kind'] == 'ask'), None)
     seconds = round(state['now']-state['quiet_for']-asked, 1) if asked is not None and 'now' in state else None
@@ -536,8 +529,10 @@ def run_task(app, task, shots_dir):
         except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as error:
             record['cleanup'].append('error: '+str(error)[:80])
     try:
-        record['closed'] = le.safari_restore(before)
-        quit_if_new(['Calculator', 'Maps', 'Weather', 'App Store', 'Dictionary', 'Calendar', 'System Settings', 'Notes', 'Preview', 'Font Book'], getattr(app, 'before_apps', set()))
+        if (state.get('task') or {}).get('status') == 'running':
+            app.call({'cmd': 'stop'})
+        # Everything the task (or its setup's page) opened: tabs, windows, test drafts, apps.
+        record['closed'] = le.restore(opened)
         if le.front_app() == 'TextEdit':
             close_textedit_untitled()
         for item in reminders():
