@@ -798,7 +798,7 @@ class NativeTests(unittest.TestCase):
         # Collapsed: the title bar and the face, at the same width as when open.
         self.assertEqual(mascot.window_frame.width(), WIDTH)
         self.assertEqual(mascot.width(), WIDTH+2*MARGIN)
-        self.assertLessEqual(mascot.height(), mascot.character.height()+TITLE_HEIGHT+2*MARGIN+12)
+        self.assertLessEqual(mascot.height(), mascot.character.height()+TITLE_HEIGHT+2*MARGIN+22)  # 10 px of room above the face
         self.assertEqual(mascot.character.mapToGlobal(QPoint()), anchor)
         self.assertFalse(any(b.isVisible() for b in mascot.findChildren(QPushButton)))
         mascot.character.click()
