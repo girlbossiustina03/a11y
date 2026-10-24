@@ -408,6 +408,10 @@ if let index = args.firstIndex(of: "--browse"), index+2 < args.count {
     let mode = index+3 < args.count ? args[index+3] : "default"
     // "current": the tab the user is looking at (or the window whose title holds the hint), not a new one.
     let hint = index+4 < args.count ? args[index+4] : ""
+    // Other hosts an open tab of this site may show (redirects, the www. twin); hostnames only.
+    let alsoHosts = (index+5 < args.count ? args[index+5] : "").split(separator: ",").map(String.init).filter {
+        !$0.isEmpty && $0.count <= 100 && $0.allSatisfy { $0.isLetter || $0.isNumber || $0 == "." || $0 == "-" }
+    }
     guard ["default", "window", "tab", "current"].contains(mode) else {
         emit(["error": "Invalid browser placement."]); exit(1)
     }
@@ -435,9 +439,10 @@ if let index = args.firstIndex(of: "--browse"), index+2 < args.count {
               "browser_observation": ["url": observation.atIndex(1)?.stringValue ?? "", "window_count": observation.atIndex(2)?.int32Value ?? 0,
                                       "tab_count": observation.atIndex(3)?.int32Value ?? 0]]); exit(0)
     }
-    if (bundleID == "com.apple.Safari" || chromium.contains(bundleID)),
+    if mode == "default", (bundleID == "com.apple.Safari" || chromium.contains(bundleID)),
        !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty {
-        let test = exact ? "u is " + quoted(url.absoluteString) : "u starts with " + quoted(sitePrefix)
+        let prefixes = [sitePrefix] + alsoHosts.map { (url.scheme ?? "https") + "://" + $0 }
+        let test = exact ? "u is " + quoted(url.absoluteString) : prefixes.map { "u starts with " + quoted($0) }.joined(separator: " or ")
         let select = bundleID == "com.apple.Safari" ? "set current tab of w to t" : "set active tab index of w to i"
         let source = "with timeout of 10 seconds\ntell application id \"" + bundleID + "\"\nrepeat with w in windows\nset i to 0\nrepeat with t in tabs of w\nset i to i + 1\nset u to \"\"\ntry\nset u to URL of t\nend try\nif u is missing value then set u to \"\"\nif " + test + " then\n" + select + "\nset index of w to 1\nactivate\nreturn {u, count of windows, count of tabs of w}\nend if\nend repeat\nend repeat\nend tell\nreturn {\"\", 0, 0}\nend timeout"
         var failure: NSDictionary?

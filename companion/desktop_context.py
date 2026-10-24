@@ -153,8 +153,10 @@ class MacDesktopBridge:
                 raise RuntimeError('Music could not open Apple Music search.')
             return {'submitted': True, 'verification_required': True, 'url': url}
         if kind == 'browse_url':
+            from .web_apps import same_site_hosts
+            # An open tab of the same site is reused; these are the other hosts it may show.
             return self.call('--browse', action['bundle_id'], action['url'], action.get('browser_mode', 'default'),
-                             *((action['window_hint'],) if action.get('window_hint') else ()))
+                             action.get('window_hint', ''), ','.join(same_site_hosts(action['url'])))
         if kind == 'close_tab':
             return self.call('--close-tab', action['bundle_id'])
         if kind == 'choose_menu':

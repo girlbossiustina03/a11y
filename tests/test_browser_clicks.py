@@ -101,7 +101,19 @@ class BrowserServiceTests(CompanionFixture, unittest.TestCase):
             bridge = MacDesktopBridge('/private/tmp/a11y-bridge-unit')
             with patch.object(bridge, 'call', return_value={'submitted': True}) as call:
                 bridge.application_action(action)
-            self.assertEqual(call.call_args.args, ('--browse', 'com.apple.Safari', 'https://youtube.com', mode))
+            self.assertEqual(call.call_args.args, ('--browse', 'com.apple.Safari', 'https://youtube.com', mode, '', 'www.youtube.com'))
+
+    def test_reported_an_open_site_is_reused_unless_a_new_one_is_asked_for(self):
+        # Live: three Teams tabs in a row. Teams redirects to teams.cloud.microsoft, so its open
+        # tab never matched; the bridge now gets the hosts an open tab of the site may show.
+        from companion.web_apps import same_site_hosts
+        self.assertEqual(same_site_hosts('https://teams.microsoft.com'), ['www.teams.microsoft.com', 'teams.cloud.microsoft', 'teams.live.com'])
+        self.assertEqual(same_site_hosts('https://www.youtube.com/results?q=x'), ['youtube.com'])
+        self.bridge.catalog.return_value.append({'name': 'Safari', 'bundle_id': 'com.apple.Safari'})
+        for request, mode in (('open teams.microsoft.com', 'default'), ('open a new teams.microsoft.com', 'tab'),
+                              ('open another teams.microsoft.com', 'tab')):
+            provider = self.app.provider = StagedProvider('browser_open', 'Safari', 'teams.microsoft.com')
+            self.assertEqual(self.app.ask(request)['desktop_action']['browser_mode'], mode, request)
 
     def test_non_web_schemes_never_produce_browser_actions(self):
         self.bridge.catalog.return_value.append({'name': 'Safari', 'bundle_id': 'com.apple.Safari'})

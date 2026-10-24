@@ -108,6 +108,8 @@ BARE_VERB = re.compile(r'^\W*(?:please\s+)?(open|launch|start|close|quit|click|s
 # Reads that A11y does in Apple's own apps, and the names that mean those apps.
 BUILT_IN_READS = {'read_mail': ('Mail', 'Apple Mail', 'email', 'inbox'), 'read_calendar': ('Calendar', 'my calendar'),
                   'read_reminders': ('Reminders',), 'read_notes': ('Notes', 'my notes'), 'find_contact': ('Contacts',)}
+# "Open a new Teams", "open another YouTube": a fresh tab even when the site is open already.
+ASKS_FOR_NEW = re.compile(r'\b(?:new|another|second|fresh)\b', re.I)
 # "Show me …" asks to see a thing where it lives: these reads open their app instead.
 SHOW_ME = re.compile(r'^\W*(?:(?:can|could|would)\s+you\s+|please\s+)?show\s+me\b', re.I)
 SHOWN_IN_APP = {'read_reminders': 'Reminders', 'read_calendar': 'Calendar', 'read_notes': 'Notes', 'read_mail': 'Mail'}
@@ -1239,7 +1241,10 @@ class Companion:
                     prebuilt = {'request_kind': 'answer', 'message': 'I could not identify one installed app named “'+request_plan['app_name']+'”. Please give its exact application name.',
                                 'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
             elif operation in ('browser_search', 'browser_open') and prebuilt is None:
-                action = self.browser_action(operation, request_plan['app_name'], request_plan['target'], request_plan.get('browser_mode', 'default'),
+                mode = request_plan.get('browser_mode', 'default')
+                if mode == 'default' and ASKS_FOR_NEW.search(request):
+                    mode = 'tab'  # "open a new Teams": another one, not the tab already open
+                action = self.browser_action(operation, request_plan['app_name'], request_plan['target'], mode,
                                              request_plan.get('window_hint', ''))
                 if action:
                     label = action['label']

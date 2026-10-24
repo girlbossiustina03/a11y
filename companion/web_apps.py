@@ -16,6 +16,27 @@ WEB_APPS = {
     'whatsapp': 'https://web.whatsapp.com', 'slack': 'https://app.slack.com',
     'github': 'https://github.com', 'linkedin': 'https://www.linkedin.com',
 }
+# Where a site really lives once open: Teams redirects teams.microsoft.com to
+# teams.cloud.microsoft, so the open tab never matched and every request opened another one
+# (live: three Teams tabs in a row).
+SITE_ALIASES = {
+    'teams.microsoft.com': ('teams.cloud.microsoft', 'teams.live.com'),
+    'outlook.office.com': ('outlook.cloud.microsoft', 'outlook.office365.com', 'outlook.live.com'),
+    'www.office.com': ('m365.cloud.microsoft', 'www.microsoft365.com'),
+    'onedrive.live.com': ('onedrive.cloud.microsoft',),
+}
+
+
+def same_site_hosts(url):
+    """Other hosts an open tab of this site may show: known redirects and the www. twin."""
+    from urllib.parse import urlsplit
+    host = (urlsplit(url).hostname or '').casefold()
+    if not host:
+        return []
+    twin = host[4:] if host.startswith('www.') else 'www.'+host
+    return [h for h in (twin, *SITE_ALIASES.get(host, ())) if h != host]
+
+
 # Sites whose own search results have a fixed address: "open YouTube and search for lo-fi" is
 # one navigation instead of a task that clicks through the page (it ended in Safari's address
 # bar in live runs). {} is the URL-encoded query.
