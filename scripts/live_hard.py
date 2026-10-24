@@ -126,10 +126,12 @@ def build(eval_window, count, seed):
 
     @family
     def section_sentence():
-        topic, section = pick(SECTION_TOPICS)
+        for topic, section in rng.sample(SECTION_TOPICS, len(SECTION_TOPICS)):
+            truth = section_opening(topic, section)
+            if truth:
+                break  # articles change: only a section that exists today
         request = pick(['open the Wikipedia article on {t} and tell me the first sentence of its {s} section',
                         'on Wikipedia, what does the {s} section of the {t} article start with?']).format(t=topic, s=section)
-        truth = section_opening(topic, section)
         return Task('section_sentence', request, [('quotes the section ('+truth[:40]+'…)', lambda s, e: overlap(answer(e), truth) >= 0.5),
                                                   ('Wikipedia open', url(r'wikipedia\.org/wiki/'))], timeout=300)
 
