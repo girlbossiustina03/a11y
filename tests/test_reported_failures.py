@@ -1548,3 +1548,16 @@ class V3RoundTwoTests(LiveRoutingTests):
     def test_reported_take_me_back_one_page_is_one_press(self):
         from companion.computer_task import HISTORY_GOAL
         self.assertEqual(HISTORY_GOAL.match('take me back one page').group('count'), 'one')
+
+
+
+class OwnAppTests(unittest.TestCase):
+    def test_reported_a_quoted_marker_never_launches_a11y(self):
+        # Live (v3): 'remind me "A11y test 4821: take an umbrella"' launched the installed A11y app.
+        task = ComputerTask('if it is going to rain in Oslo tomorrow, remind me "A11y test 4821: take an umbrella" tomorrow at 8',
+                            automatic=True)
+        task._catalog = [{'name': 'A11y', 'bundle_id': 'com.a11y.companion'}, {'name': 'Reminders', 'bundle_id': 'com.apple.reminders'}]
+        self.assertIsNone(task.named_app({'app': {'bundle_id': 'com.apple.Safari'}}))  # nothing to launch, least of all A11y
+        task = ComputerTask('open A11y settings', automatic=True)
+        task._catalog = [{'name': 'A11y', 'bundle_id': 'com.a11y.companion'}]
+        self.assertIsNone(task.named_app({'app': {}}))

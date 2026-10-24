@@ -1010,11 +1010,13 @@ class ComputerTask:
         """The installed app the goal names (longest name wins; not browsers), None if none, False if
         it is already in front."""
         from .app_names import normalized
-        words = re.findall(r"[\w.&+'-]+", self.goal.casefold())
+        # Not inside quotes: "remind me 'A11y test 1234: …'" launched the installed A11y (live, v3).
+        unquoted = re.sub(r'"[^"]*"|“[^”]*”|\'[^\']*\'', ' ', self.goal)
+        words = re.findall(r"[\w.&+'-]+", unquoted.casefold())
         spans = {normalized(' '.join(words[i:i+n])) for n in (1, 2, 3) for i in range(len(words)-n+1)}
         from .desktop_context import BROWSER_IDS
         apps = [a for a in self._catalog or [] if len(normalized(a['name'])) > 3 and normalized(a['name']) in spans
-                and a['name'] not in ('Finder',) and a['bundle_id'] not in BROWSER_IDS]  # a browser named is about a site
+                and a['name'] not in ('Finder', 'A11y') and a['bundle_id'] not in BROWSER_IDS | {'com.a11y.companion'}]  # a browser named is about a site; never A11y itself
         if not apps:
             return None
         app = max(apps, key=lambda a: len(a['name']))
