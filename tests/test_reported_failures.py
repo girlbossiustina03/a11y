@@ -1690,8 +1690,8 @@ class AppClickTests(unittest.TestCase):
     def test_the_front_apps_own_name_is_refused_with_the_reason(self):
         result = self.run_click({'role': 'AXMenuBarItem', 'app': 'com.apple.Safari', 'app_name_item': True, 'title': 'Safari'},
                                 front='com.apple.Safari')
-        self.assertIn('already in front', result)
-        self.assertIn('name in the menu bar', result)
+        self.assertEqual(result['action']['type'], 'wait')       # never a refusal that ends the task
+        self.assertIn('already in front', result['action']['label'])
 
     def test_an_ordinary_target_is_left_alone(self):
         result = self.run_click({'role': 'AXButton', 'title': 'Bluetooth', 'owner': 'com.apple.systempreferences'})

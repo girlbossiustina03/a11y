@@ -830,7 +830,9 @@ if pressIndex == nil, args.contains("--targets"), let window, let frame = bounds
         if let box, !box.intersects(windowRect) { continue }  // the off-screen part of a page
         if string(node, "AXSubrole") == "AXSecureTextField" { continue }
         let role = string(node, "AXRole")
-        if clickable.contains(role), let box, box.width >= 4, box.height >= 4, windowRect.contains(CGPoint(x: box.midX, y: box.midY)) {
+        // Greyed-out controls are not offered: the model could not tell them from ones that work (owner).
+        if clickable.contains(role), let box, box.width >= 4, box.height >= 4, windowRect.contains(CGPoint(x: box.midX, y: box.midY)),
+           (attr(node, "AXEnabled") as? Bool) != false {
             var label = string(node, "AXTitle")
             if label.isEmpty { label = string(node, "AXDescription") }
             if label.isEmpty { label = string(node, "AXHelp") }

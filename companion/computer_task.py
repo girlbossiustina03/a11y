@@ -987,8 +987,11 @@ class ComputerTask:
         name = hit.get('title') or hit.get('owner_name') or 'that app'
         where = 'name in the menu bar' if hit.get('app_name_item') else 'Dock icon'
         if app == (snapshot.get('app') or {}).get('bundle_id'):
-            raise ValidationError('That point is '+name+'’s '+where+', and '+name+' is already in front: clicking it changes '
-                                  'nothing. Choose a target inside its window (a numbered target), or report the result.')
+            # Already in front: nothing to click there. A short wait instead, never a refusal that ends the
+            # task (that ended tasks at step one, live); the model is told why and the target is dropped.
+            self.dead_targets.add((self.screen_seen, str(action.get('label', '')).casefold().strip()))
+            return dict(step, action={'type': 'wait', 'milliseconds': 500, 'label': name+' is already in front; '+where+' skipped'},
+                        message=name+' is already in front.')
         running = {a.get('bundle_id') for a in snapshot.get('available_apps') or []}
         switched = validate_step({'status': 'action', 'message': 'Switching to '+name+'.', 'risk': 'navigation',
                                   'action': {'type': 'focus_app' if app in running else 'launch_app', 'bundle_id': app}},

@@ -1207,6 +1207,11 @@ class Companion:
         system = SYSTEM+DESKTOP_INSTRUCTIONS
         if request_plan:
             operation = request_plan['operation']
+            if operation == 'focus_app' and request_plan.get('app_name') and desktop.get('enabled') and not resolve_app(
+                    request_plan['app_name'], desktop.get('available_apps', [])):
+                # "Switch to Clock" with Clock not running: open it ("I can't see one open app", live).
+                operation = 'launch_app'
+                request_plan = dict(request_plan, operation='launch_app')
             if operation == 'computer_task' and not getattr(getattr(self.desktop_context, 'bridge', None), 'supports_input', True):
                 prebuilt = {'request_kind': 'answer', 'message': 'Step-by-step tasks inside apps (clicking and typing for you) are not available on '
                             'this system yet. I can open, switch to and close apps, answer questions, and read your screen when vision is on.',
