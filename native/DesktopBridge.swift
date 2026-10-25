@@ -209,6 +209,33 @@ func windowOwner(at point: CGPoint) -> pid_t? {
     }
     return nil
 }
+if let index = args.firstIndex(of: "--hit"), index+2 < args.count {
+    // What a click at this point would land on, by accessibility: so a click on an app's Dock icon
+    // or its name in the menu bar can become switching to that app (or be refused when it is already
+    // in front) instead of a click that changes nothing. Read only: nothing is pressed.
+    guard AXIsProcessTrusted(), let x = Double(args[index+1]), let y = Double(args[index+2]), x.isFinite, y.isFinite else {
+        emit(["error": "Accessibility permission is required."]); exit(1)
+    }
+    var hit: AXUIElement?
+    guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(x), Float(y), &hit) == .success, let found = hit else {
+        emit(["role": ""]); exit(0)
+    }
+    var pid: pid_t = 0
+    AXUIElementGetPid(found, &pid)
+    let owner = NSRunningApplication(processIdentifier: pid)
+    var result: [String: Any] = ["role": string(found, "AXRole"), "subrole": string(found, "AXSubrole"),
+                                 "title": String((string(found, "AXTitle").isEmpty ? string(found, "AXDescription") : string(found, "AXTitle")).prefix(100)),
+                                 "owner": owner?.bundleIdentifier ?? "", "owner_name": owner?.localizedName ?? ""]
+    if string(found, "AXRole") == "AXDockItem", let url = attr(found, "AXURL") as? URL, let bundle = Bundle(url: url)?.bundleIdentifier {
+        result["app"] = bundle  // the app this Dock icon opens
+    }
+    if string(found, "AXRole") == "AXMenuBarItem", let bar = element(attr(found, "AXParent")),
+       let items = attr(bar, "AXChildren") as? [AXUIElement], items.count > 1, CFEqual(items[1], found) {
+        result["app"] = owner?.bundleIdentifier ?? ""  // the app's own name, next to the Apple menu
+        result["app_name_item"] = true
+    }
+    emit(result); exit(0)
+}
 if let index = args.firstIndex(of: "--click"), index+4 < args.count {
     guard AXIsProcessTrusted(), let x = Double(args[index+1]), let y = Double(args[index+2]),
           x.isFinite, y.isFinite, let displayID = UInt32(args[index+3]), CGDisplayIsActive(displayID) != 0,

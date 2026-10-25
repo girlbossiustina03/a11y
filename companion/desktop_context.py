@@ -103,6 +103,10 @@ class MacDesktopBridge:
     def activate(self, bundle_id):
         return self.call('--activate', bundle_id)
 
+    def hit(self, x, y):
+        """What is at a screen point (role, title, the app a Dock icon opens), without pressing it."""
+        return self.call('--hit', str(x), str(y))
+
     def click(self, action, guard):
         screen = guard['screen']
         return self.call('--click', str(screen['x']+action['x']*screen['width']),

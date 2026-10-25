@@ -1662,3 +1662,37 @@ class V3RoundFourTests(LiveRoutingTests):
         inline = [{'text': '%d. Headline %d' % (n, n), 'x': 0.02, 'y': 0.1+n*0.03} for n in range(1, 8)]
         self.assertIn('Headline 3', ComputerTask('tell me the 3rd result', automatic=True).nth_item_answer(inline)['message'])
         self.assertIsNone(ComputerTask('open the fifth story', automatic=True).nth_item_answer(regions))  # opening is not reading
+
+
+class AppClickTests(unittest.TestCase):
+    """Reported: "it still doesn't get apps right". Clicks on an app's Dock icon or its menu-bar name
+    (seen: "Safari|0.048,0.016", "Safari icon in Dock", over and over) are decided by what macOS says
+    is at the point, for any app."""
+
+    def run_click(self, hit, front='com.apple.finder'):
+        from companion.computer_task import ValidationError as TaskValidationError
+        task = ComputerTask('find the Bluetooth settings', automatic=True)
+        bridge = Mock(hit=Mock(return_value=hit))
+        desktop = Mock(bridge=bridge)
+        step = {'status': 'action', 'message': 'Click.', 'action': {'type': 'click_point', 'x': 0.05, 'y': 0.95, 'label': 'Safari icon in Dock'}}
+        snapshot = {'app': {'bundle_id': front}, 'available_apps': [{'bundle_id': 'com.apple.Safari'}]}
+        visual = {'screen': {'x': 0, 'y': 0, 'width': 1000, 'height': 800}}
+        with patch('companion.computer_task.validate_step', side_effect=lambda raw, *a, **k: {'action': dict(raw['action'], label='Switch'), 'message': raw['message']}):
+            try:
+                return task.app_click(step, desktop, snapshot, visual)
+            except TaskValidationError as error:
+                return str(error)
+
+    def test_dock_icon_of_another_app_switches_to_it(self):
+        result = self.run_click({'role': 'AXDockItem', 'app': 'com.apple.Safari', 'title': 'Safari'})
+        self.assertEqual((result['action']['type'], result['action']['bundle_id']), ('focus_app', 'com.apple.Safari'))
+
+    def test_the_front_apps_own_name_is_refused_with_the_reason(self):
+        result = self.run_click({'role': 'AXMenuBarItem', 'app': 'com.apple.Safari', 'app_name_item': True, 'title': 'Safari'},
+                                front='com.apple.Safari')
+        self.assertIn('already in front', result)
+        self.assertIn('name in the menu bar', result)
+
+    def test_an_ordinary_target_is_left_alone(self):
+        result = self.run_click({'role': 'AXButton', 'title': 'Bluetooth', 'owner': 'com.apple.systempreferences'})
+        self.assertEqual(result['action']['type'], 'click_point')

@@ -946,6 +946,34 @@ class ComputerTask:
         return {'status': 'action', 'message': action.get('label') or 'Sorting.', 'action': action,
                 'review': not self.automatic, 'visual_capture': None}
 
+    def app_click(self, step, desktop, snapshot, visual):
+        """A click that would land on an app's Dock icon or its name in the menu bar: switch to that app
+        (a click there does the same, unconfirmed), or, when it is already in front, refuse with why.
+        macOS says what is under the point, so this holds for every app, whatever the model calls it.
+        It clicked "Safari|0.048,0.016", Safari's menu-bar name, over and over (live)."""
+        action = step.get('action') or {}
+        bridge = getattr(desktop, 'bridge', None)
+        screen = visual.get('screen') or {}
+        if step.get('status') != 'action' or action.get('type') != 'click_point' or not hasattr(bridge, 'hit') or not screen.get('width'):
+            return step
+        try:
+            hit = bridge.hit(screen['x']+action['x']*screen['width'], screen['y']+action['y']*screen['height'])
+        except (RuntimeError, ValueError, OSError, KeyError, TypeError):
+            return step
+        app = hit.get('app') if isinstance(hit, dict) else None
+        if not app:
+            return step
+        name = hit.get('title') or hit.get('owner_name') or 'that app'
+        where = 'name in the menu bar' if hit.get('app_name_item') else 'Dock icon'
+        if app == (snapshot.get('app') or {}).get('bundle_id'):
+            raise ValidationError('That point is '+name+'’s '+where+', and '+name+' is already in front: clicking it changes '
+                                  'nothing. Choose a target inside its window (a numbered target), or report the result.')
+        running = {a.get('bundle_id') for a in snapshot.get('available_apps') or []}
+        switched = validate_step({'status': 'action', 'message': 'Switching to '+name+'.', 'risk': 'navigation',
+                                  'action': {'type': 'focus_app' if app in running else 'launch_app', 'bundle_id': app}},
+                                 desktop, snapshot, catalog=self._catalog or (), goal=self.goal)
+        return dict(step, action=switched['action'], message=switched.get('message', step.get('message')))
+
     def tab_step(self, desktop, snapshot):
         """"Switch to the Wikipedia tab": open the site, which brings its open tab forward (the bridge
         reuses it), then done. The model clicked Back twice after the tab was already in front (live, v3)."""
@@ -1540,6 +1568,7 @@ class ComputerTask:
                 raw = resolve_target(raw, marks)
                 step = validate_step(raw, desktop, snapshot, goal_mode=self.goal_mode, screen=visual.get('screen'), snap=not numbered,
                                      text_regions=regions, catalog=self._catalog or (), goal=self.goal)
+                step = self.app_click(step, desktop, snapshot, visual)
                 if fast_pass and step['status'] == 'action' and step['action']['type'] == 'click_point' and not text_grounded_click(step['action'], regions, snapshot, visual['screen']):
                     raise ValidationError('That point is not grounded in OCR text or a current accessible control. Inspect the supplied full image before choosing a click.')
                 if step['status'] == 'action' and self.repeats(step['action']) >= 2:
