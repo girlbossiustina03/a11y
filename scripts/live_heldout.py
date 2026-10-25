@@ -93,6 +93,17 @@ def destination_open(app, target, fallback=None):
     if contains(le.window_title(app) or '', target):
         return True
     try:
+        # The helper reports which tab or option is chosen (fast, any app): the window-wide AppleScript walk
+        # timed out on Activity Monitor's process table and failed a correct Memory tab (live).
+        from companion.desktop_context import desktop_bridge
+        bundle = osa('return id of application (item 1 of argv)', app)
+        tabs = [t for t in desktop_bridge(le.ROOT/'.data').sample_targets(bundle).get('targets', [])
+                if 'selected' in t and contains(t.get('label', ''), target)]
+        if tabs:
+            return any(t['selected'] for t in tabs)
+    except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired):
+        pass
+    try:
         selected = osa('''tell application "System Events" to tell process (item 1 of argv)
 set found to false
 repeat with element in entire contents of front window
@@ -116,7 +127,7 @@ return "unknown"
 end tell''', app, target)
         if selected != 'unknown':
             return selected == 'yes'
-    except RuntimeError:
+    except (RuntimeError, subprocess.TimeoutExpired):
         pass
     return le.shows(fallback or target)
 

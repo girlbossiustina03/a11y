@@ -328,7 +328,8 @@ def screen_marks(targets, regions, screen, limit=160):
             x, y = (b['x']-screen.get('x', 0))/screen['width'], (b['y']-screen.get('y', 0))/screen['height']
             width, height = b['width']/screen['width'], b['height']/screen['height']
             if 0 <= x+width/2 < 1 and 0 <= y+height/2 < 1:
-                marks.append({'kind': ('page ' if target.get('page') else '')+ROLE_NAMES.get(target.get('role'), 'control'), 'label': target['label'][:80],
+                marks.append({'kind': ('page ' if target.get('page') else '')+ROLE_NAMES.get(target.get('role'), 'control')
+                              + (', selected' if target.get('selected') is True else ''), 'label': target['label'][:80],
                               'x': x, 'y': y, 'width': width, 'height': height})
     covered = list(marks)
     for region in regions:

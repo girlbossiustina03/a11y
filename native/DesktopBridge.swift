@@ -928,8 +928,12 @@ if pressIndex == nil, args.contains("--targets"), let window, let frame = bounds
             if label.isEmpty { label = string(node, "AXHelp") }
             if label.isEmpty && fields.contains(role) { label = string(node, "AXPlaceholderValue") }
             if !label.isEmpty {
-                targets.append(["role": role, "label": String(label.prefix(80)), "page": inPage,
-                                "bounds": ["x": box.minX, "y": box.minY, "width": box.width, "height": box.height]])
+                var target: [String: Any] = ["role": role, "label": String(label.prefix(80)), "page": inPage,
+                                             "bounds": ["x": box.minX, "y": box.minY, "width": box.width, "height": box.height]]
+                // Which tab or option is chosen (a state, not a value): Activity Monitor's Memory tab was
+                // clicked and nothing could tell it had switched (live).
+                if role == "AXRadioButton" || role == "AXTab", let chosen = attr(node, "AXValue") as? Int { target["selected"] = chosen == 1 }
+                targets.append(target)
                 if role != "AXRow" && role != "AXCell" { continue }  // a named button's parts are not separate targets
             }
         }
