@@ -477,6 +477,8 @@ ASKS_FOR_FACT = re.compile(r"\b(?:tell|show)\s+me\s+(?:what|which|when|who|where
                            r"|\b(?:which|when|who|how\s+(?:many|much|long|old|big))\b|\?\s*$", re.I)
 # "The History section of the Coffee article", "take me to the History part": a section of the page.
 SECTION = re.compile(r"\b(?:the|its|this|that)\s+(?P<name>[\w'’-]+(?:\s+[\w'’-]+){0,3}?)\s+(?:section|part|heading)\b", re.I)
+# What a person types into the address bar to go somewhere: a full address or a bare domain ("open-meteo.com/en").
+ADDRESS = re.compile(r'(?:https?://\S+|(?:[a-z0-9-]+\.)+[a-z]{2,24}(?:[/?#]\S*)?)', re.I)
 # "A new TextEdit document", "another window": a new one, never the one already open.
 NEW_DOCUMENT = re.compile(r'\b(?:new|another|fresh|blank|empty)\s+(?:[\w-]+\s+){0,2}(?:document|doc|window|file|page)\b', re.I)
 # A window goes full screen or into the Dock only when the goal says so.
@@ -1199,6 +1201,71 @@ class ComputerTask:
         return {'status': 'action', 'message': action.get('label', 'Going to the section')+'…', 'action': action,
                 'review': not self.automatic, 'visual_capture': None}
 
+    def address_typed(self, step, desktop, snapshot):
+        """The model typing an address into the browser (⌘L, type, Enter: it fumbled this in every run of
+        Open-Meteo and Open Library, review 2026-10-25) becomes one navigation in the current tab, done in code."""
+        action = step.get('action') or {}
+        app = (snapshot.get('app') or {}).get('bundle_id')
+        from .desktop_context import BROWSER_IDS
+        if step.get('status') != 'action' or action.get('type') != 'type_text' or app not in BROWSER_IDS:
+            return step
+        text = str(action.get('text', '')).strip()
+        if not ADDRESS.fullmatch(text):
+            return step
+        address = text if '://' in text else 'https://'+text
+        try:
+            converted = validate_step({'status': 'action', 'message': 'Opening '+address+'.', 'risk': 'navigation',
+                                       'action': {'type': 'browse_url', 'bundle_id': app, 'url': address,
+                                                  'label': 'Open '+address.split('://', 1)[1], 'browser_mode': 'current'}},
+                                      desktop, snapshot, catalog=self._catalog or (), goal=self.goal)
+        except (ValueError, ValidationError):
+            return step
+        self.next_queue = []  # its Enter is not needed
+        return dict(step, action=converted['action'], message=converted.get('message', step.get('message')))
+
+    def navigation_check(self, desktop, snapshot):
+        """Did the last navigation happen? An app opened or switched to must be in front; an address must
+        be the browser's page. If not, it is tried once more; after that the model is told (review 2026-10-25:
+        navigation was submitted and never observed)."""
+        if not self.receipts or getattr(self, 'navigation_retried', None) is self.receipts[-1]:
+            return None
+        last = self.receipts[-1]
+        wanted = last.get('wanted') or {}
+        kind = last.get('type')
+        front = (snapshot.get('app') or {}).get('bundle_id')
+        happened = True
+        if kind in ('launch_app', 'focus_app', 'new_window') and wanted.get('bundle_id'):
+            happened = front == wanted['bundle_id']
+        elif kind == 'browse_url' and wanted.get('url') and '?' not in wanted['url'] and front == wanted.get('bundle_id'):
+            # (a search or "first result" address redirects elsewhere by design: not checked)
+            from urllib.parse import urlsplit
+            from . import mac_apps
+            try:
+                _, url, _ = mac_apps.read_page(front)
+            except (mac_apps.AppError, RuntimeError, OSError, ValueError):
+                return None
+            host = lambda value: (urlsplit(value).hostname or '').removeprefix('www.')
+            from .web_apps import same_site_hosts
+            hosts = {host(wanted['url'])} | {h.removeprefix('www.') for h in same_site_hosts(wanted['url'])}
+            happened = not url or host(url) in hosts or any(host(url).endswith('.'+h) for h in hosts if h)
+        if happened:
+            return None
+        self.navigation_retried = last
+        if last.get('effect'):
+            return None
+        last['effect'] = 'it did not happen: '+('the app is not in front' if kind != 'browse_url' else 'the page is elsewhere')
+        retry = {'type': kind, 'bundle_id': wanted['bundle_id']}
+        if kind == 'browse_url':
+            retry.update(url=wanted['url'], label='Open '+wanted['url'].split('://', 1)[-1], browser_mode='current')
+        try:
+            action = validate_step({'status': 'action', 'message': 'Trying that again.', 'risk': 'navigation', 'action': retry},
+                                   desktop, snapshot, catalog=self._catalog or (), goal=self.goal)['action']
+        except (ValueError, ValidationError):
+            return None
+        self.pending = action
+        return {'status': 'action', 'message': 'Trying again: '+action.get('label', '')+'…', 'action': action,
+                'review': not self.automatic, 'visual_capture': None}
+
     def new_document_step(self, desktop, snapshot):
         """"In a new TextEdit document": after launching, a new document. TextEdit reopened last time's
         document on launch and the population went into it (live, v3)."""
@@ -1527,6 +1594,18 @@ class ComputerTask:
         start = plan['start']
         from .web_apps import site_address
         named_site = site_address(self.goal)
+        if start == 'current' and not plan.get('url') and (snapshot.get('app') or {}).get('bundle_id') in BROWSER_IDS:
+            # The planner stays in the browser in front but names the address in its steps ("In Safari, navigate
+            # to https://open-meteo.com"); the model then fumbled ⌘L, typing and Enter (live, held-out). Open it.
+            written = re.search(r'https?://[^\s\'"<>)]+', ' '.join(str(step) for step in plan.get('steps') or [])+' '+str(plan.get('query', '')))
+            if written:
+                start, plan = 'website', dict(plan, url=written.group(0).rstrip('.,;'))
+        if start == 'current' and not plan.get('url') and (snapshot.get('app') or {}).get('bundle_id') in BROWSER_IDS:
+            # The planner stays in the browser in front but names the address in its steps ("In Safari, navigate
+            # to https://open-meteo.com"); the model then fumbled ⌘L, typing and Enter (review 2026-10-25). Open it.
+            written = re.search(r'https?://[^\s\'"<>)]+', ' '.join(str(step) for step in plan.get('steps') or [])+' '+str(plan.get('query', '')))
+            if written:
+                start, plan = 'website', dict(plan, url=written.group(0).rstrip('.,;'))
         if start == 'current' and named_site and (snapshot.get('app') or {}).get('bundle_id') not in BROWSER_IDS:
             # "On Wikipedia, what does the History section of the Coffee article start with?" with
             # Preview in front: the planner kept the current app and the task gave up (live, v3).
@@ -1675,10 +1754,11 @@ class ComputerTask:
             self.brought = getattr(self, 'brought', set()) | {self.pending.get('bundle_id')}
         if (self.pending or {}).get('type') == 'type_text' and receipt.get('type') == 'type_text' and receipt.get('status') != 'failed':
             self.typed = getattr(self, 'typed', [])+[self.pending.get('text', '')]
+        wanted = {key: (self.pending or {}).get(key) for key in ('bundle_id', 'url', 'browser_mode') if (self.pending or {}).get(key)}
         self.pending = None
         self.receipts.append(dict({key: deepcopy(receipt.get(key)) for key in ('type', 'label', 'key', 'status', 'before', 'after', 'native_result', 'effect')
                                    if key != 'effect' or key in receipt},
-                                  screen=self.screen_seen))
+                                  screen=self.screen_seen, wanted=wanted))
 
     def propose(self, desktop, vision, provider, geometry, *, progress=None):
         if self.cancelled.is_set():
@@ -1775,7 +1855,7 @@ class ComputerTask:
         if read is not None:
             timing('task.step.summary', step_started, step=len(self.receipts)+1, status=read['status'], code='view_answer')
             return read
-        opened = (self.new_document_step(desktop, snapshot) or self.section_step(desktop, snapshot) or self.sites_step(desktop, snapshot) or self.tab_step(desktop, snapshot) or self.history_step(desktop, snapshot) or self.finder_sort_step(desktop, snapshot)
+        opened = (self.navigation_check(desktop, snapshot) or self.new_document_step(desktop, snapshot) or self.section_step(desktop, snapshot) or self.sites_step(desktop, snapshot) or self.tab_step(desktop, snapshot) or self.history_step(desktop, snapshot) or self.finder_sort_step(desktop, snapshot)
                   or self.menu_step(desktop, snapshot) or self.menu_pick_step(desktop, snapshot, provider, {'cancel': self.cancelled} if accepts_cancel(provider) else {}))
         if opened is not None:
             timing('task.step.summary', step_started, step=len(self.receipts)+1, status=opened['status'], code='menu')
@@ -1907,6 +1987,7 @@ class ComputerTask:
                 step = validate_step(raw, desktop, snapshot, goal_mode=self.goal_mode, screen=visual.get('screen'), snap=not numbered,
                                      text_regions=regions, catalog=self._catalog or (), goal=self.goal)
                 step = self.app_click(step, desktop, snapshot, visual)
+                step = self.address_typed(step, desktop, snapshot)
                 if fast_pass and step['status'] == 'action' and step['action']['type'] == 'click_point' and not text_grounded_click(step['action'], regions, snapshot, visual['screen']):
                     raise ValidationError('That point is not grounded in OCR text or a current accessible control. Inspect the supplied full image before choosing a click.')
                 if step['status'] == 'action' and step['action']['type'] == 'type_text' and self.goal_mode != 'inspect' and already_typed(step['action'].get('text', ''), getattr(self, 'typed', [])):

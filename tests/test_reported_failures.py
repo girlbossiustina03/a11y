@@ -1917,6 +1917,19 @@ class WindowlessAppTests(unittest.TestCase):
         self.assertIsNone(ComputerTask('open apple.com and find the iPhone page', automatic=True)
                           .menu_pick_step(desktop, {'app': {'bundle_id': 'com.apple.Safari'}}, provider, {}))  # a site's own pages
 
+    def test_reported_an_address_in_the_plan_is_opened_in_code(self):
+        # Live (held-out): the planner said "current" (Safari in front) with "navigate to https://open-meteo.com" in its steps.
+        class Planner:
+            def plan_task(self, observation):
+                return {'start': 'current', 'app': 'Safari', 'url': '', 'query': 'Open-Meteo website',
+                        'steps': ['In Safari, navigate to https://open-meteo.com.', 'Search for Dublin'], 'done_when': ''}
+        task = ComputerTask('Using Open-Meteo, tell me how long daylight lasts today in Dublin.', automatic=True)
+        task._catalog = [{'name': 'Safari', 'bundle_id': 'com.apple.Safari'}]
+        with patch('companion.computer_task.validate_step', side_effect=lambda raw, *a, **k: {'action': raw['action']}), \
+                patch('companion.desktop_context.default_browser_id', return_value='com.apple.Safari'):
+            step = task.plan_start(None, {'app': {'bundle_id': 'com.apple.Safari', 'name': 'Safari'}, 'window': {'title': 'Example Domain'}}, Planner())
+        self.assertEqual(step['action']['url'], 'https://open-meteo.com')
+
     def test_reported_an_app_that_is_not_installed_opens_its_own_site(self):
         # Live (v2): "I want to use Notion" (not installed) ended on a DuckDuckGo results page.
         task = ComputerTask('I want to use Notion', automatic=True)
@@ -1986,6 +1999,53 @@ class WindowlessAppTests(unittest.TestCase):
         self.assertFalse(task.cycled({'type': 'click_point', 'label': 'History'}))
         task.screen_seen = 'something new'
         self.assertFalse(task.cycled({'type': 'click_point', 'label': 'Show Sidebar'}))
+    def test_review_a_typed_address_becomes_one_navigation(self):
+        # Review 2026-10-25: Open-Meteo and Open Library failed every run fumbling ⌘L, typing and Enter.
+        task = ComputerTask('Using Open-Meteo, tell me how long daylight lasts in Dublin', automatic=True)
+        safari = {'app': {'bundle_id': 'com.apple.Safari'}}
+        typed = {'status': 'action', 'message': 'Type.', 'action': {'type': 'type_text', 'text': 'open-meteo.com'}}
+        with patch('companion.computer_task.validate_step', side_effect=lambda raw, *a, **k: {'action': raw['action'], 'message': raw['message']}):
+            step = task.address_typed(typed, None, safari)
+            self.assertEqual((step['action']['type'], step['action']['url'], step['action']['browser_mode']),
+                             ('browse_url', 'https://open-meteo.com', 'current'))
+            query = {'status': 'action', 'message': 'Type.', 'action': {'type': 'type_text', 'text': 'daylight Dublin'}}
+            self.assertEqual(task.address_typed(query, None, safari), query)                      # a search stays typing
+            self.assertEqual(task.address_typed(typed, None, {'app': {'bundle_id': 'com.apple.TextEdit'}}), typed)  # not a browser
+
+    def test_review_an_address_in_the_plan_is_opened_in_code(self):
+        # The planner said "current" (Safari in front) with "navigate to https://open-meteo.com" in its steps.
+        class Planner:
+            def plan_task(self, observation):
+                return {'start': 'current', 'app': 'Safari', 'url': '', 'query': 'Open-Meteo website',
+                        'steps': ['In Safari, navigate to https://open-meteo.com.', 'Search for Dublin'], 'done_when': ''}
+        task = ComputerTask('Using Open-Meteo, tell me how long daylight lasts today in Dublin.', automatic=True)
+        task._catalog = [{'name': 'Safari', 'bundle_id': 'com.apple.Safari'}]
+        with patch('companion.computer_task.validate_step', side_effect=lambda raw, *a, **k: {'action': raw['action']}), \
+                patch('companion.desktop_context.default_browser_id', return_value='com.apple.Safari'):
+            step = task.plan_start(None, {'app': {'bundle_id': 'com.apple.Safari', 'name': 'Safari'}, 'window': {'title': 'Example'}}, Planner())
+        self.assertEqual(step['action']['url'], 'https://open-meteo.com')
+
+    def test_review_a_navigation_that_did_not_happen_is_tried_once_more(self):
+        task = ComputerTask('open Calculator', automatic=True)
+        task.pending = {'type': 'launch_app', 'bundle_id': 'com.apple.calculator'}
+        task.record({'type': 'launch_app', 'label': 'Open Calculator', 'status': 'submitted'})
+        with patch('companion.computer_task.validate_step', side_effect=lambda raw, *a, **k: {'action': raw['action']}):
+            again = task.navigation_check(None, {'app': {'bundle_id': 'com.apple.finder'}})
+            self.assertEqual(again['action'], {'type': 'launch_app', 'bundle_id': 'com.apple.calculator'})
+            self.assertIn('did not happen', task.receipts[-1]['effect'])
+            self.assertIsNone(task.navigation_check(None, {'app': {'bundle_id': 'com.apple.finder'}}))   # only once
+            fine = ComputerTask('open Calculator', automatic=True)
+            fine.pending = {'type': 'launch_app', 'bundle_id': 'com.apple.calculator'}
+            fine.record({'type': 'launch_app', 'label': 'Open Calculator', 'status': 'submitted'})
+            self.assertIsNone(fine.navigation_check(None, {'app': {'bundle_id': 'com.apple.calculator'}}))
+            web = ComputerTask('open apple.com', automatic=True)
+            web.pending = {'type': 'browse_url', 'bundle_id': 'com.apple.Safari', 'url': 'https://www.apple.com'}
+            web.record({'type': 'browse_url', 'label': 'Open', 'status': 'submitted'})
+            with patch('companion.mac_apps.read_page', return_value=('Apple', 'https://www.apple.com/ro/', '')):
+                self.assertIsNone(web.navigation_check(None, {'app': {'bundle_id': 'com.apple.Safari'}}))  # same site
+            with patch('companion.mac_apps.read_page', return_value=('Example', 'https://example.com/', '')):
+                self.assertEqual(web.navigation_check(None, {'app': {'bundle_id': 'com.apple.Safari'}})['action']['url'], 'https://www.apple.com')
+
 
 class DefaultBrowserTests(unittest.TestCase):
     @unittest.skipUnless(__import__('sys').platform == 'darwin', 'macOS LaunchServices')
