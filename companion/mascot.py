@@ -576,10 +576,16 @@ class Mascot(QWidget):
             self.reply_content.setGeometry(width+16, 0, inner, reply_height)
 
     def choose_reply_side(self):
-        """Right of her when the screen has room there, else left."""
+        """Right of her when the screen has room there, else left; but never toward the point she just
+        clicked (avoid_point), when the other side has room."""
         area = self.screen().availableGeometry()
         frame_left = self.x()+self.window_frame.x()
-        if frame_left+self.frame_width()+REPLY_WIDTH <= area.right()+1 or frame_left-REPLY_WIDTH < area.left():
+        fits_right = frame_left+self.frame_width()+REPLY_WIDTH <= area.right()+1
+        fits_left = frame_left-REPLY_WIDTH >= area.left()
+        avoid = getattr(self, 'avoid_point', None)
+        if avoid is not None and fits_right and fits_left:
+            self.reply_side = 'left' if avoid.x() > frame_left+self.frame_width()/2 else 'right'
+        elif fits_right or not fits_left:
             self.reply_side = 'right'
         else:
             self.reply_side = 'left'

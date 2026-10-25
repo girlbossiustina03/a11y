@@ -525,6 +525,62 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(task.status, 'blocked')
         self.assertFalse(task.receipts)
 
+    def test_her_cursor_flies_on_a_fresh_curve_and_lands_exactly(self):
+        import random
+        from PyQt6.QtCore import QPointF
+        from companion.cursor_flight import bezier, flight_path
+        start, end = QPointF(100, 700), QPointF(900, 200)
+        paths = [flight_path(start, end, random.Random(seed)) for seed in (1, 2, 3)]
+        for path in paths:
+            self.assertEqual((bezier(path, 0), bezier(path, 1)), (start, end))
+        self.assertEqual(len({(round(p[1].x()), round(p[1].y())) for p in paths}), 3)  # different every time
+
+    def test_a_click_flight_lands_then_clicks_once_and_stop_cancels_it(self):
+        from PyQt6.QtCore import QPoint, QRect
+        from PyQt6.QtGui import QPixmap
+        flight = self.window.cursor_flight
+        landed = []
+        flight.fly(QRect(0, 0, 1440, 900), QRect(1100, 600, 230, 140), QPixmap(230, 140), QPoint(300, 200),
+                   QRect(330, 130, 230, 140), lambda: landed.append(True))
+        self.assertTrue(flight.flying())
+        deadline = time.monotonic()+4
+        while flight.flying() and time.monotonic() < deadline:
+            QTest.qWait(30)
+        self.assertEqual(landed, [True])
+        flight.fly(QRect(0, 0, 1440, 900), QRect(1100, 600, 230, 140), QPixmap(230, 140), QPoint(300, 200),
+                   QRect(330, 130, 230, 140), lambda: landed.append('late'))
+        flight.stop()  # Stop pressed mid-flight: nothing is clicked
+        QTest.qWait(50)
+        self.assertEqual(landed, [True])
+        self.assertFalse(flight.flying())
+
+    def test_the_reply_opens_away_from_the_clicked_point(self):
+        from PyQt6.QtCore import QPoint
+        mascot = self.window.mascot
+        area = mascot.screen().availableGeometry()
+        mascot.move(area.center().x()-mascot.width()//2, area.center().y())
+        mascot.avoid_point = QPoint(mascot.x()-40, mascot.y()+20)    # clicked left of her
+        mascot.choose_reply_side()
+        self.assertEqual(mascot.reply_side, 'right')
+        mascot.avoid_point = QPoint(mascot.x()+mascot.width()+40, mascot.y())  # clicked right of her
+        mascot.choose_reply_side()
+        self.assertEqual(mascot.reply_side, 'left')
+        mascot.avoid_point = None
+
+    def test_reduced_motion_moves_her_without_a_flight(self):
+        from PyQt6.QtCore import QPoint
+        self.window.mascot.reduced_motion = True
+        arrived = []
+        try:
+            self.window.fly_companion_to(QPoint(300, 200), QPoint(400, 150), lambda: arrived.append(True))
+            deadline = time.monotonic()+3
+            while not arrived and time.monotonic() < deadline:
+                QTest.qWait(30)
+            self.assertFalse(self.window.cursor_flight.flying())
+            self.assertEqual(arrived, [True])
+        finally:
+            self.window.mascot.reduced_motion = False
+
     def test_companion_waits_beside_a_target_without_covering_it(self):
         from PyQt6.QtCore import QRect
         from companion.mascot import REPLY_WIDTH

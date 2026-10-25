@@ -16,6 +16,7 @@ from .mascot import Mascot, REPLY_WIDTH
 from .faces import SKIN_NAMES
 from .terminal_theme import THEME_NAMES, saved_appearance, save_appearance
 from .overlay import GuidanceOverlay, CompanionPointer
+from .cursor_flight import CursorFlight
 from .onboarding import Introduction, QUESTIONS
 from .setup_ui import SetupDialog, AccessSheet
 from .settings_ui import Disclosure, scroll_page
@@ -275,6 +276,7 @@ class CompanionWindow(QMainWindow):
         self.mascot.action_requested.connect(self.mascot_action)
         self.overlay = GuidanceOverlay()
         self.pointer = CompanionPointer()
+        self.cursor_flight = CursorFlight()
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
         self.build_chat()
@@ -1482,6 +1484,27 @@ class CompanionWindow(QMainWindow):
             return QPoint(round(bounds['x']+bounds['width']/2), round(bounds['y']+bounds['height']/2))
         return None
 
+    def fly_companion_to(self, point, spot, finished):
+        """Before a click: her window melts into her cursor, the cursor flies to the point on a curve, a
+        ripple marks the click, and she re-forms at `spot` beside it; then `finished` sends the real click
+        (her window is clear of the point by then). Reduced motion keeps the plain move."""
+        screen = QApplication.screenAt(point)
+        if self.mascot.reduced_motion or not self.mascot.isVisible() or screen is None:
+            self.animate_companion_to(spot, finished=finished)
+            return
+        self.mascot.avoid_point = point  # the reply opens on the side away from it
+        self.mascot.set_reply_shown(False)
+        start = self.mascot.geometry()
+        snapshot = self.mascot.grab()
+        self.mascot.hide()
+        self.mascot.move(spot)
+        self.cursor_flight.set_colors(self.mascot.colors)
+        def landed():
+            self.mascot.show()
+            self.mascot.raise_()
+            finished()
+        self.cursor_flight.fly(screen.geometry(), start, snapshot, point, QRect(spot, start.size()), landed)
+
     def companion_spot(self, target, screen_rect):
         """Where the companion waits beside a target point without covering it. Beside it, her
         reply window (it opens on either side of her as each step is said) must not cover it
@@ -1713,6 +1736,9 @@ class CompanionWindow(QMainWindow):
     def stop_computer_task(self, *, announce=True):
         if self.computer_task:
             self.computer_task.stop()
+        if self.cursor_flight.flying():
+            self.cursor_flight.stop()  # mid-flight: no click is sent, and she comes back
+            self.mascot.show()
         self.pending_desktop_action = None
         self.clear_guidance()
         if announce:
@@ -1785,7 +1811,7 @@ class CompanionWindow(QMainWindow):
                 screen = QApplication.screenAt(point) if point else None
                 spot = self.companion_spot(point, screen.availableGeometry()) if screen else None
                 if spot is not None:
-                    self.animate_companion_to(spot, finished=apply)
+                    self.fly_companion_to(point, spot, apply)
                 else:
                     apply()
             if self.worker and self.worker.isRunning():
