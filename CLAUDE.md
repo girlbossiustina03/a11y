@@ -214,7 +214,7 @@ Automation and (for the reminders case) Reminders permissions, and it takes over
 1. Bump `CFBundleShortVersionString` / `CFBundleVersion` in `packaging/a11y.spec`.
 2. Push to `main`. GitHub Actions "Package apps" tests and builds the macOS and Windows
    apps, and runs each one's self-test.
-3. When it's green: `gh workflow run package.yml -f release=v0.9.12` publishes the release with
+3. When it's green: `gh workflow run package.yml -f release=v0.10.0` publishes the release with
    `A11y-macOS.dmg` and `A11y-Windows.zip`. Optional signing secrets: `MACOS_SIGNING_P12`,
    `MACOS_SIGNING_PASSWORD`.
 
