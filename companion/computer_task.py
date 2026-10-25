@@ -1208,7 +1208,11 @@ class ComputerTask:
             # The goal names an installed app ("in the Calculator app", "a new TextEdit document"):
             # open it in code. The model kept asking the user to open it from the Dock (live).
             running = {a.get('bundle_id') for a in snapshot.get('available_apps') or []}
-            action = {'type': 'focus_app' if named['bundle_id'] in running else 'launch_app', 'bundle_id': named['bundle_id']}
+            windowed = any(w.get('bundle_id') == named['bundle_id'] for w in snapshot.get('app_windows') or [])
+            # Running without a window (TextEdit after its document closed): a new window, as launching it
+            # would give; switching to it left nothing to type into ("Input is unavailable", live).
+            kind = 'launch_app' if named['bundle_id'] not in running else 'focus_app' if windowed else 'new_window'
+            action = {'type': kind, 'bundle_id': named['bundle_id']}
             try:
                 action = validate_step({'status': 'action', 'message': 'Opening.', 'risk': 'navigation', 'action': action}, desktop, snapshot,
                                        catalog=self._catalog or (), goal=self.goal)['action']

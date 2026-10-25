@@ -1042,7 +1042,10 @@ class Companion:
             return found[0]+'\n\nSource: Wikipedia, '+found[1]['title']
         if unsure:
             return None  # nothing better online: keep the model's own reply
-        return 'I couldn’t find that online. Say “search for …” and I’ll open it in Safari.'
+        # Nothing online: the model's own answer rather than giving up ("the speed of light in km per
+        # second" got "I couldn't find that online", where the day before it was simply answered; live).
+        own = self.converse(request, {'now': datetime.now().strftime('%A %Y-%m-%d %H:%M')})
+        return own or 'I couldn’t find that online. Say “search for …” and I’ll open it in Safari.'
 
     def ask(self, request, *, mode='answer', workflow_id=None, image_data=None, visual_context=None, screen_geometry=None, request_plan=None):
         request = text(request, 'request', 6000)

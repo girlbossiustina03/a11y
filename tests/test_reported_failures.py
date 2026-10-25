@@ -1751,3 +1751,16 @@ class LookUpOnSiteTests(LiveRoutingTests):
         self.assertEqual((plan['operation'], plan['target']), ('browser_open', 'https://en.wikipedia.org/w/index.php?search=Photosynthesis'))
         self.route('look_up', 'Ada Lovelace birth')
         self.assertEqual(self.app.prepare_request('when was Ada Lovelace born? check Wikipedia')['operation'], 'look_up')  # a question
+
+
+
+class WindowlessAppTests(unittest.TestCase):
+    def test_reported_a_running_app_without_a_window_gets_one(self):
+        # Live: TextEdit was running with no window; switching to it left nothing to type into.
+        task = ComputerTask("write 'Call the dentist' in a new TextEdit document", automatic=True)
+        task._catalog = [{'name': 'TextEdit', 'bundle_id': 'com.apple.TextEdit'}]
+        proposed = []
+        with patch('companion.computer_task.validate_step', side_effect=lambda raw, *a, **k: proposed.append(raw['action']) or {'action': raw['action']}):
+            task.plan_start(None, {'app': {'bundle_id': 'com.apple.finder', 'name': 'Finder'},
+                                   'available_apps': [{'bundle_id': 'com.apple.TextEdit'}], 'app_windows': []}, Mock())
+        self.assertEqual(proposed[0]['type'], 'new_window')

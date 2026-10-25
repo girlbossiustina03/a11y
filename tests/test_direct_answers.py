@@ -99,10 +99,17 @@ class DirectAnswerServiceTests(CompanionFixture, unittest.TestCase):
         self.assertIsNone(result['desktop_action'])
         self.assertIn('Wasted Love', result['message'])
         self.assertIn('Source: Wikipedia, Eurovision Song Contest 2025', result['message'])
-        with patch.dict('os.environ', {'A11Y_WEB_ANSWERS': '1'}), patch('companion.web_lookup.answer', return_value=None):
+        with patch.dict('os.environ', {'A11Y_WEB_ANSWERS': '1'}), patch('companion.web_lookup.answer', return_value=None), \
+                patch.object(self.app, 'converse', return_value=None):
             result = self.ask('who won Eurovision 2025?', {'operation': 'look_up', 'app_name': '', 'target': 'Eurovision 2025 winner'})
         self.assertIsNone(result['desktop_action'])                 # never a browser unasked
         self.assertIn('search for', result['message'])
+        # Reported: "the speed of light in km per second" got "I couldn't find that online": the model's own answer.
+        with patch.dict('os.environ', {'A11Y_WEB_ANSWERS': '1'}), patch('companion.web_lookup.answer', return_value=None), \
+                patch.object(self.app, 'converse', return_value='About 299,792 km per second.'), \
+                patch.object(self.app.knowledge, 'retrieve', return_value=[]):
+            result = self.ask('find out the speed of light in km per second', {'operation': 'look_up', 'app_name': '', 'target': 'speed of light'})
+        self.assertEqual(result['message'], 'About 299,792 km per second.')
         with patch.dict('os.environ', {'A11Y_WEB_ANSWERS': '0'}), patch('companion.web_lookup.answer') as lookup:
             result = self.ask('who won Eurovision 2025?', {'operation': 'look_up', 'app_name': '', 'target': 'Eurovision 2025 winner'})
         lookup.assert_not_called()
