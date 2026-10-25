@@ -1951,6 +1951,8 @@ class WindowlessAppTests(unittest.TestCase):
         self.assertIsNone(task.goal_met(provider, {'app': {}, 'window': {}}, regions, {}))
         task.receipts[-1]['effect'] = 'nothing changed on screen'
         self.assertIsNone(task.goal_met(provider, {'app': {}, 'window': {}}, regions, {}))  # only after a click that changed it
+        del task.receipts[-1]['effect']
+        self.assertIsNone(task.goal_met(provider, {'app': {'bundle_id': 'com.apple.Safari'}, 'window': {}}, regions, {}))  # not on web pages
 
     def test_reported_a_click_cycle_through_other_screens_is_refused(self):
         # Owner: in Calculator "a11y just presses the tab opener over and over" (Show Sidebar, Hide Sidebar, …).

@@ -53,6 +53,86 @@ def number(reply, expected, tolerance=0):
     return expected == 0 and bool(re.search(r'\b(?:zero|none|no items|empty)\b', reply, re.I))
 
 
+def app_names(app, collection):
+    # Literal application terms let osascript compile each app's dictionary.
+    readers = {
+        ('Notes', 'folder'): 'tell application "Notes" to set names to name of every folder',
+        ('Reminders', 'list'): 'tell application "Reminders" to set names to name of every list',
+        ('Calendar', 'calendar'): 'tell application "Calendar" to set names to name of every calendar',
+        ('TextEdit', 'document'): 'tell application "TextEdit" to set names to name of every document',
+    }
+    return osa(readers[app, collection] + "\nset AppleScript's text item delimiters to linefeed\nreturn names as text")
+
+
+def has_date(reply, value):
+    day = date.fromisoformat(value)
+    if contains(reply, value):
+        return True
+    # Accept either order, month abbreviations, and ordinal day suffixes.
+    month = day.strftime('%B')
+    month_pattern = month[:3] + (r'(?:' + month[3:] + r')?\.?')
+    d = r'0?' + str(day.day) + r'(?:st|nd|rd|th)?'
+    gap = r'[\s,]+'
+    patterns = (month_pattern + gap + d, d + gap + month_pattern)
+    for pattern in patterns:
+        for match in re.finditer(r'\b' + pattern + r'\b', reply, re.I):
+            # A supplied year must agree; an omitted year is customary in answers.
+            year = re.match(r'[\s,]+(\d{4})\b', reply[match.end():])
+            if year is None or int(year[1]) == day.year:
+                return True
+    return False
+
+
+def rate_number(reply, expected):
+    tolerance = max(.005, expected*.01)
+    return any(abs(float(n.replace(',', '.')) - expected) <= tolerance
+               for n in re.findall(r'(?<![\w.,])-?\d+(?:[.,]\d+)?(?!\d)', reply))
+
+
+def destination_open(app, target, fallback=None):
+    if contains(le.window_title(app) or '', target):
+        return True
+    try:
+        selected = osa('''tell application "System Events" to tell process (item 1 of argv)
+set found to false
+repeat with element in entire contents of front window
+    try
+        set labelText to (name of element) as text
+        if labelText is item 2 of argv then
+            try
+                set chosen to value of attribute "AXSelected" of element
+                if chosen is true then return "yes"
+                if chosen is false then set found to true
+            end try
+            if role of element is "AXRadioButton" then
+                if value of element is 1 then return "yes"
+                set found to true
+            end if
+        end if
+    end try
+end repeat
+if found then return "no"
+return "unknown"
+end tell''', app, target)
+        if selected != 'unknown':
+            return selected == 'yes'
+    except RuntimeError:
+        pass
+    return le.shows(fallback or target)
+
+
+def calculator_history_open():
+    """Calculator's own View menu says it: "Hide History" is offered exactly while the history shows
+    (its sidebar has no "History" heading, and an AX search of the window found nothing, live)."""
+    if le.front_app() != 'Calculator':
+        return False
+    try:
+        return osa('tell application "System Events" to tell process "Calculator" to return exists '
+                   '(menu item "Hide History" of menu "View" of menu bar item "View" of menu bar 1)') == 'true'
+    except RuntimeError:
+        return False
+
+
 def build(eval_window, count, seed):
     """Cycle shuffled families with reproducible wording and parameters."""
     if count < 0:
@@ -73,7 +153,11 @@ def build(eval_window, count, seed):
         # A navigation result must expose the requested destination, not merely
         # launch the application or repeat the destination in the assistant reply.
         return task(name, pick(wordings).format(x=target),
-                    lambda s, e: front(app)(s, e) and visible(target)(s, e), app=app,
+                    lambda s, e: front(app)(s, e) and (
+                        calculator_history_open() if app == 'Calculator' else
+                        destination_open(app, 'Memory' if app == 'Activity Monitor' else target, target)
+                        if app in ('Clock', 'App Store', 'Activity Monitor', 'Maps', 'Photos', 'Music') else
+                        visible(target)(s, e)), app=app,
                     setup=lambda r: le.activate('Finder'))
 
     def read_task(name, app, request, reader, matcher=contains):
@@ -135,31 +219,42 @@ def build(eval_window, count, seed):
         return read_task('heldout_notes_folders', 'Notes', pick([
             'Read me the names of my Notes folders. Do not create or edit anything.',
             'Which folders do I have in Notes? Just list their names.'
-        ]), lambda: osa('tell application "Notes" to return name of every folder'),
-                         lambda reply, truth: bool(truth) and all(contains(reply, n.strip()) for n in truth.split(',') if n.strip()))
+        ]), lambda: app_names('Notes', 'folder'),
+                         lambda reply, truth: bool(truth) and all(contains(reply, n.strip()) for n in truth.splitlines() if n.strip()))
 
     @family
     def reminders_lists():
         return read_task('heldout_reminders_lists', 'Reminders', pick([
             'Which reminder lists do I have? Read their names without modifying anything.',
             'List the names of my lists in Reminders; leave the reminders alone.'
-        ]), lambda: osa('tell application "Reminders" to return name of every list'),
-                         lambda reply, truth: bool(truth) and all(contains(reply, n.strip()) for n in truth.split(',') if n.strip()))
+        ]), lambda: app_names('Reminders', 'list'),
+                         lambda reply, truth: bool(truth) and all(contains(reply, n.strip()) for n in truth.splitlines() if n.strip()))
 
     @family
     def calendar_sources():
         return read_task('heldout_calendar_sources', 'Calendar', pick([
             'Which calendars are available in Calendar? Tell me their names without editing events.',
             'Read the names of my calendars from the Calendar sidebar.'
-        ]), lambda: osa('tell application "Calendar" to return name of every calendar'),
-                         lambda reply, truth: bool(truth) and all(contains(reply, n.strip()) for n in truth.split(',') if n.strip()))
+        ]), lambda: app_names('Calendar', 'calendar'),
+                         lambda reply, truth: bool(truth) and all(contains(reply, n.strip()) for n in truth.splitlines() if n.strip()))
 
     @family
     def preview_pages():
         truth = {}
         def setup(runner):
             # An already-open document is preferable to opening a private random file.
-            truth['count'] = int(osa('tell application "System Events" to tell process "Preview" to return count of windows'))
+            truth['count'] = int(osa('''tell application "System Events" to tell process "Preview"
+set total to 0
+repeat with w in windows
+    try
+        if subrole of w is "AXStandardWindow" then
+            set documentURL to value of attribute "AXDocument" of w
+            if documentURL is not missing value and documentURL is not "" then set total to total + 1
+        end if
+    end try
+end repeat
+return total
+end tell'''))
             le.activate('Preview')
         return task('heldout_preview_windows', pick([
             'How many document windows are open in Preview? Do not close any of them.',
@@ -169,10 +264,10 @@ def build(eval_window, count, seed):
     @family
     def textedit_document_names():
         def read():
-            return osa('tell application "TextEdit"\nif (count of documents) = 0 then return ""\nreturn name of every document\nend tell')
+            return app_names('TextEdit', 'document')
         def match(reply, truth):
-            return (all(contains(reply, n.strip()) for n in truth.split(',') if n.strip()) if truth else
-                    bool(re.search(r'no (?:open )?documents|none|no files|nothing (?:is )?open', reply, re.I)))
+            return (all(contains(reply, n.strip()) for n in truth.splitlines() if n.strip()) if truth else
+                    bool(re.search(r'(?:no|zero|0) (?:open )?documents|none|no files|nothing (?:is )?open', reply, re.I)))
         return read_task('heldout_textedit_open_documents', 'TextEdit', pick([
             'Which documents are currently open in TextEdit? Read their names; do not make a new document.',
             'Tell me the names of the open TextEdit documents without editing or closing them.'
@@ -264,8 +359,8 @@ def build(eval_window, count, seed):
             'Check Frankfurter online: how many {x} is one euro worth at the latest published rate? Include the rate date.',
             'Using the latest Frankfurter reference rate, tell me EUR to {x} and the date of that rate.'
         ]).format(x=currency), lambda: fetch('https://api.frankfurter.dev/v1/latest?base=EUR&symbols='+currency),
-                        lambda reply, truth: number(reply, truth['rates'][currency], max(.005, truth['rates'][currency]*.01))
-                        and contains(reply, truth['date']), address='https://frankfurter.dev/')
+                        lambda reply, truth: rate_number(reply, truth['rates'][currency])
+                        and has_date(reply, truth['date']), address='https://frankfurter.dev/')
 
     @family
     def earthquake_latest():
@@ -290,12 +385,13 @@ def build(eval_window, count, seed):
             upcoming = [h for h in holidays if h['date'] >= today.isoformat()]
             if not upcoming:
                 upcoming = fetch('https://date.nager.at/api/v3/PublicHolidays/%d/%s' % (today.year+1, code))
-            return min(upcoming, key=lambda h: h['date'])
+            earliest = min(h['date'] for h in upcoming)
+            return [h for h in upcoming if h['date'] == earliest]
         return api_task('heldout_next_public_holiday', pick([
             'Use Nager.Date to find the next public holiday in {x}, including today. Give its name and date.',
             'What is the next public holiday in {x} on Nager.Date? Include its date; count today if it is a holiday.'
-        ]).format(x=country), read, lambda reply, truth: contains(reply, truth['name']) and
-                        (contains(reply, truth['date']) or contains(reply, date.fromisoformat(truth['date']).strftime('%B %d').replace(' 0', ' '))),
+        ]).format(x=country), read, lambda reply, truth: any((contains(reply, h['name']) or contains(reply, h.get('localName', ''))) and
+                            has_date(reply, h['date']) for h in truth),
                         address='https://date.nager.at/')
 
     @family
@@ -305,8 +401,9 @@ def build(eval_window, count, seed):
             query = urllib.parse.urlencode({'latitude': lat, 'longitude': lon, 'daily': 'daylight_duration', 'timezone': 'auto', 'forecast_days': 1})
             return fetch('https://api.open-meteo.com/v1/forecast?'+query)['daily']['daylight_duration'][0]/3600
         def match(reply, hours):
-            pair = re.search(r'(\d+)\s*(?:hours?|hrs?|h)\s*(?:(?:and\s*)?(\d+)\s*(?:minutes?|mins?|m))?', reply, re.I)
-            return bool(pair) and abs(int(pair[1])+int(pair[2] or 0)/60-hours) < .2
+            pairs = re.findall(r'(?<![\d:])(\d+)\s*(?:hours?|hrs?|h)\s*(?:(?:and\s*)?(\d+)\s*(?:minutes?|mins?|m))?(?!\w)', reply, re.I)
+            pairs += re.findall(r'(?<![\d:])(\d{1,2}):(\d{2})(?![\d:])', reply)
+            return any(int(m or 0) < 60 and abs(int(h)+int(m or 0)/60-hours) < .2 for h, m in pairs)
         return api_task('heldout_daylight_duration', pick([
             'Look up today\'s daylight duration for {x} on Open-Meteo. How many hours and minutes of daylight are there?',
             'Using Open-Meteo, tell me how long daylight lasts today in {x}, in hours and minutes.'
@@ -317,13 +414,13 @@ def build(eval_window, count, seed):
         expected = {}
         destination = pick(['Safari', 'Finder'])
         def setup(runner):
-            expected['names'] = osa('tell application "Calendar" to return name of every calendar')
+            expected['names'] = app_names('Calendar', 'calendar')
             le.activate(destination)
         return task('heldout_calendar_return', pick([
             'Check the names of my calendars in Calendar, then return to {x} and tell me the names. Do not edit events.',
             'Read my calendar list, come back to {x}, and report the calendar names without changing anything.'
         ]).format(x=destination), lambda s, e: front(destination)(s, e) and bool(expected.get('names')) and
-                    all(contains(answer(e), n.strip()) for n in expected['names'].split(',') if n.strip()),
+                    all(contains(answer(e), n.strip()) for n in expected['names'].splitlines() if n.strip()),
                     setup=setup, app='Calendar', timeout=300)
 
     @family

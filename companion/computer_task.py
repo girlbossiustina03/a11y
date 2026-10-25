@@ -911,6 +911,9 @@ class ComputerTask:
         (code checks it is there). The first click had opened Calculator's history, and the model
         clicked on, closing it again (live, held-out)."""
         last = self.receipts[-1] if self.receipts else {}
+        from .desktop_context import BROWSER_IDS
+        if (snapshot.get('app') or {}).get('bundle_id') in BROWSER_IDS:
+            return None  # a web page's "done" is its address: it ended two-tab and comments tasks early (live)
         if (self.goal_mode != 'inspect' or last.get('type') not in ('click_point', 'press_control') or last.get('effect')
                 or not last.get('screen') or last.get('screen') == self.screen_seen or len(regions) < 2 or self.queue):
             return None
