@@ -2062,6 +2062,16 @@ class WindowlessAppTests(unittest.TestCase):
         kinds = [v['properties']['type']['enum'][0] for v in schema_for('Darwin', False, target_ids=['t1', 't2'])['anyOf'][0]['properties']['action']['anyOf']]
         self.assertIn('drag_target', kinds)
 
+    def test_live_an_animated_target_is_still_the_same_named_element(self):
+        # Live (held-out): Weather's animated sky changed the pixels; every click on "Conditions" was refused.
+        from companion.vision import ScreenVision
+        screen = {'x': 0, 'y': 0, 'width': 1000, 'height': 800}
+        proposal = {'type': 'click_point', 'x': .5, 'y': .5, 'label': 'Conditions'}
+        for title, same in (('Conditions', True), ('conditions ', True), ('Sunrise', False), ('', False)):
+            desktop = Mock(bridge=Mock(hit=Mock(return_value={'role': 'AXButton', 'title': title})))
+            self.assertEqual(ScreenVision.same_target(desktop, proposal, screen), same, title)
+        self.assertFalse(ScreenVision.same_target(Mock(bridge=object()), proposal, screen))  # no way to tell: refused
+
 
 class DefaultBrowserTests(unittest.TestCase):
     @unittest.skipUnless(__import__('sys').platform == 'darwin', 'macOS LaunchServices')

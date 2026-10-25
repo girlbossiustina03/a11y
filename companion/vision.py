@@ -166,6 +166,22 @@ class ScreenVision:
                 'captured_monotonic': visual['captured_monotonic'],
                 'region_hash': hashlib.sha256(colors).hexdigest(), 'windows': sorted(windows)}
 
+    @staticmethod
+    def same_target(desktop, proposal, screen):
+        """Pixels around the point changed, but is the same named element still there? Animated content
+        (Weather's sky) changed every frame and each click on "Conditions" was refused (live). Only a
+        named element whose name matches counts; anything else stays refused."""
+        label = ' '.join(str(proposal.get('label', '')).casefold().split())
+        bridge = getattr(desktop, 'bridge', None)
+        if len(label) < 2 or not hasattr(bridge, 'hit'):
+            return False
+        try:
+            hit = bridge.hit(screen['x']+proposal['x']*screen['width'], screen['y']+proposal['y']*screen['height'])
+        except (RuntimeError, ValueError, OSError, KeyError, TypeError):
+            return False
+        title = ' '.join(str((hit or {}).get('title', '')).casefold().split())
+        return bool(title) and (title == label or len(title) >= 3 and (title in label or label in title))
+
     def execute_click(self, provider, desktop, proposal):
         guard = proposal.get('capture_guard')
         if not self.enabled or not guard or time.monotonic()-guard['captured_monotonic'] > 90:
@@ -174,7 +190,8 @@ class ScreenVision:
         generation = self.generation
         current = self.capture(provider, x=screen['x'], y=screen['y'], desktop=desktop.context())
         check = self.click_guard(current['image_data'], current, proposal)
-        if any(check[key] != guard[key] for key in ('screen', 'display_id', 'region_hash', 'windows')):
+        if any(check[key] != guard[key] for key in ('screen', 'display_id', 'windows')) or (
+                check['region_hash'] != guard['region_hash'] and not self.same_target(desktop, proposal, screen)):
             raise ValueError('The target or its window changed. No click was sent; ask for a fresh target.')
         if not self.enabled or self.generation != generation:
             raise ValueError('Screen vision was paused. No click was sent.')

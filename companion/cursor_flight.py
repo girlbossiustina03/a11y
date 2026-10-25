@@ -9,7 +9,7 @@ from PyQt6.QtCore import QPointF, QRectF, Qt, QVariantAnimation
 from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import QWidget
 
-MORPH_MS, CLICK_MS = 230, 170
+MORPH_MS, CLICK_MS = 170, 120  # short: the click waits for the flight, and the screen can change meanwhile
 CURSOR = 26  # the pointer's height in points
 
 
@@ -63,7 +63,7 @@ def ease(t):
 
 
 def travel_ms(start, end):
-    return int(max(320, min(850, 260+math.hypot(end.x()-start.x(), end.y()-start.y())*0.55)))
+    return int(max(260, min(600, 200+math.hypot(end.x()-start.x(), end.y()-start.y())*0.4)))
 
 
 def pointer_path(tip, size=CURSOR):
@@ -156,7 +156,7 @@ class CursorFlight(QWidget):
         self.first, self.last = self.points['points'][0], self.points['points'][-1]
         self.show()
         self.raise_()
-        self.run('melt', MORPH_MS, lambda: self.run('travel', int(travel_ms(self.first, tip)*1.2),
+        self.run('melt', MORPH_MS, lambda: self.run('travel', int(travel_ms(self.first, tip)*1.1),
                                                      lambda: self.run('click', CLICK_MS, lambda: self.run('form', MORPH_MS, self.finish))))
 
     def run(self, phase, duration, then):
