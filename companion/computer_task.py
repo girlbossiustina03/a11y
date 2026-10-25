@@ -435,6 +435,11 @@ MENU_GOAL = re.compile(r"^\W*(?:please\s+)?(?:open|show(?: me)?|click(?: on)?)\s
                        r"(?P<menu2>[\w&'-]+(?:\s+[\w&'-]+)?)\s+menu[\s.!?]*$", re.I)
 ORDINALS = {'first': 1, 'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5, 'sixth': 6, 'seventh': 7, 'eighth': 8,
             'ninth': 9, 'tenth': 10, '1st': 1, '2nd': 2, '3rd': 3, '4th': 4, '5th': 5, '6th': 6, '7th': 7, '8th': 8, '9th': 9, '10th': 10}
+# A goal that asks for a fact ("…and tell me what year she was born"), not only to get somewhere.
+ASKS_FOR_FACT = re.compile(r"\b(?:tell|show)\s+me\s+(?:what|which|when|who|where|how|the|if|whether)\b|\bwhat(?:'s|s| is| are| was| were| year| time| day)\b"
+                           r"|\b(?:which|when|who|how\s+(?:many|much|long|old|big))\b|\?\s*$", re.I)
+# "A new TextEdit document", "another window": a new one, never the one already open.
+NEW_DOCUMENT = re.compile(r'\b(?:new|another|fresh|blank|empty)\s+(?:[\w-]+\s+){0,2}(?:document|doc|window|file|page)\b', re.I)
 # A window goes full screen or into the Dock only when the goal says so.
 WINDOW_SIZE_WORDS = re.compile(r'\b(?:full[\s-]?screen|zoom|maximi[sz]e|minimi[sz]e|bigger window|enlarge)\b', re.I)
 FULL_SCREEN_MENU = re.compile(r'\b(?:enter|exit|toggle)?\s*full[\s-]?screen\b|\bminimi[sz]e\b|\bzoom\b', re.I)
@@ -1264,12 +1269,19 @@ class ComputerTask:
             windowed = any(w.get('bundle_id') == named['bundle_id'] for w in snapshot.get('app_windows') or [])
             # Running without a window (TextEdit after its document closed): a new window, as launching it
             # would give; switching to it left nothing to type into ("Input is unavailable", live).
-            kind = 'launch_app' if named['bundle_id'] not in running else 'focus_app' if windowed else 'new_window'
-            action = {'type': kind, 'bundle_id': named['bundle_id']}
-            try:
-                action = validate_step({'status': 'action', 'message': 'Opening.', 'risk': 'navigation', 'action': action}, desktop, snapshot,
-                                       catalog=self._catalog or (), goal=self.goal)['action']
-            except (ValueError, ValidationError):
+            # "In a new TextEdit document": a new window even when one is open. Switching to the open one
+            # wrote the list into an existing document (live, v2).
+            kind = 'launch_app' if named['bundle_id'] not in running else 'focus_app' if windowed and not NEW_DOCUMENT.search(self.goal) else 'new_window'
+            choices = [kind]+(['focus_app'] if kind == 'new_window' and windowed else [])  # no new_window (Windows): switch
+            for kind in choices:
+                try:
+                    action = validate_step({'status': 'action', 'message': 'Opening.', 'risk': 'navigation',
+                                            'action': {'type': kind, 'bundle_id': named['bundle_id']}}, desktop, snapshot,
+                                           catalog=self._catalog or (), goal=self.goal)['action']
+                    break
+                except (ValueError, ValidationError):
+                    action = None
+            if action is None:
                 return None
             self.pending = action
             return {'status': 'action', 'message': action.get('label', 'Opening')+'…', 'action': action, 'review': not self.automatic,
@@ -1671,6 +1683,11 @@ class ComputerTask:
                 if fast_pass and step['status'] == 'action' and step['action']['type'] == 'click_point' and not text_grounded_click(step['action'], regions, snapshot, visual['screen']):
                     raise ValidationError('That point is not grounded in OCR text or a current accessible control. Inspect the supplied full image before choosing a click.')
                 if step['status'] == 'action' and self.repeats(step['action']) >= 2:
+                    if self.goal_mode == 'inspect' and regions and ASKS_FOR_FACT.search(self.goal) and not self.is_history(step['action']):
+                        # A read-only goal whose clicks change nothing: the answer is on the screen already.
+                        # "What year was Marie Curie born" clicked "Born 7 November 1867" until it stopped (live, v2).
+                        step = {'status': 'done', 'message': 'Read from the screen.', 'action': None}
+                        break
                     if attempt:
                         stages['total_ms'] = round((time.monotonic()-step_started)*1000)
                         self.timings.append(stages)
@@ -1753,6 +1770,11 @@ class ComputerTask:
         import hashlib
         signature = (hashlib.sha256(image_data.encode()).hexdigest(), json.dumps(raw['action'], sort_keys=True))
         if self.receipts and self.last_proposal == signature and action['type'] != 'wait':
+            if self.goal_mode == 'inspect' and regions and ASKS_FOR_FACT.search(self.goal):
+                answer = self.screen_answer(provider, snapshot, regions, 'Read from the screen.', cancel_kwargs)
+                check_active()
+                if answer:
+                    return {'status': 'done', 'message': answer, 'action': None}
             return {'status': 'needs_user', 'message': 'The same action was proposed on an unchanged screen. I stopped rather than repeat an uncertain action.', 'action': None}
         self.last_proposal = signature
         if action['type'] == 'click_point':

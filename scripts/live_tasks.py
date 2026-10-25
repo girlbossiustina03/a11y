@@ -419,7 +419,13 @@ def build(eval_window, count, seed, only=None):
         first, second = rng.sample(['https://example.com/', 'https://en.wikipedia.org/wiki/Moon', 'https://www.apple.com/'], 2)
         def setup(runner):
             eval_window.ensure(first, wait_title='')
-            time.sleep(2)
+            # The first page must be in the history before the second replaces it, or Back goes further
+            # (a Wikipedia page still loading after 2 s was skipped, live).
+            name = lambda: le.osa('tell application "Safari" to return name of current tab of window id %d' % eval_window.id)
+            deadline = time.monotonic()+15
+            while time.monotonic() < deadline and not (name() and name() not in ('Untitled', 'Loading…')):
+                time.sleep(0.5)
+            time.sleep(1.5)
             le.osa('tell application "Safari" to set URL of current tab of window id %d to "%s"' % (eval_window.id, second))
             time.sleep(3)
         request = pick(['go back to the previous page', 'take me back one page', 'go back in Safari'])
@@ -447,7 +453,7 @@ def build(eval_window, count, seed, only=None):
     @family
     def translate():
         phrase, language, pattern = pick([('good morning', 'Spanish', r'buenos d[ií]as'), ('thank you', 'French', r'merci'),
-                                          ('good night', 'German', r'gute nacht'), ('see you tomorrow', 'Italian', r'a domani')])
+                                          ('good night', 'German', r'gute nacht'), ('see you tomorrow', 'Italian', r'(?:a|ci vediamo) domani')])
         request = pick(['how do you say "{p}" in {l}?', 'translate "{p}" to {l}']).format(p=phrase, l=language)
         return Task('translate', request, [('translated', says(pattern))])
 

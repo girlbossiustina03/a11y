@@ -244,6 +244,18 @@ class LiveTeamsLogTests(Harness):
         self.assertEqual(step['status'], 'needs_user')
         self.assertIsNone(task.pending)
 
+    def test_reported_a_question_whose_clicks_change_nothing_is_answered_from_the_screen(self):
+        # Live (v2): "…tell me what year they were born" clicked "Born 7 November 1867" until it stopped.
+        task = ComputerTask('go to the Wikipedia article on Marie Curie and tell me what year they were born', automatic=True, goal_mode='inspect')
+        born = {'status': 'action', 'message': 'Click the birth date.', 'risk': 'navigation',
+                'action': {'type': 'click_point', 'x': .05, 'y': .21, 'label': 'Born 7 November 1867'}}
+        for _ in range(2):
+            task.record({'type': 'click_point', 'label': 'Born 7 November 1867', 'status': 'submitted'})
+        self.provider.complete_structured.side_effect = [born, {'message': 'Marie Curie was born in 1867.'}]
+        step = self.propose(task)
+        self.assertEqual((step['status'], step['message']), ('done', 'Marie Curie was born in 1867.'))
+        self.assertIsNone(task.pending)
+
     def test_digit_presses_may_repeat(self):
         task = ComputerTask('compute 22+1', goal_mode='inspect')
         for _ in range(2):
@@ -1798,6 +1810,19 @@ class WindowlessAppTests(unittest.TestCase):
             task.plan_start(None, {'app': {'bundle_id': 'com.apple.finder', 'name': 'Finder'},
                                    'available_apps': [{'bundle_id': 'com.apple.TextEdit'}], 'app_windows': []}, Mock())
         self.assertEqual(proposed[0]['type'], 'new_window')
+
+    def test_reported_a_new_document_is_new_even_with_one_open(self):
+        # Live (v2): TextEdit had "Dentist Appointment" open; the shopping list was written into it.
+        open_window = {'app': {'bundle_id': 'com.apple.finder', 'name': 'Finder'}, 'available_apps': [{'bundle_id': 'com.apple.TextEdit'}],
+                       'app_windows': [{'bundle_id': 'com.apple.TextEdit', 'title': 'Dentist Appointment'}]}
+        for goal, kind in (('in a new TextEdit document write a shopping list', 'new_window'),
+                           ('write the date in TextEdit', 'focus_app')):
+            task = ComputerTask(goal, automatic=True)
+            task._catalog = [{'name': 'TextEdit', 'bundle_id': 'com.apple.TextEdit'}]
+            proposed = []
+            with patch('companion.computer_task.validate_step', side_effect=lambda raw, *a, **k: proposed.append(raw['action']) or {'action': raw['action']}):
+                task.plan_start(None, open_window, Mock())
+            self.assertEqual(proposed[0]['type'], kind, goal)
 
 
 class DefaultBrowserTests(unittest.TestCase):
