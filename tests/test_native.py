@@ -529,18 +529,24 @@ class NativeTests(unittest.TestCase):
     def test_her_cursor_flies_on_a_fresh_curve_and_lands_exactly(self):
         import random
         from PyQt6.QtCore import QPointF
-        from companion.cursor_flight import bezier, flight_path
+        from companion.cursor_flight import along, flight_path
         start, end = QPointF(100, 700), QPointF(900, 200)
         paths = [flight_path(start, end, random.Random(seed)) for seed in (1, 2, 3)]
         for path in paths:
-            self.assertEqual((bezier(path, 0), bezier(path, 1)), (start, end))
-        self.assertEqual(len({(round(p[1].x()), round(p[1].y())) for p in paths}), 3)  # different every time
+            for t, point in ((0, start), (1, end)):
+                landed = along(path, t)
+                self.assertLess(abs(landed.x()-point.x())+abs(landed.y()-point.y()), 0.01)
+        self.assertEqual(len({(round(along(p, .5).x()), round(along(p, .5).y())) for p in paths}), 3)  # different every time
+        middle = [along(paths[0], k/20) for k in range(21)]  # not a straight line: it wanders off it
+        straight = lambda q: abs((end.y()-start.y())*q.x()-(end.x()-start.x())*q.y()+end.x()*start.y()-end.y()*start.x())/((end-start).manhattanLength() or 1)
+        self.assertGreater(max(straight(q) for q in middle), 10)
 
     def test_a_click_flight_lands_then_clicks_once_and_stop_cancels_it(self):
         from PyQt6.QtCore import QPoint, QRect
         from PyQt6.QtGui import QPixmap
         flight = self.window.cursor_flight
         landed = []
+        self.window.pointer.show()  # a static pointer from an earlier step
         flight.fly(QRect(0, 0, 1440, 900), QRect(1100, 600, 230, 140), QPixmap(230, 140), QPoint(300, 200),
                    QRect(330, 130, 230, 140), lambda: landed.append(True))
         self.assertTrue(flight.flying())

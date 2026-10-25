@@ -1494,6 +1494,7 @@ class CompanionWindow(QMainWindow):
         if self.mascot.reduced_motion or not self.mascot.isVisible() or screen is None:
             self.animate_companion_to(spot, finished=finished)
             return
+        self.pointer.dismiss()  # one pointer at a time: the static one stood at the target while this one flew (owner)
         self.mascot.avoid_point = point  # the reply opens on the side away from it
         self.mascot.set_reply_shown(False)
         start = self.mascot.geometry()

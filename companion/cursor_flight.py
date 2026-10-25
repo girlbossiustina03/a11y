@@ -14,25 +14,47 @@ CURSOR = 26  # the pointer's height in points
 
 
 def flight_path(start, end, rng=random):
-    """A cubic curve from start to end that bends a different way each time, as a hand would.
-    Returns the four control points; the ends are exact."""
+    """A hand's path from start to end, different every time: 2-3 waypoints thrown off the straight line
+    at random distances and sides, a little tremor, and a speed that hesitates. The ends are exact.
+    Returns a dict that `along` reads."""
     dx, dy = end.x()-start.x(), end.y()-start.y()
     distance = math.hypot(dx, dy) or 1.0
     nx, ny = -dy/distance, dx/distance  # across the line
-    bend = distance*rng.uniform(0.12, 0.32)*rng.choice((-1, 1))
-    # Usually one arc, sometimes a gentle S.
-    second = bend*(rng.uniform(0.4, 1.0) if rng.random() < 0.75 else -rng.uniform(0.3, 0.7))
-    a, b = rng.uniform(0.2, 0.38), rng.uniform(0.62, 0.8)
-    p1 = QPointF(start.x()+dx*a+nx*bend, start.y()+dy*a+ny*bend)
-    p2 = QPointF(start.x()+dx*b+nx*second, start.y()+dy*b+ny*second)
-    return start, p1, p2, end
+    count = rng.randint(2, 3)
+    # Spread along the way, always forward (loops looked broken, owner), each thrown off the line its own way.
+    stops = [(k+rng.uniform(0.25, 0.75))/count*0.8+0.1 for k in range(count)]
+    points = [start]
+    for at in stops:
+        throw = distance*rng.uniform(0.03, 0.17)*rng.choice((-1, 1))
+        points.append(QPointF(start.x()+dx*at+nx*throw, start.y()+dy*at+ny*throw))
+    points.append(end)
+    tremor = [(rng.uniform(0.5, 1.6), rng.uniform(5, 13), rng.uniform(0, 2*math.pi)) for _ in range(3)]
+    hesitation = (rng.uniform(0.03, 0.08), rng.uniform(1.5, 3.5), rng.uniform(0, 2*math.pi))
+    return {'points': points, 'tremor': tremor, 'hesitation': hesitation, 'across': (nx, ny)}
 
 
-def bezier(points, t):
-    p0, p1, p2, p3 = points
-    u = 1-t
-    return QPointF(u*u*u*p0.x()+3*u*u*t*p1.x()+3*u*t*t*p2.x()+t*t*t*p3.x(),
-                   u*u*u*p0.y()+3*u*u*t*p1.y()+3*u*t*t*p2.y()+t*t*t*p3.y())
+def catmull(p0, p1, p2, p3, t):
+    t2, t3 = t*t, t*t*t
+    return QPointF(0.5*(2*p1.x()+(-p0.x()+p2.x())*t+(2*p0.x()-5*p1.x()+4*p2.x()-p3.x())*t2+(-p0.x()+3*p1.x()-3*p2.x()+p3.x())*t3),
+                   0.5*(2*p1.y()+(-p0.y()+p2.y())*t+(2*p0.y()-5*p1.y()+4*p2.y()-p3.y())*t2+(-p0.y()+3*p1.y()-3*p2.y()+p3.y())*t3))
+
+
+def along(path, t):
+    """Where the pointer is at time t (0-1): eased, hesitating, through the waypoints, trembling a little."""
+    t = max(0.0, min(1.0, t))
+    amount, rate, phase = path['hesitation']
+    u = max(0.0, min(1.0, ease(t)+amount*math.sin(math.pi*t)*math.sin(rate*math.pi*t+phase)))
+    points = path['points']
+    segments = len(points)-1
+    index = min(int(u*segments), segments-1)
+    local = u*segments-index
+    p0, p1 = points[max(index-1, 0)], points[index]
+    p2, p3 = points[index+1], points[min(index+2, segments)]
+    at = catmull(p0, p1, p2, p3, local)
+    fade = math.sin(math.pi*t)  # no tremor at either end: it lands exactly
+    wobble = sum(size*math.sin(speed*t*2*math.pi+start) for size, speed, start in path['tremor'])*fade
+    nx, ny = path['across']
+    return QPointF(at.x()+nx*wobble, at.y()+ny*wobble)
 
 
 def ease(t):
@@ -131,9 +153,10 @@ class CursorFlight(QWidget):
         self.snapshot, self.done = snapshot, done
         tip = QPointF(target)-origin
         self.points = flight_path(self.start_rect.center(), tip)
+        self.first, self.last = self.points['points'][0], self.points['points'][-1]
         self.show()
         self.raise_()
-        self.run('melt', MORPH_MS, lambda: self.run('travel', travel_ms(self.points[0], tip),
+        self.run('melt', MORPH_MS, lambda: self.run('travel', int(travel_ms(self.first, tip)*1.2),
                                                      lambda: self.run('click', CLICK_MS, lambda: self.run('form', MORPH_MS, self.finish))))
 
     def run(self, phase, duration, then):
@@ -178,12 +201,12 @@ class CursorFlight(QWidget):
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         t = self.progress
         if self.phase == 'melt':   # her window shrinks into the pointer where she stood
-            self.paint_window(p, self.shrink(self.start_rect, self.points[0], ease(t)), 1-t)
-            self.paint_pointer(p, self.points[0], min(1.0, t*1.6), 0.5+0.5*t)
+            self.paint_window(p, self.shrink(self.start_rect, self.first, ease(t)), 1-t)
+            self.paint_pointer(p, self.first, min(1.0, t*1.6), 0.5+0.5*t)
         elif self.phase == 'travel':
-            self.paint_pointer(p, bezier(self.points, ease(t)), 1.0, 1.0)
+            self.paint_pointer(p, along(self.points, t), 1.0, 1.0)
         elif self.phase == 'click':  # a ripple where it clicks, the pointer pressing in
-            tip = self.points[3]
+            tip = self.last
             ring = QColor(self.fill)
             ring.setAlphaF(0.55*(1-t))
             p.setPen(QPen(ring, 2.0))
@@ -192,8 +215,8 @@ class CursorFlight(QWidget):
             p.drawEllipse(tip, radius, radius)
             self.paint_pointer(p, tip, 1.0, 1.0-0.12*math.sin(math.pi*t))
         elif self.phase == 'form':   # and grows back into her window beside the point
-            self.paint_window(p, self.shrink(self.end_rect, self.points[3], 1-ease(t)), t)
-            self.paint_pointer(p, self.points[3], 1-t, 1.0-0.5*t)
+            self.paint_window(p, self.shrink(self.end_rect, self.last, 1-ease(t)), t)
+            self.paint_pointer(p, self.last, 1-t, 1.0-0.5*t)
 
     @staticmethod
     def shrink(rect, point, amount):
