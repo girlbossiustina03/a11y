@@ -1371,7 +1371,7 @@ class ComputerTask:
         spans = {normalized(' '.join(words[i:i+n])) for n in (1, 2, 3) for i in range(len(words)-n+1)}
         from .desktop_context import BROWSER_IDS
         apps = [a for a in self._catalog or [] if len(normalized(a['name'])) > 3 and normalized(a['name']) in spans
-                and a['name'] not in ('Finder', 'A11y') and a['bundle_id'] not in BROWSER_IDS | {'com.a11y.companion'}]  # a browser named is about a site; never A11y itself
+                and a['name'] != 'A11y' and a['bundle_id'] not in BROWSER_IDS | {'com.a11y.companion'}]  # a browser named is about a site; never A11y itself
         from .web_apps import find_site
         site = find_site(unquoted)
         if site:
@@ -1385,7 +1385,10 @@ class ComputerTask:
         app = max(apps, key=lambda a: len(a['name']))
         # In front already: nothing to open, unless the goal wants a new document (TextEdit was in front and
         # the population went into the open one, live v3).
-        return False if app['bundle_id'] == (snapshot.get('app') or {}).get('bundle_id') and not NEW_DOCUMENT.search(self.goal) else app
+        # In front without a window (Finder showing only the desktop) is not ready either: it gets one (the
+        # model said "the Finder window is not visible, please open it" and stopped, live held-out).
+        windowed = bool(snapshot.get('window')) or any(w.get('bundle_id') == app['bundle_id'] for w in snapshot.get('app_windows') or [])
+        return False if app['bundle_id'] == (snapshot.get('app') or {}).get('bundle_id') and windowed and not NEW_DOCUMENT.search(self.goal) else app
 
     def plan_start(self, desktop, snapshot, provider):
         """Plan once, with the text model, then take the start in code: open the app, go to the

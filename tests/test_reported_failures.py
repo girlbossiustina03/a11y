@@ -1834,6 +1834,18 @@ class WindowlessAppTests(unittest.TestCase):
                     task.plan_start(None, open_window, Mock())
                 self.assertEqual(proposed[0]['type'], kind, (goal, front))
 
+    def test_reported_the_named_app_in_front_without_a_window_gets_one(self):
+        # Live (held-out): Finder in front showing only the desktop; the task stopped asking to open a window.
+        task = ComputerTask('show me what is in my Movies folder in Finder', automatic=True)
+        task._catalog = [{'name': 'Finder', 'bundle_id': 'com.apple.finder'}]
+        front = {'app': {'bundle_id': 'com.apple.finder', 'name': 'Finder'}, 'available_apps': [{'bundle_id': 'com.apple.finder'}]}
+        with patch('companion.computer_task.validate_step', side_effect=lambda raw, *a, **k: {'action': raw['action']}):
+            step = task.plan_start(None, dict(front, app_windows=[]), Mock())
+            self.assertEqual(step['action'], {'type': 'new_window', 'bundle_id': 'com.apple.finder'})
+            again = ComputerTask('show me what is in my Movies folder in Finder', automatic=True)
+            again._catalog = task._catalog
+            self.assertIsNone(again.plan_start(None, dict(front, app_windows=[{'bundle_id': 'com.apple.finder', 'title': 'Downloads'}]), Mock()))
+
     def test_reported_a_launch_for_a_new_document_is_followed_by_one(self):
         # Live (v3): TextEdit reopened "Dentist Appointment" on launch and the number went into it.
         task = ComputerTask('put "54.2 million" in a new TextEdit document', automatic=True)
