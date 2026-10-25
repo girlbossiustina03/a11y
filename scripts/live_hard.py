@@ -92,14 +92,20 @@ def subprocess_osa(lines, *args):
 
 
 def delete_test_notes():
-    """Only notes carrying the test marker, which the harness created through A11y."""
-    try:
-        subprocess_osa(['on run argv', 'tell application "Notes"',
-                        # One delete of the whole set: a repeat over a "whose" list fails with -1728 (left 6 notes, live).
-                        'delete (every note whose name starts with (item 1 of argv))',
-                        'end tell', 'end run'], le.TEST_MARKER)
-    except RuntimeError:
-        pass
+    """Only notes carrying the test marker, which the harness created through A11y. Checked until
+    they are gone: Notes quitting right after a delete kept one, and the next run found two (live)."""
+    for _ in range(4):
+        try:
+            left = subprocess_osa(['on run argv', 'tell application "Notes"',
+                                   # One delete of the whole set: a repeat over a "whose" list fails with -1728 (live).
+                                   'delete (every note whose name starts with (item 1 of argv))',
+                                   'delay 1', 'return count of (every note whose name starts with (item 1 of argv))',
+                                   'end tell', 'end run'], le.TEST_MARKER)
+        except RuntimeError:
+            left = '?'
+        if left == '0':
+            return
+        time.sleep(1)
 
 
 def textedit_text():

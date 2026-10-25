@@ -703,9 +703,10 @@ if let index = args.firstIndex(of: "--new-window"), index+1 < args.count {
         }
         emit(["submitted": true, "verification_required": true]); exit(0)
     }
-    guard AXIsProcessTrusted(), args[index+1] == "com.apple.Terminal",
-          let owner = running.first(where: { $0.bundleIdentifier == args[index+1] }) else {
-        emit(["error": "New-window automation currently requires running Terminal and Accessibility permission."]); exit(1)
+    // Any running app's one enabled ⌘N item (New Window, New Document, New Note): an empty window, no
+    // data changed. "In a new TextEdit document" wrote into the open one when only Terminal had this (live).
+    guard AXIsProcessTrusted(), let owner = running.first(where: { $0.bundleIdentifier == args[index+1] }) else {
+        emit(["error": "New-window automation needs the app running and Accessibility permission."]); exit(1)
     }
     let app = AXUIElementCreateApplication(owner.processIdentifier)
     AXUIElementSetMessagingTimeout(app, 0.1)
@@ -725,9 +726,9 @@ if let index = args.firstIndex(of: "--new-window"), index+1 < args.count {
         }
     }
     guard matches.count == 1 else {
-        emit(["error": "Terminal did not expose one unambiguous Command-N menu action. Open its New Window menu manually."]); exit(1)
+        emit(["error": "The app did not expose one unambiguous Command-N menu action. Open its New Window menu manually."]); exit(1)
     }
-    guard owner.activate(options: []) else { emit(["error": "Terminal could not be activated."]); exit(1) }
+    guard owner.activate(options: []) else { emit(["error": "The app could not be activated."]); exit(1) }
     AXUIElementSetMessagingTimeout(matches[0], 1)
     let status = AXUIElementPerformAction(matches[0], kAXPressAction as CFString)
     emit(["submitted": status == .success, "verification_required": true]); exit(0)

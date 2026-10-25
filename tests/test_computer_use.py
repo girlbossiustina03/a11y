@@ -196,8 +196,10 @@ class AppActionTests(unittest.TestCase):
         self.assertEqual(action['label'], 'Open a new window in Terminal')
         ComputerUse(self.monitor).execute_confirmed(action)
         self.bridge.application_action.assert_called_once_with(action)
-        with self.assertRaises(ValueError):
-            self.monitor.authorize_action({'type': 'new_window', 'bundle_id': 'com.apple.finder'})
+        # Any running app may open an empty window or document ("a new TextEdit document", live v3) ...
+        self.assertEqual(self.monitor.authorize_action({'type': 'new_window', 'bundle_id': 'com.apple.finder'})['label'], 'Open a new window in Finder')
+        with self.assertRaises(ValueError):  # ... but never one that isn't running
+            self.monitor.authorize_action({'type': 'new_window', 'bundle_id': 'com.example.not-running'})
 
     def test_close_one_window_never_quits_the_app_or_selects_focused_window(self):
         action = self.monitor.authorize_action({'type': 'close_window', 'window_id': 'com.apple.Terminal:1'})

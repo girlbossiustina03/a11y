@@ -336,9 +336,7 @@ class DesktopContext:
             app = next((item for item in records if item['bundle_id'] == action['bundle_id']), None)
             if app:
                 if kind == 'new_window' and context.get('accessibility') == 'permission_required':
-                    raise ValueError('Terminal New Window needs macOS Accessibility access. Request app access instead.')
-                if kind == 'new_window' and app['bundle_id'] != 'com.apple.Terminal':
-                    raise ValueError('New-window automation is currently available only for Terminal.')
+                    raise ValueError('A new window needs macOS Accessibility access. Request app access instead.')
                 verb = {'launch_app': 'Open ', 'quit_app': 'Quit ', 'new_window': 'Open a new window in '}[kind]
                 return {'type': kind, 'bundle_id': app['bundle_id'], 'label': verb+app['name']}
         elif kind == 'choose_menu' and set(action) == {'type', 'path'} and isinstance(action['path'], str) \

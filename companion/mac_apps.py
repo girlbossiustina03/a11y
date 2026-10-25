@@ -265,7 +265,11 @@ def read_notes(target, script=run_script):
     if wanted.casefold() in ('', 'all', 'list', 'my notes', 'notes'):
         names = [note['name'] for note in found[:6]]
         return 'Your newest notes: '+'; '.join(names)+'. Say “read my note about …” to hear one.'
-    note = found[0] if wanted.casefold() in ('latest', 'last', 'newest', 'recent', 'most recent') else best_match(wanted, found, lambda n: n['name'])
+    exact = [n for n in found if n['name'].strip().casefold() == wanted.strip(' "“”').casefold()]
+    # Several notes with exactly that title: the newest (found is newest first). "Did you mean: A11y test
+    # 9725; A11y test 9725?" asked between two identical names (live).
+    note = found[0] if wanted.casefold() in ('latest', 'last', 'newest', 'recent', 'most recent') else exact[0] if exact \
+        else best_match(wanted, found, lambda n: n['name'])
     if note is None:
         close = [n['name'] for n in found if any(word in n['name'].casefold() for word in wanted.casefold().split() if len(word) > 2)][:4]
         return 'I could not find one note called “'+wanted+'”.'+(' Did you mean: '+'; '.join(close)+'?' if close else '')

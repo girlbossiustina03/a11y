@@ -140,6 +140,12 @@ class NotesContactsTests(unittest.TestCase):
             return outputs[script] if not callable(outputs[script]) else outputs[script](*args)
         return run, calls
 
+    def test_reported_two_notes_with_one_title_read_the_newest(self):
+        # Live: "Did you mean: A11y test 9725; A11y test 9725?" after making the second one.
+        listing = 'old\x1fA11y test 9725\x1f2026-10-20T08:00:00\x1enew\x1fA11y test 9725\x1f2026-10-25T15:00:00\x1e'
+        run, _ = self.script({mac_apps.NOTES_LIST: listing, mac_apps.NOTE_TEXT: lambda note: {'new': 'the spare key'}.get(note, 'old text')})
+        self.assertEqual(mac_apps.read_notes('“A11y test 9725”', run), 'Your note “A11y test 9725”:\n\nthe spare key')
+
     def test_notes_list_read_and_create(self):
         listing = 'n1\x1fShopping\x1f2026-10-20T08:00:00\x1en2\x1fTrip ideas\x1f2026-10-22T08:00:00\x1en3\x1fMeeting notes\x1f2026-10-21T08:00:00\x1e'
         run, calls = self.script({mac_apps.NOTES_LIST: listing, mac_apps.NOTE_TEXT: lambda note: {'n2': 'Lisbon\nPorto'}.get(note, 'eggs')})
