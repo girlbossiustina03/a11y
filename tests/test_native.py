@@ -295,7 +295,8 @@ class NativeTests(unittest.TestCase):
         geometry = self.window.mascot.screen().geometry()
         before = QCursor.pos()
         pointer.point_at(geometry, .2, .7, 'Example target', reduced_motion=True)
-        self.assertEqual(pointer.pos(), QPoint(geometry.x()+int(.2*geometry.width()), geometry.y()+int(.7*geometry.height())))
+        from companion.overlay import TIP
+        self.assertEqual(pointer.pos()+QPoint(TIP, TIP), QPoint(geometry.x()+int(.2*geometry.width()), geometry.y()+int(.7*geometry.height())))  # the tip on the point
         self.assertEqual(QCursor.pos(), before)
         self.assertTrue(pointer.windowFlags() & Qt.WindowType.WindowTransparentForInput)
         self.assertTrue(pointer.windowFlags() & Qt.WindowType.WindowDoesNotAcceptFocus)

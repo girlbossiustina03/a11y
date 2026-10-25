@@ -811,6 +811,7 @@ class CompanionWindow(QMainWindow):
                 self.overlay.guide(capture['geometry'], target)
             else:
                 self.overlay.hide()
+            self.pointer.set_colors(self.mascot.colors)
             self.pointer.point_at(capture['geometry'], action['x'], action['y'], action['label'],
                 reduced_motion=self.service.adaptation.effective(self.service.identity)['reduced_motion'])
         if not response.get('task_step') and self.pending_desktop_action and self.pending_desktop_action['type'] in ('launch_app', 'browse_url', 'focus_app', 'new_window', 'play_media', 'close_window', 'close_tab', 'quit_app'):
@@ -844,6 +845,7 @@ class CompanionWindow(QMainWindow):
                 screen = capture['screen']
             else:
                 screen = self.mascot.screen()
+            self.pointer.set_colors(self.mascot.colors)
             self.pointer.point_at(screen.geometry(), action['x'], action['y'], action['label'],
                 reduced_motion=self.service.adaptation.effective(self.service.identity)['reduced_motion'])
             self.move_companion_to(action['x'], action['y'], screen)

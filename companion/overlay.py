@@ -41,6 +41,9 @@ class GuidanceOverlay(QWidget):
         p.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 7, 7)
 
 
+TIP = 6  # where the tip sits inside the pointer's window (room for its rim and shadow)
+
+
 class CompanionPointer(QWidget):
     """A separate, click-through visual pointer; never moves the user's mouse."""
     def __init__(self):
@@ -52,7 +55,7 @@ class CompanionPointer(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
-        self.setFixedSize(28, 36)
+        self.setFixedSize(TIP+32, TIP+34)
         self.setWindowTitle('A11y companion pointer')
         self.setAccessibleName('A11y target pointer')
         self.animation = QPropertyAnimation(self, b'pos', self)
@@ -68,7 +71,7 @@ class CompanionPointer(QWidget):
         from PyQt6.QtCore import QPoint
         if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not 0 <= v < 1 for v in (x, y)):
             raise ValueError('The companion pointer needs an interior image coordinate.')
-        destination = QPoint(geometry.x()+int(x*geometry.width()), geometry.y()+int(y*geometry.height()))
+        destination = QPoint(geometry.x()+int(x*geometry.width())-TIP, geometry.y()+int(y*geometry.height())-TIP)  # the tip on the point
         self.animation.stop()
         self.target_point = destination
         self.setAccessibleDescription(label)
@@ -89,19 +92,15 @@ class CompanionPointer(QWidget):
         self.hide()
         self.target_point = None
 
+    def set_colors(self, palette):
+        from .cursor_flight import pointer_colors
+        self.fill, self.edge = pointer_colors(palette)
+        self.update()
+
     def paintEvent(self, event):
+        # The same pointer as her flights (cursor_flight): one look everywhere she points.
+        from PyQt6.QtCore import QPointF
+        from .cursor_flight import paint_pointer
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor('#303036'), 1.25, Qt.PenStyle.SolidLine,
-                            Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        painter.setBrush(QColor('#ffffff'))
-        arrow = QPainterPath()
-        arrow.moveTo(1, 1)
-        arrow.lineTo(1, 25)
-        arrow.lineTo(7.5, 19.5)
-        arrow.lineTo(12.5, 31)
-        arrow.lineTo(17, 29)
-        arrow.lineTo(12, 18)
-        arrow.lineTo(21, 18)
-        arrow.closeSubpath()
-        painter.drawPath(arrow)
+        paint_pointer(painter, QPointF(TIP, TIP), 1.0, 1.0, getattr(self, 'fill', QColor('#191D27')), getattr(self, 'edge', QColor('#E0E0E0')))

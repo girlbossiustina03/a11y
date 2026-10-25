@@ -60,6 +60,39 @@ def pointer_path(tip, size=CURSOR):
     return path
 
 
+def pointer_colors(palette):
+    """Her pointer in her own window's colours: its dark blue as the fill, her text colour as the rim."""
+    return QColor(palette.background), QColor(palette.text)
+
+
+def paint_pointer(p, tip, opacity, scale, fill_color, edge_color):
+    """The pointer: one rounded outline (the arrowhead grown by a round-joined stroke), filled once,
+    slightly see-through, with a thin rim and a soft shadow so it reads on light and dark."""
+    if opacity <= 0.01:
+        return
+    from PyQt6.QtGui import QPainterPathStroker
+    p.save()
+    p.setOpacity(max(0.0, min(1.0, opacity)))
+    stroker = QPainterPathStroker()
+    stroker.setWidth(3.0*scale*CURSOR/22.0)
+    stroker.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    stroker.setCapStyle(Qt.PenCapStyle.RoundCap)
+    path = pointer_path(tip, CURSOR*scale)
+    shape = path.united(stroker.createStroke(path)).simplified()
+    shadow = QColor(0, 0, 0, 60)
+    for offset in (2.2, 1.2):
+        p.fillPath(shape.translated(0.6, offset), shadow)
+    fill = QColor(fill_color)
+    fill.setAlphaF(0.88)
+    p.fillPath(shape, fill)
+    edge = QColor(edge_color)
+    edge.setAlphaF(0.9)
+    p.setPen(QPen(edge, 1.3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawPath(shape)
+    p.restore()
+
+
 class CursorFlight(QWidget):
     """One flight at a time, over the screen the flight is on."""
 
@@ -74,7 +107,7 @@ class CursorFlight(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
         self.setWindowTitle('A11y cursor')
         self.setAccessibleName('A11y cursor')
-        self.fill, self.edge, self.card = QColor('#7BCACD'), QColor('#E0E0E0'), QColor('#191D27')
+        self.fill, self.edge, self.card = QColor('#191D27'), QColor('#E0E0E0'), QColor('#191D27')
         self.snapshot = None
         self.phase, self.progress = None, 0.0
         self.start_rect = self.end_rect = QRectF()
@@ -83,8 +116,9 @@ class CursorFlight(QWidget):
         self.done = None
 
     def set_colors(self, palette):
-        """Her theme: the pointer in her accent, see-through, with her text colour as its edge."""
-        self.fill, self.edge, self.card = QColor(palette.cyan), QColor(palette.text), QColor(palette.background)
+        """Her theme: the pointer in her window's dark colour, her text colour as its rim."""
+        self.fill, self.edge = pointer_colors(palette)
+        self.card = QColor(palette.background)
 
     def fly(self, screen_rect, start_rect, snapshot, target, end_rect, done):
         """start_rect / end_rect: her window before and after (global); target: the click point (global).
@@ -190,28 +224,4 @@ class CursorFlight(QWidget):
         p.restore()
 
     def paint_pointer(self, p, tip, opacity, scale):
-        if opacity <= 0.01:
-            return
-        p.save()
-        p.setOpacity(max(0.0, min(1.0, opacity)))
-        # One rounded outline (the arrowhead grown by a round-joined stroke), filled once: see-through
-        # without a darker core, with her text colour as a thin rim.
-        from PyQt6.QtGui import QPainterPathStroker
-        stroker = QPainterPathStroker()
-        stroker.setWidth(3.0*scale*CURSOR/22.0)
-        stroker.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        stroker.setCapStyle(Qt.PenCapStyle.RoundCap)
-        path = pointer_path(tip, CURSOR*scale)
-        shape = path.united(stroker.createStroke(path)).simplified()
-        shadow = QColor(0, 0, 0, 55)
-        for offset in (2.2, 1.2):  # a soft shadow so it reads on light and dark
-            p.fillPath(shape.translated(0.6, offset), shadow)
-        fill = QColor(self.fill)
-        fill.setAlphaF(0.8)
-        p.fillPath(shape, fill)
-        edge = QColor(self.edge)
-        edge.setAlphaF(0.85)
-        p.setPen(QPen(edge, 1.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawPath(shape)
-        p.restore()
+        paint_pointer(p, tip, opacity, scale, self.fill, self.edge)
