@@ -1936,16 +1936,33 @@ class WindowlessAppTests(unittest.TestCase):
         self.assertFalse(progress_message(brief(long)))
         self.assertTrue(progress_message('Open https://en.wikipedia.org in Safari…'))
 
-    def test_reported_a_click_that_undoes_the_last_one_is_refused(self):
-        # Owner: in Calculator "a11y just presses the tab opener over and over" (Show Sidebar, Hide Sidebar, …).
-        from companion.computer_task import undoes
-        self.assertTrue(undoes('Hide Sidebar', ['Show Sidebar']))
-        self.assertTrue(undoes('show sidebar', ['Calculator', 'Hide  Sidebar']))
-        self.assertTrue(undoes('Collapse Folders', ['Expand Folders']))
-        self.assertFalse(undoes('Show Sidebar', ['Show Sidebar']))   # a plain repeat is the repeat check's
-        self.assertFalse(undoes('Hide Toolbar', ['Show Sidebar']))
-        self.assertFalse(undoes('Sidebar', ['Show Sidebar']))
+    def test_reported_a_click_that_reached_the_goal_ends_the_task(self):
+        # Live (held-out): "Show Sidebar" opened Calculator's history; the model clicked on and closed it.
+        task = ComputerTask('Open the history panel in Calculator so I can review previous calculations.', automatic=True, goal_mode='inspect')
+        task.screen_seen = 'closed'
+        task.record({'type': 'click_point', 'label': 'Show Sidebar', 'status': 'submitted'})
+        task.screen_seen = 'open'
+        regions = [{'text': 'Yesterday', 'x': .3, 'y': .2}, {'text': '12+30', 'x': .3, 'y': .3}, {'text': '42', 'x': .3, 'y': .32}]
+        provider = Mock()
+        provider.complete_structured.side_effect = [{'met': True, 'evidence': '12+30'}, {'message': 'Your history is open: 12+30 = 42.'}]
+        step = task.goal_met(provider, {'app': {'name': 'Calculator'}, 'window': {'title': 'Calculator'}}, regions, {})
+        self.assertEqual((step['status'], step['message']), ('done', 'Your history is open: 12+30 = 42.'))
+        provider.complete_structured.side_effect = [{'met': True, 'evidence': 'History panel'}]  # not on the screen
+        self.assertIsNone(task.goal_met(provider, {'app': {}, 'window': {}}, regions, {}))
+        task.receipts[-1]['effect'] = 'nothing changed on screen'
+        self.assertIsNone(task.goal_met(provider, {'app': {}, 'window': {}}, regions, {}))  # only after a click that changed it
 
+    def test_reported_a_click_cycle_through_other_screens_is_refused(self):
+        # Owner: in Calculator "a11y just presses the tab opener over and over" (Show Sidebar, Hide Sidebar, …).
+        task = ComputerTask('open the history panel in Calculator', automatic=True)
+        for screen, label in (('closed', 'Show Sidebar'), ('open', 'Hide Sidebar')):
+            task.screen_seen = screen
+            task.record({'type': 'click_point', 'label': label, 'status': 'submitted'})
+        task.screen_seen = 'closed'                          # back where it started
+        self.assertTrue(task.cycled({'type': 'click_point', 'label': 'Show  sidebar'}))
+        self.assertFalse(task.cycled({'type': 'click_point', 'label': 'History'}))
+        task.screen_seen = 'something new'
+        self.assertFalse(task.cycled({'type': 'click_point', 'label': 'Show Sidebar'}))
 
 class DefaultBrowserTests(unittest.TestCase):
     @unittest.skipUnless(__import__('sys').platform == 'darwin', 'macOS LaunchServices')
