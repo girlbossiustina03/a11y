@@ -1796,6 +1796,14 @@ class RouteHygieneTests(unittest.TestCase):
 
 
 class LookUpOnSiteTests(LiveRoutingTests):
+    def test_reported_weather_in_the_weather_app_opens_the_app(self):
+        # Live (held-out): "Show me the Visibility details in Weather …" was answered with a forecast.
+        self.app.desktop_context.bridge.catalog.return_value = [{'name': 'Weather', 'bundle_id': 'com.apple.weather'}]
+        self.route('weather', 'Visibility')
+        self.assertEqual(self.app.prepare_request('Show me the Visibility details in Weather for the selected place')['operation'], 'computer_task')
+        self.route('weather', 'Paris')
+        self.assertEqual(self.app.prepare_request('what is the weather in Paris?')['operation'], 'weather')
+
     def test_reported_look_up_on_wikipedia_opens_it(self):
         # Live A/B: "look up Photosynthesis on Wikipedia" was answered in the background, nothing opened.
         self.route('look_up', 'Photosynthesis')
@@ -1846,6 +1854,19 @@ class WindowlessAppTests(unittest.TestCase):
             again = ComputerTask('show me what is in my Movies folder in Finder', automatic=True)
             again._catalog = task._catalog
             self.assertIsNone(again.plan_start(None, dict(front, app_windows=[{'bundle_id': 'com.apple.finder', 'title': 'Downloads'}]), Mock()))
+
+    def test_reported_staying_in_a_windowless_app_opens_a_window(self):
+        # Live (held-out): "How many visible items are directly inside my Movies folder?" with Finder showing only the desktop.
+        class Planner:
+            def plan_task(self, observation):
+                return {'start': 'current', 'app': '', 'url': '', 'query': '', 'steps': [], 'done_when': ''}
+        task = ComputerTask('How many visible items are directly inside my Movies folder?', automatic=True)
+        task._catalog = [{'name': 'Finder', 'bundle_id': 'com.apple.finder'}]
+        desktop_only = {'app': {'bundle_id': 'com.apple.finder', 'name': 'Finder'}, 'window': {'title': ''},
+                        'available_apps': [{'bundle_id': 'com.apple.finder'}], 'app_windows': [{'bundle_id': 'com.apple.finder', 'title': ''}]}
+        with patch('companion.computer_task.validate_step', side_effect=lambda raw, *a, **k: {'action': raw['action']}):
+            step = task.plan_start(None, desktop_only, Planner())
+        self.assertEqual(step['action'], {'type': 'new_window', 'bundle_id': 'com.apple.finder'})
 
     def test_reported_a_launch_for_a_new_document_is_followed_by_one(self):
         # Live (v3): TextEdit reopened "Dentist Appointment" on launch and the number went into it.
@@ -1947,6 +1968,9 @@ class WindowlessAppTests(unittest.TestCase):
         provider.complete_structured.side_effect = [{'met': True, 'evidence': '12+30'}, {'message': 'Your history is open: 12+30 = 42.'}]
         step = task.goal_met(provider, {'app': {'name': 'Calculator'}, 'window': {'title': 'Calculator'}}, regions, {})
         self.assertEqual((step['status'], step['message']), ('done', 'Your history is open: 12+30 = 42.'))
+        provider.complete_structured.side_effect = [{'met': True, 'evidence': 'Show Sidebar'}]  # only the button it clicked
+        task.screen_seen, regions = 'open', regions+[{'text': 'Show Sidebar', 'x': .2, 'y': .1}]
+        self.assertIsNone(task.goal_met(provider, {'app': {'name': 'Calculator'}, 'window': {}}, regions, {}))
         provider.complete_structured.side_effect = [{'met': True, 'evidence': 'History panel'}]  # not on the screen
         self.assertIsNone(task.goal_met(provider, {'app': {}, 'window': {}}, regions, {}))
         task.receipts[-1]['effect'] = 'nothing changed on screen'

@@ -153,6 +153,18 @@ if let index = args.firstIndex(of: "--input"), index+1 < args.count {
               bounds(focused) == action["focused_bounds"] as? [String: Double] else {
             emit(["error": "Focus the same non-password text field before typing."]); exit(1)
         }
+        // A one-line field (address bar, search box) is replaced, never typed into the middle: a second
+        // click put the cursor inside the old address and the new one went in there (owner, live).
+        if string(focused, "AXRole") != "AXTextArea" {
+            let existing = string(focused, "AXValue")
+            if !existing.isEmpty {
+                var whole = CFRange(location: 0, length: (existing as NSString).length)
+                if let range = AXValueCreate(.cfRange, &whole) {
+                    AXUIElementSetAttributeValue(focused, "AXSelectedTextRange" as CFString, range)
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+                }
+            }
+        }
         var chunks: [[UInt16]] = []
         var chunk: [UInt16] = []
         for character in text {

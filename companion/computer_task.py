@@ -934,7 +934,9 @@ class ComputerTask:
         seen = [' '.join(line.casefold().split()) for line in lines+[window]]
         if len(quoted) < 2 or not any(quoted in line or line in quoted and len(line) >= 4 for line in seen):
             return None  # not grounded in the screen
-        answer = self.screen_answer(provider, snapshot, regions, 'The goal is shown on screen: '+str(reply['evidence'])[:120], cancel_kwargs)
+        if quoted == ' '.join(str(last.get('label', '')).casefold().split()):
+            return None  # the button just clicked shows only that it exists ("Map Modes" for Transit, live)
+        answer = self.screen_answer(provider, snapshot, regions, '', cancel_kwargs)
         return {'status': 'done', 'action': None, 'message': answer or 'It is open on the screen.'}
 
     def click_result(self, regions, image_data=None, visual=None, vision=None):
@@ -1555,6 +1557,11 @@ class ComputerTask:
             if browser and urlsplit(address).scheme in ('http', 'https'):
                 action = {'type': 'browse_url', 'bundle_id': browser['bundle_id'], 'url': address, 'label': 'Open '+address+' in '+browser['name'],
                           'browser_mode': 'default'}
+        here = (snapshot.get('app') or {}).get('bundle_id')
+        if action is None and start == 'current' and here and here not in BROWSER_IDS and not has_window(snapshot, here):
+            # Staying in the app in front, which shows no window (Finder with only the desktop): open one.
+            # "How many items are in my Movies folder" stopped asking to open Finder (live, held-out).
+            action = {'type': 'new_window', 'bundle_id': here}
         if action is None:
             return None
         try:

@@ -841,6 +841,9 @@ class Companion:
                     # open the named site, then search there.
                     from .request_plan import with_opening
                     interpreted = with_opening(dict(interpreted, operation='browser_open', target=site[1], remaining_request=''), request)
+            if interpreted.get('operation') in ('weather', 'look_up') and self.named_installed_app(request, writes=True):
+                # "Show me the Visibility details in Weather": the app, not an answer from the web (live, held-out).
+                interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
             acts = interpreted.pop('acts_on_computer', None) is True
             from .request_plan import highlight_only
             if acts and (interpreted.get('operation') in ('answer', 'inspect_screen', 'move_object', 'read_page')
