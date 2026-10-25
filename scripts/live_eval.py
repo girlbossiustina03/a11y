@@ -422,6 +422,7 @@ class App:
             except (OSError, ValueError, RuntimeError):
                 pass
             time.sleep(0.5)
+        self.process.terminate()  # never leave a second A11y running behind (it happened, live)
         raise SystemExit('A11y did not get ready (app awareness and screen vision must be remembered as on).')
 
     def quit(self):
