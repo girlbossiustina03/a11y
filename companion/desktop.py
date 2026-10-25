@@ -1916,6 +1916,13 @@ class CompanionWindow(QMainWindow):
                     def done(message):
                         self.service.store.add_exchange(self.service.identity, proposed['label'], message)  # what actually happened
                         self.mascot_home(message)
+                        rest = str(proposed.get('remaining_request', '')).strip()
+                        if rest:
+                            # "Make a note … then read it back to me": the note was made and the rest dropped
+                            # (live, v3). Carry on with it, naming what was just written.
+                            named = proposed.get('title') or proposed.get('name') or ''
+                            follow = rest+(' (the '+proposed.get('kind', 'item').split('_')[-1]+' “'+named+'”)' if named else '')
+                            QTimer.singleShot(0, lambda: self.mascot_submit(follow, 'chat'))
                     worker.result.connect(done)
                     worker.failed.connect(lambda message: self.mascot_home('I couldn’t do that. '+message))
                     worker.finished.connect(lambda: self.set_busy(False))

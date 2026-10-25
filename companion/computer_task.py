@@ -1230,7 +1230,9 @@ class ComputerTask:
     def is_history(step):
         """A back/forward step: the Back button, or ⌘[ / ⌘]."""
         if step.get('type') == 'press_key':
-            return str(step.get('key') or step.get('target') or step.get('label') or '').casefold() in ('cmd_[', 'cmd_]')
+            # Executed presses come back labelled "Press ⌘+[ in Safari" (live: 24 presses, none counted).
+            key = str(step.get('key') or step.get('target') or '').casefold()
+            return key in ('cmd_[', 'cmd_]') or bool(re.search(r'⌘\+?[\[\]]', str(step.get('label') or '')))
         words = set(label_words(step.get('label') or ''))
         return bool(words & {'back', 'forward'}) and words <= {'go', 'back', 'forward', 'previous', 'next', 'page', 'button', 'navigate'}
 

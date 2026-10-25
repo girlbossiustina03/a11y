@@ -1592,3 +1592,13 @@ class V3RoundThreeTests(LiveRoutingTests):
         self.assertEqual([p.get('path', p['type']) for p in proposals], ['focus_app', 'Go > Documents', 'View > Sort By > Date Added'])
         self.assertEqual(done['status'], 'done')
         self.assertTrue(FINDER_SORT.search('show Downloads in Finder, newest added first'))
+
+
+
+class GoBackCountTests(unittest.TestCase):
+    def test_reported_executed_presses_are_counted(self):
+        # Live (v3): "go back in Safari" pressed ⌘[ 24 times; executed receipts carry only the label.
+        task = ComputerTask('go back in Safari', automatic=True)
+        task.record({'type': 'press_key', 'label': 'Press ⌘+[ in Safari', 'status': 'executed'})
+        step = task.history_step(None, {'app': {'bundle_id': 'com.apple.Safari'}})
+        self.assertEqual(step['status'], 'done')

@@ -1095,6 +1095,24 @@ class NativeTests(unittest.TestCase):
                 self.qt.processEvents()
                 self.assertEqual((mascot.size(), mascot.character.mapToGlobal(QPoint())), (size, face), state)
 
+    def test_reported_a_confirmed_note_carries_on_with_the_rest(self):
+        # Live (v3): "make a note … then read it back to me" created the note and stopped.
+        from PyQt6.QtCore import QObject, pyqtSignal
+        class Writer(QObject):
+            result, failed, finished = pyqtSignal(str), pyqtSignal(str), pyqtSignal()
+            def __init__(self, bridge, action, parent):
+                super().__init__(parent)
+            def start(self):
+                self.result.emit('Created the note “A11y test 1651”.')
+                self.finished.emit()
+        self.window.pending_desktop_action = {'type': 'app_write', 'kind': 'create_note', 'title': 'A11y test 1651', 'body': 'x',
+                                              'label': 'Create note', 'remaining_request': 'read it back to me'}
+        with patch('companion.desktop.AppWriteWorker', Writer), patch.object(self.window, 'mascot_submit') as submit:
+            self.window.desktop_action('desktop:apply')
+            QTest.qWait(20)
+            self.qt.processEvents()
+        submit.assert_called_once_with('read it back to me (the note “A11y test 1651”)', 'chat')
+
     def test_red_button_closes_the_companion(self):
         mascot = self.window.mascot
         with patch.object(self.window, 'request_quit') as quit:
