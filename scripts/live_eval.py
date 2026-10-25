@@ -160,10 +160,43 @@ def discard_test_drafts(before):
     return closed
 
 
+TEXTEDIT_FOLDER = Path.home()/'Library'/'Mobile Documents'/'com~apple~TextEdit'/'Documents'
+TRASH_NEW = '''on run argv
+set cutoff to (current date) - (item 2 of argv as integer)
+set out to 0
+tell application "Finder"
+    try
+        set found to (every file of folder (POSIX file (item 1 of argv) as alias) whose creation date > cutoff)
+    on error
+        return 0
+    end try
+    repeat with f in found
+        delete f
+        set out to out + 1
+    end repeat
+end tell
+return out
+end run'''
+
+
+def trash_test_documents(started):
+    """TextEdit documents a test created (owner's OK, 2026-10-25): TextEdit saves new documents to its
+    iCloud folder on its own, even when quit "saving no". Files there created since the test started go
+    to the Trash, by Finder (no iCloud prompt), never deleted outright."""
+    seconds = int(time.time()-started)+5
+    try:
+        result = subprocess.run(['osascript', '-e', TRASH_NEW, str(TEXTEDIT_FOLDER), str(seconds)], capture_output=True, text=True, timeout=30)
+        count = int(result.stdout.strip() or 0)
+    except (subprocess.TimeoutExpired, ValueError):
+        return []
+    return ['trashed test document']*count
+
+
 def snapshot():
     """What is open before a test: running apps, window ids, browser tab counts."""
     apps = app_names()
-    return {'apps': apps, 'mail_windows': mail_window_ids() if 'Mail' in apps else set(),
+    return {'apps': apps, 'mail_windows': mail_window_ids() if 'Mail' in apps else set(), 'started': time.time(),
+
             'windows': {app: window_ids(app) for app in WINDOW_APPS if app in apps},
             'tabs': {app: tab_counts(app) for app in TAB_APPS if app in apps}}
 
@@ -224,6 +257,9 @@ def restore(before):
         if not quietly('tell application "%s" to quit saving no' % app) and not quietly('tell application "%s" to quit' % app):
             subprocess.run(['pkill', '-x', app])
         closed.append('quit '+app)
+    if 'TextEdit' in now:
+        time.sleep(1)  # a quitting TextEdit writes its documents last
+        closed += trash_test_documents(before.get('started', time.time()))
     return closed
 
 
