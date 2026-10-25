@@ -1894,6 +1894,20 @@ class WindowlessAppTests(unittest.TestCase):
             step = task.plan_start(None, {'app': {'bundle_id': 'com.apple.finder', 'name': 'Finder'}, 'available_apps': [], 'app_windows': []}, provider)
         self.assertEqual(step['action']['url'], 'https://duckduckgo.com/?q=%5CNotion')  # "\Notion": the first result, its site
 
+    def test_reported_a_named_section_is_its_anchor_on_the_page(self):
+        # Live (v3): "…the first sentence of its History section" scrolled nine times past it.
+        task = ComputerTask('open the Wikipedia article on Coffee and tell me the first sentence of its History section', automatic=True)
+        front = {'app': {'bundle_id': 'com.apple.Safari', 'name': 'Safari'}}
+        with patch('companion.computer_task.validate_step', side_effect=lambda raw, *a, **k: {'action': raw['action']}):
+            with patch('companion.mac_apps.read_page', return_value=('Search', 'https://en.wikipedia.org/w/index.php?search=Coffee', '')):
+                self.assertIsNone(task.section_step(None, front))  # the search hasn't landed on the article yet
+            with patch('companion.mac_apps.read_page', return_value=('Coffee', 'https://en.wikipedia.org/wiki/Coffee#Etymology', '')):
+                step = task.section_step(None, front)
+                self.assertEqual((step['action']['url'], step['action']['browser_mode']), ('https://en.wikipedia.org/wiki/Coffee#History', 'current'))
+                self.assertIsNone(task.section_step(None, front))  # once
+                self.assertIsNone(ComputerTask('show me the comments on the top post', automatic=True).section_step(None, front))
+                self.assertIsNone(ComputerTask('take me to the history part', automatic=True).section_step(None, {'app': {'bundle_id': 'com.apple.finder'}}))
+
 
 class DefaultBrowserTests(unittest.TestCase):
     @unittest.skipUnless(__import__('sys').platform == 'darwin', 'macOS LaunchServices')

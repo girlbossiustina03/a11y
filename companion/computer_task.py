@@ -457,6 +457,8 @@ ORDINALS = {'first': 1, 'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5, 'sixth
 # A goal that asks for a fact ("…and tell me what year she was born"), not only to get somewhere.
 ASKS_FOR_FACT = re.compile(r"\b(?:tell|show)\s+me\s+(?:what|which|when|who|where|how|the|if|whether)\b|\bwhat(?:'s|s| is| are| was| were| year| time| day)\b"
                            r"|\b(?:which|when|who|how\s+(?:many|much|long|old|big))\b|\?\s*$", re.I)
+# "The History section of the Coffee article", "take me to the History part": a section of the page.
+SECTION = re.compile(r"\b(?:the|its|this|that)\s+(?P<name>[\w'’-]+(?:\s+[\w'’-]+){0,3}?)\s+(?:section|part|heading)\b", re.I)
 # "A new TextEdit document", "another window": a new one, never the one already open.
 NEW_DOCUMENT = re.compile(r'\b(?:new|another|fresh|blank|empty)\s+(?:[\w-]+\s+){0,2}(?:document|doc|window|file|page)\b', re.I)
 # A window goes full screen or into the Dock only when the goal says so.
@@ -1100,6 +1102,41 @@ class ComputerTask:
         self.pending = action
         return {'status': 'action', 'message': action.get('label', 'Using the menu')+'…', 'action': action, 'review': not self.automatic, 'visual_capture': None}
 
+    def section_step(self, desktop, snapshot):
+        """"The first sentence of its History section": the page's own anchor for that heading (#History),
+        one navigation in the current tab. The model scrolled nine times past it (live, v3); scrolling
+        until "History" shows stops at the contents list. A page without the anchor stays as it is."""
+        match = SECTION.search(self.goal)
+        app = snapshot.get('app') or {}
+        from .desktop_context import BROWSER_IDS
+        if not match or getattr(self, 'section_done', False) or app.get('bundle_id') not in BROWSER_IDS:
+            return None
+        name = match.group('name').strip()
+        if name.casefold() in ('first', 'top', 'last', 'next', 'main', 'comments', 'same', 'this', 'that'):
+            return None
+        from . import mac_apps
+        try:
+            _, url, _ = mac_apps.read_page(app['bundle_id'])
+        except (mac_apps.AppError, RuntimeError, OSError, ValueError):
+            return None
+        from urllib.parse import quote, urlsplit
+        parts = urlsplit(url)
+        if parts.scheme not in ('http', 'https') or parts.query:
+            return None  # still a search page: wait for the article
+        self.section_done = True
+        anchor = quote((name[0].upper()+name[1:]).replace(' ', '_'), safe="_-.()'")
+        address = url.split('#', 1)[0]+'#'+anchor
+        try:
+            action = validate_step({'status': 'action', 'message': 'Going to the section.', 'risk': 'navigation',
+                                    'action': {'type': 'browse_url', 'bundle_id': app['bundle_id'], 'url': address,
+                                               'label': 'Go to the '+name+' section', 'browser_mode': 'current'}},
+                                   desktop, snapshot, catalog=self._catalog or (), goal=self.goal)['action']
+        except (ValueError, ValidationError):
+            return None
+        self.pending = action
+        return {'status': 'action', 'message': action.get('label', 'Going to the section')+'…', 'action': action,
+                'review': not self.automatic, 'visual_capture': None}
+
     def new_document_step(self, desktop, snapshot):
         """"In a new TextEdit document": after launching, a new document. TextEdit reopened last time's
         document on launch and the population went into it (live, v3)."""
@@ -1650,7 +1687,7 @@ class ComputerTask:
         if read is not None:
             timing('task.step.summary', step_started, step=len(self.receipts)+1, status=read['status'], code='view_answer')
             return read
-        opened = (self.new_document_step(desktop, snapshot) or self.sites_step(desktop, snapshot) or self.tab_step(desktop, snapshot) or self.history_step(desktop, snapshot) or self.finder_sort_step(desktop, snapshot)
+        opened = (self.new_document_step(desktop, snapshot) or self.section_step(desktop, snapshot) or self.sites_step(desktop, snapshot) or self.tab_step(desktop, snapshot) or self.history_step(desktop, snapshot) or self.finder_sort_step(desktop, snapshot)
                   or self.menu_step(desktop, snapshot) or self.menu_pick_step(desktop, snapshot, provider, {'cancel': self.cancelled} if accepts_cancel(provider) else {}))
         if opened is not None:
             timing('task.step.summary', step_started, step=len(self.receipts)+1, status=opened['status'], code='menu')
