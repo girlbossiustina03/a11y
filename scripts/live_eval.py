@@ -76,8 +76,10 @@ def safari_windows():
     for attempt in range(3):  # a window closing mid-listing makes AppleScript fail
         try:
             out = osa('set out to ""', 'tell application "Safari"', 'repeat with w in windows',
-                      'set out to out & (id of w) & ":" & (count of tabs of w) & ","', 'end repeat', 'end tell', 'return out')
+                      'set out to out & (id of w) & ":" & (count of tabs of w) & ","', 'end repeat', 'end tell', 'return out', timeout=15)
             break
+        except subprocess.TimeoutExpired:
+            return {}  # Safari not answering (it hung once and the whole run crashed): treat as no windows
         except RuntimeError:
             if attempt == 2:
                 raise
