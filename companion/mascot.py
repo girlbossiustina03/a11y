@@ -219,6 +219,7 @@ class Mascot(QWidget):
             self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint |
                                 Qt.WindowType.Tool | Qt.WindowType.NoDropShadowWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)  # showing her never takes focus from the user's app
         # Qt Tool windows otherwise hide when another macOS app activates.
         self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow, True)
         self.setAccessibleName('a11y, your desktop companion. Conversation and task controls.')

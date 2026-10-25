@@ -7,6 +7,7 @@ import ctypes.util
 import sys
 
 UTILITY_WINDOW = 1 << 4
+NONACTIVATING_PANEL = 1 << 7  # takes typing without bringing A11y to the front (as Spotlight)
 TITLE_HIDDEN = 1
 CLOSE_BUTTON, MINIATURIZE_BUTTON, ZOOM_BUTTON = 0, 1, 2
 WINDOW_BELOW = -1
@@ -51,7 +52,12 @@ def prepare_window(widget, *, buttons=True):
         if not window:
             return False
         mask = send(window, 'styleMask', restype=ctypes.c_ulong)
-        send(window, 'setStyleMask:', mask & ~UTILITY_WINDOW, restype=None, argtypes=(ctypes.c_ulong,))
+        # Non-activating: showing her or a reply never brings A11y in front of the app a task is
+        # typing into ("Input is unavailable", "the focus changed", live after she became a real window).
+        send(window, 'setStyleMask:', (mask & ~UTILITY_WINDOW) | NONACTIVATING_PANEL, restype=None, argtypes=(ctypes.c_ulong,))
+        if send(window, 'respondsToSelector:', runtime().sel_registerName(b'setBecomesKeyOnlyIfNeeded:'),
+                restype=ctypes.c_bool, argtypes=(ctypes.c_void_p,)):
+            send(window, 'setBecomesKeyOnlyIfNeeded:', True, restype=None, argtypes=(ctypes.c_bool,))
         for kind in (CLOSE_BUTTON, MINIATURIZE_BUTTON, ZOOM_BUTTON):
             button = send(window, 'standardWindowButton:', kind, argtypes=(ctypes.c_long,))
             if not button:
