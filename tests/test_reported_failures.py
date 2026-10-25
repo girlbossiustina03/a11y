@@ -1619,3 +1619,46 @@ class SiteNotAppTests(unittest.TestCase):
         task = ComputerTask('open the News app and show me the top story', automatic=True)
         task._catalog = [{'name': 'News', 'bundle_id': 'com.apple.news'}]
         self.assertEqual(task.named_app({'app': {}})['name'], 'News')  # the app itself still opens
+
+
+class V3RoundFourTests(LiveRoutingTests):
+    def test_reported_a_wikipedia_article_is_not_an_app(self):
+        # Live (v3): "the History section of the Chess article" on Wikipedia launched the Chess app.
+        task = ComputerTask('on Wikipedia, what does the History section of the Chess article start with?', automatic=True)
+        task._catalog = [{'name': 'Chess', 'bundle_id': 'com.apple.Chess'}]
+        self.assertIsNone(task.named_app({'app': {'bundle_id': 'com.apple.finder'}}))
+        task = ComputerTask('open the Chess app and look up Chess on Wikipedia', automatic=True)
+        task._catalog = [{'name': 'Chess', 'bundle_id': 'com.apple.Chess'}]
+        self.assertEqual(task.named_app({'app': {}})['name'], 'Chess')
+
+    def test_reported_switching_to_a_tab_is_one_step(self):
+        # Live (v3): the tab was in front, then the model pressed Back twice.
+        task = ComputerTask('go back to the Wikipedia tab I had open', automatic=True)
+        task._catalog = [{'name': 'Safari', 'bundle_id': 'com.apple.Safari'}]
+        with patch('companion.computer_task.validate_step', side_effect=lambda raw, *a, **k: {'action': raw['action']}):
+            first = task.tab_step(None, {'app': {'bundle_id': 'com.apple.Safari'}})
+        self.assertEqual((first['action']['type'], first['action']['browser_mode']), ('browse_url', 'default'))
+        task.record(dict(first['action'], status='executed'))
+        self.assertEqual(task.tab_step(None, {'app': {'bundle_id': 'com.apple.Safari'}})['status'], 'done')
+
+    def test_reported_then_read_it_back_follows_the_note(self):
+        # Live (v3): "make a note … then read it back to me" made the note and stopped.
+        self.route('create_note', 'A11y test 9473 | the spare key is under the blue pot')
+        with patch('companion.mac_apps.prepare', return_value=('confirm', {'type': 'app_write', 'kind': 'create_note', 'title': 'A11y test 9473',
+                                                                             'body': 'the spare key is under the blue pot', 'label': 'Create note “A11y test 9473”'})):
+            plan = self.app.prepare_request('make a note titled "A11y test 9473" that says the spare key is under the blue pot, then read it back to me')
+        self.assertEqual(plan['remaining_request'], 'read it back to me')
+        with patch('companion.mac_apps.prepare', return_value=('confirm', {'type': 'app_write', 'kind': 'create_note', 'title': 'x',
+                                                                             'body': 'and then we left', 'label': 'Create note “x”'})):
+            plan = self.app.prepare_request('make a note titled "x" that says "and then we left"')
+        self.assertNotIn('remaining_request', plan)  # quoted text is the note's
+
+    def test_reported_nth_story_is_read_from_the_list(self):
+        # Live (v3): "what's the fifth story on Hacker News?" clicked a story instead of reading the list.
+        task = ComputerTask("what's the fifth story on Hacker News right now?", automatic=True)
+        regions = [{'text': '%d.' % n, 'x': 0.02, 'y': 0.1+n*0.03} for n in range(1, 8)] + \
+                  [{'text': 'Story number %d (example%d.com)' % (n, n), 'x': 0.05, 'y': 0.1+n*0.03+0.002} for n in range(1, 8)]
+        self.assertEqual(task.nth_item_answer(regions)['message'], 'The fifth story is “Story number 5”.')
+        inline = [{'text': '%d. Headline %d' % (n, n), 'x': 0.02, 'y': 0.1+n*0.03} for n in range(1, 8)]
+        self.assertIn('Headline 3', ComputerTask('tell me the 3rd result', automatic=True).nth_item_answer(inline)['message'])
+        self.assertIsNone(ComputerTask('open the fifth story', automatic=True).nth_item_answer(regions))  # opening is not reading

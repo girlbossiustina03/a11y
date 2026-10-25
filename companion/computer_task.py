@@ -406,6 +406,10 @@ LABEL_FILLER = frozenset('icon tab button link the a menu item left right top bo
 HISTORY_LIMIT = 4  # back/forward steps in a row before it counts as a loop ("go back two pages" is fine)
 
 
+def ordinal(n):
+    return {1: 'first', 2: 'second', 3: 'third'}.get(n, '%dth' % n)
+
+
 def label_words(label):
     import re
     return tuple(word for word in re.findall(r"[\w']+", label.casefold()) if word not in LABEL_FILLER)
@@ -439,6 +443,13 @@ FINDER_SORT = re.compile(r'\bsort(?:ed)?\b.*?\bby\s+(?P<column>name|kind|date ad
                          r'|\b(?P<newest>newest|latest|most recently)\s+(?:added|first)\b', re.I)
 SORT_TITLES = {'name': 'Name', 'kind': 'Kind', 'date added': 'Date Added', 'date modified': 'Date Modified', 'date created': 'Date Created',
                'date last opened': 'Date Last Opened', 'last opened': 'Date Last Opened', 'size': 'Size', 'tags': 'Tags'}
+# "What's the fifth story on Hacker News?": the line numbered 5 on screen, read in code (the model
+# clicked a story instead of reading the list, live v3).
+NTH_ITEM = re.compile(r"\b(?:what(?:'s|s| is| are)|tell me|read(?: me)?|which is|give me)\b.*?\bthe\s+(?P<n>first|second|third|fourth|fifth|"
+                      r"sixth|seventh|eighth|ninth|tenth|\d{1,2}(?:st|nd|rd|th)?)\s+(?:top\s+)?(?:story|post|headline|result|item|article|link|entry)\b", re.I)
+WORD_NUMBERS = {'first': 1, 'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5, 'sixth': 6, 'seventh': 7, 'eighth': 8, 'ninth': 9, 'tenth': 10}
+# "Switch to the GitHub tab", "go back to the Wikipedia tab I had open": that site's open tab.
+SWITCH_TAB = re.compile(r'^\W*(?:please\s+)?(?:switch|go\s+back|get\s+back|return|go|take\s+me)\s+(?:back\s+)?to\s+(?:the\s+|my\s+)?(?P<site>.+?)\s+tab\b', re.I)
 # "Go back", "go back in Safari", "go forward two pages": the browser's own back/forward, in code.
 HISTORY_GOAL = re.compile(r'^\W*(?:please\s+|can you\s+)?(?:go|take me|bring me|navigate|move)\s+(?P<way>back|forward)(?:\s+(?P<count>one|a|two|three|1|2|3)\s+pages?)?'
                           r'(?:\s+(?:a\s+page|to\s+the\s+(?:previous|last|next)\s+page))?(?:\s+(?:in|on)\s+(?P<app>safari|chrome|google chrome|the browser))?\W*$', re.I)
@@ -867,6 +878,33 @@ class ComputerTask:
             return {'status': 'needs_user', 'action': None, 'message': 'I clicked '+label+', but nothing on the screen changed.'}
         return {'status': 'done', 'action': None, 'message': 'Clicked '+label+'.'}
 
+    def nth_item_answer(self, regions):
+        """The title on the screen's line numbered n ("5. Some title (example.com)"), or None."""
+        match = NTH_ITEM.search(self.goal)
+        if not match or len(regions) < 5:
+            return None
+        word = match.group('n').casefold()
+        n = WORD_NUMBERS.get(word) or int(re.sub(r'\D', '', word))
+        ordered = sorted(regions, key=lambda r: (round(r.get('y', 0), 3), r.get('x', 0)))
+        title = None
+        for index, region in enumerate(ordered):
+            text = str(region.get('text', '')).strip()
+            inline = re.match(r'^%d[.)]\s+(.{3,})$' % n, text)
+            if inline:
+                title = inline.group(1)
+                break
+            if re.fullmatch(r'%d[.)]?' % n, text):
+                # The number in its own box: the title is the nearest text to its right on that line.
+                beside = [r for r in ordered if r is not region and abs(r.get('y', 0)-region.get('y', 0)) < 0.012 and r.get('x', 0) > region.get('x', 0)]
+                if beside:
+                    title = str(min(beside, key=lambda r: r.get('x', 0)).get('text', '')).strip()
+                    break
+        if not title:
+            return None
+        title = re.sub(r'\s*\((?:[\w-]+\.)+[a-z]{2,}(?:/\S*)?\)\s*$', '', title)  # "(example.com)"
+        return {'status': 'done', 'action': None, 'message': 'The %s %s is “%s”.' % (word if word in WORD_NUMBERS else ordinal(n),
+                                                                                      match.group(0).split()[-1].casefold(), title)}
+
     def view_answer(self, provider, snapshot, regions, cancel_kwargs, desktop, vision, desktop_generation, vision_generation):
         """"Any new notifications?" once code opened the Activity view: the answer is that view's
         text. More model clicking there wandered between Activity and the bell (live)."""
@@ -907,6 +945,35 @@ class ComputerTask:
         self.pending = action
         return {'status': 'action', 'message': action.get('label') or 'Sorting.', 'action': action,
                 'review': not self.automatic, 'visual_capture': None}
+
+    def tab_step(self, desktop, snapshot):
+        """"Switch to the Wikipedia tab": open the site, which brings its open tab forward (the bridge
+        reuses it), then done. The model clicked Back twice after the tab was already in front (live, v3)."""
+        match = SWITCH_TAB.match(self.goal)
+        if not match:
+            return None
+        from .web_apps import find_site
+        site = find_site(match.group('site'))
+        if not site:
+            return None
+        if any(receipt.get('type') == 'browse_url' for receipt in self.receipts):
+            return {'status': 'done', 'action': None, 'message': 'Switched to the '+match.group('site').strip()+' tab.'}
+        from .desktop_context import BROWSER_IDS, default_browser_id
+        front = (snapshot.get('app') or {}).get('bundle_id')
+        wanted = front if front in BROWSER_IDS else default_browser_id()  # the browser in front, else the default one
+        browser = next((a for a in self._catalog or [] if a['bundle_id'] == wanted), None) or \
+            next((a for a in self._catalog or [] if a['bundle_id'] in BROWSER_IDS), None)
+        if browser is None:
+            return None
+        try:
+            action = validate_step({'status': 'action', 'message': 'Switching tabs.', 'risk': 'navigation',
+                                    'action': {'type': 'browse_url', 'bundle_id': browser['bundle_id'], 'url': site[1],
+                                               'label': 'Switch to '+site[1], 'browser_mode': 'default'}}, desktop, snapshot,
+                                   catalog=self._catalog or (), goal=self.goal)['action']
+        except (ValueError, ValidationError):
+            return None
+        self.pending = action
+        return {'status': 'action', 'message': 'Switching to the tab.', 'action': action, 'review': not self.automatic, 'visual_capture': None}
 
     def history_step(self, desktop, snapshot):
         """"Go back in Safari" is one press of ⌘[ in the browser, then done. The model went back
@@ -1053,8 +1120,11 @@ class ComputerTask:
         from .web_apps import find_site
         site = find_site(unquoted)
         if site:
-            # "Hacker News" is a website, not Apple's News app (it launched News, live v3).
-            apps = [a for a in apps if normalized(a['name']) not in normalized(site[0]) or normalized(a['name']) == normalized(site[0])]
+            # "Hacker News" is a website, not Apple's News app (it launched News, live v3), and "the Chess
+            # article on Wikipedia" is a page, not the Chess app (live v3): with a site named, an app counts
+            # only as "the Chess app" or "in Chess".
+            apps = [a for a in apps if normalized(a['name']) == normalized(site[0]) or re.search(
+                r'\b'+re.escape(a['name'].casefold())+r'\s+app\b|\b(?:in|with|using)\s+'+re.escape(a['name'].casefold())+r'\b', unquoted.casefold())]
         if not apps:
             return None
         app = max(apps, key=lambda a: len(a['name']))
@@ -1337,12 +1407,17 @@ class ComputerTask:
         viewed = self.view_step(desktop, snapshot, regions, visual, image_data, vision)
         if viewed is not None:
             return viewed
+        listed = self.nth_item_answer(regions) if self.receipts else None  # once the page is open
+        if listed is not None:
+            timing('task.step.summary', step_started, step=len(self.receipts)+1, status='done', code='nth_item')
+            return listed
         read = self.view_answer(provider, snapshot, regions, {'cancel': self.cancelled} if accepts_cancel(provider) else {},
                                 desktop, vision, desktop_generation, vision_generation)
         if read is not None:
             timing('task.step.summary', step_started, step=len(self.receipts)+1, status=read['status'], code='view_answer')
             return read
-        opened = self.history_step(desktop, snapshot) or self.finder_sort_step(desktop, snapshot) or self.menu_step(desktop, snapshot)
+        opened = (self.tab_step(desktop, snapshot) or self.history_step(desktop, snapshot) or self.finder_sort_step(desktop, snapshot)
+                  or self.menu_step(desktop, snapshot))
         if opened is not None:
             timing('task.step.summary', step_started, step=len(self.receipts)+1, status=opened['status'], code='menu')
             return opened

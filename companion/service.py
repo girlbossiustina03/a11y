@@ -538,8 +538,13 @@ class Companion:
             return self.last_request_plan
         if kind == 'confirm':
             self.pending_app_write = value
+            # "Make a note … then read it back to me": the rest runs once the change is confirmed and done
+            # (the router kept it in the note, live v3). Quoted text is the note's, never a step.
+            unquoted = re.sub(r'"[^"]*"|“[^”]*”', lambda m: ' '*len(m.group(0)), request)
+            then = re.search(r'(?:,\s*|\s+)(?:and\s+)?then\s+(.+?)\s*[.!?]*$', unquoted, re.I)
             self.last_request_plan = {'operation': 'answer', 'app_name': '', 'target': '', 'computed': True,
-                                      'reply': value['label']+'?', 'app_write': True}
+                                      'reply': value['label']+'?', 'app_write': True,
+                                      **({'remaining_request': request[then.start(1):then.end(1)]} if then else {})}
             return self.last_request_plan
         self.last_request_plan = {'operation': 'answer', 'app_name': '', 'target': '', 'reply': value,
                                   'computed': True, 'full_text': True, 'read_aloud': bool(READ_ALOUD.search(request))}
@@ -1220,6 +1225,13 @@ class Companion:
                 # the second last image" → "the second last image") and carried an earlier request
                 # into a new one ("what is in my notes" → "read the last email").
                 goal = request
+                page_title = re.search(r'\bthe\s+(?:page\s+)?title\s+of\s+(?:this|the current|the open)\s+(?:web\s*)?(?:page|tab|site|article)\b', request, re.I)
+                if page_title and self.desktop_context and self.front_browser() == ((self.desktop_context.context().get('app') or {}).get('bundle_id')):
+                    # "Write the title of this web page in a new TextEdit document": the title is known now; the task
+                    # switched to TextEdit first and lost the page (live, v3).
+                    title = re.sub(r'^\(\d+\)\s*', '', (self.desktop_context.context().get('window') or {}).get('title', '')).strip()[:200]
+                    if title:
+                        goal = request[:page_title.start()]+'“'+title.replace('“', '"').replace('”', '"')+'”'+request[page_title.end():]
                 # A goal that names no app ("any notifications for me?") is about what the user is
                 # looking at; without it a task once went to Mail from Teams (live).
                 looking_at = self.front_app() if not opening and not self.names_any_app(request) else ''
@@ -1415,7 +1427,8 @@ class Companion:
             label = action.get('confirmation_label', action['label'])
             response['message'] = label+'…' if action['type'] in ('launch_app', 'browse_url', 'focus_app', 'new_window', 'play_media', 'close_window', 'close_tab', 'quit_app') else 'Ready to '+label[0].lower()+label[1:]+'. Confirm below.'
         if request_plan and request_plan.get('remaining_request'):
-            response['message'] += ' Still pending: '+request_plan['remaining_request']+'; this part has not been executed.'
+            if (response.get('desktop_action') or {}).get('type') != 'app_write':  # a write carries on by itself once confirmed
+                response['message'] += ' Still pending: '+request_plan['remaining_request']+'; this part has not been executed.'
             if response.get('desktop_action'):
                 response['desktop_action']['remaining_request'] = request_plan['remaining_request']
         used = set(response['source_ids'])
