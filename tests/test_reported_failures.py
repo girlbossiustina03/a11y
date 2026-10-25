@@ -1861,7 +1861,7 @@ class WindowlessAppTests(unittest.TestCase):
         # Live (v2): "where can I see the sites I visited? open it" clicked around Safari for 22 steps.
         task = ComputerTask('where can I see the sites I visited? open it', automatic=True)
         task.brought = {'com.apple.Safari'}  # the task switched to Safari first
-        items = ['Safari > Services > Add to Music as a Spoken Track', 'Safari > Clear History…', 'File > Close Window', 'History > Show All History', 'History > Recently Closed > Example Domain',
+        items = ['Safari > Services > Add to Music as a Spoken Track', 'Edit > Find > Find…', 'Edit > Search', 'Safari > Clear History…', 'File > Close Window', 'History > Show All History', 'History > Recently Closed > Example Domain',
                  'Bookmarks > Show Bookmarks', 'View > Enter Full Screen', 'History > Home', 'History > Weather - BBC News']
         desktop = Mock(bridge=Mock(menu_items=Mock(return_value=items)))
         provider = Mock()
@@ -1880,6 +1880,19 @@ class WindowlessAppTests(unittest.TestCase):
         self.assertIsNone(other.menu_pick_step(desktop, {'app': {'bundle_id': 'com.apple.Safari'}}, provider, {}))
         self.assertIsNone(ComputerTask('open apple.com and find the iPhone page', automatic=True)
                           .menu_pick_step(desktop, {'app': {'bundle_id': 'com.apple.Safari'}}, provider, {}))  # a site's own pages
+
+    def test_reported_an_app_that_is_not_installed_opens_its_own_site(self):
+        # Live (v2): "I want to use Notion" (not installed) ended on a DuckDuckGo results page.
+        task = ComputerTask('I want to use Notion', automatic=True)
+        task._catalog = [{'name': 'Safari', 'bundle_id': 'com.apple.Safari'}]
+        class Planner:
+            def plan_task(self, observation):
+                return {'start': 'app', 'app': 'Notion', 'url': '', 'query': '', 'steps': [], 'done_when': ''}
+        provider = Planner()
+        with patch('companion.computer_task.validate_step', side_effect=lambda raw, *a, **k: {'action': raw['action']}), \
+                patch('companion.desktop_context.default_browser_id', return_value='com.apple.Safari'):
+            step = task.plan_start(None, {'app': {'bundle_id': 'com.apple.finder', 'name': 'Finder'}, 'available_apps': [], 'app_windows': []}, provider)
+        self.assertEqual(step['action']['url'], 'https://duckduckgo.com/?q=%5CNotion')  # "\Notion": the first result, its site
 
 
 class DefaultBrowserTests(unittest.TestCase):

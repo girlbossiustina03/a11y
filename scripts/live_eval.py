@@ -352,6 +352,10 @@ def settings_pane_is(name):
     """True when System Settings shows the pane: its header, right of the sidebar (OCR)."""
     from companion.vision import ScreenVision
     sample = desktop_sample('com.apple.systempreferences')
+    # The window's title names the pane ("Battery – Fully Charged"); the header OCR alone failed when
+    # her reply window lay over it (live).
+    if re.split(r'\s+[–—-]\s+', str((sample.get('window') or {}).get('title', '')))[0].strip() == name:
+        return True
     window = (sample.get('window') or {}).get('bounds') or {}
     sidebar = next((item['bounds'] for item in sample.get('lists', []) if item.get('label') == 'Sidebar'), None)
     if not window or not sidebar:

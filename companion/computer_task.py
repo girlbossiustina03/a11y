@@ -1052,8 +1052,9 @@ class ComputerTask:
         """Once per task: the menu command the goal needs, chosen by the text model from the app's own
         menu items (an enum, never free text). The model only saw menu names, so "where can I see the
         sites I visited? open it" clicked around Safari for 22 steps (live, v2)."""
-        if getattr(self, 'menu_picked', False) or len(self.receipts) > 2 or self.queue:
-            return None
+        if getattr(self, 'menu_picked', False) or len(self.receipts) > 2 or self.queue or self.goal_mode == 'draft' \
+                or any(r.get('type') in ('new_window', 'type_text', 'choose_menu') for r in self.receipts):
+            return None  # writing has its own steps: it chose File > New after the new document opened (live)
         from .web_apps import named_addresses
         app = snapshot.get('app') or {}
         bridge = getattr(desktop, 'bridge', None)
@@ -1071,6 +1072,7 @@ class ComputerTask:
         for path in items if isinstance(items, list) else []:
             leaf = str(path).rsplit('>', 1)[-1].strip()
             if (isinstance(path, str) and len(path) <= 90 and not MENU_UNSAFE.search(path) and not MENU_CONTENT.search(path)
+                    and not re.search(r'\b(?:find|search)\b', leaf, re.I)  # searching is search_in_app's (Edit > Search in Maps left typing nowhere, live)
                     and not FULL_SCREEN_MENU.search(path) and not re.search(r' [-–—|] |https?:|\.\w{2,4}\b|…\w', leaf)
                     and path not in commands):
                 commands.append(path)
@@ -1434,6 +1436,10 @@ class ComputerTask:
                 # Not installed: its website, else a search for it (GitHub went to Mail without one, live).
                 start = 'website' if plan.get('url') else 'search'
                 plan = dict(plan, query=plan.get('query') or plan.get('app') or self.goal)
+                if not plan.get('url') and str(plan.get('app', '')).strip():
+                    # Its own website: DuckDuckGo's "\" goes to the first result, the product's site.
+                    # "I want to use Notion" (not installed) ended on a results page (live, v2).
+                    plan = dict(plan, query='\\'+str(plan['app']).strip())
         if start in ('website', 'search') and action is None:
             address = str(plan.get('url', '')).strip() if start == 'website' else ''
             if start == 'website' and '://' not in address and '.' in address:
