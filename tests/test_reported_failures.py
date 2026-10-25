@@ -1846,6 +1846,17 @@ class WindowlessAppTests(unittest.TestCase):
             self.assertEqual(then['action'], {'type': 'new_window', 'bundle_id': 'com.apple.TextEdit'})
             self.assertIsNone(task.new_document_step(None, {'app': {'bundle_id': 'com.apple.TextEdit'}}))  # once
 
+    def test_reported_typed_text_is_not_typed_again(self):
+        # Live (v2): "onions ⏎ bread ⏎ apples" typed, then typed again five times.
+        from companion.computer_task import already_typed
+        task = ComputerTask('in a new TextEdit document write a shopping list', automatic=True)
+        task.pending = {'type': 'type_text', 'text': 'onions\nbread\napples'}
+        task.record({'type': 'type_text', 'label': 'Type', 'status': 'submitted'})
+        self.assertTrue(already_typed('Onions\napples', task.typed))
+        self.assertTrue(already_typed('bread', task.typed))
+        self.assertFalse(already_typed('onions\nmilk', task.typed))
+        self.assertFalse(already_typed('', task.typed))
+
 
 class DefaultBrowserTests(unittest.TestCase):
     @unittest.skipUnless(__import__('sys').platform == 'darwin', 'macOS LaunchServices')

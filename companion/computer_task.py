@@ -328,6 +328,14 @@ def compact_marks(marks):
     return ['%s|%s|%s|%.3f,%.3f' % (m['id'], m['kind'], m['label'], m['x']+m['width']/2, m['y']+m['height']/2) for m in marks]
 
 
+def already_typed(text, typed):
+    """Whether every line of text was typed already in this task (case and spacing aside)."""
+    words = lambda value: ' '.join(value.casefold().split())
+    lines = [words(line) for line in text.split('\n') if line.strip()]
+    done = {words(line) for value in typed for line in value.split('\n') if line.strip()}
+    return bool(lines) and all(line in done for line in lines)
+
+
 def resolve_target(raw, marks):
     """click_target → the click at that target's center, labelled with its name."""
     action = raw.get('action') if isinstance(raw, dict) else None
@@ -1478,6 +1486,8 @@ class ComputerTask:
         return count
 
     def record(self, receipt):
+        if (self.pending or {}).get('type') == 'type_text' and receipt.get('type') == 'type_text' and receipt.get('status') != 'failed':
+            self.typed = getattr(self, 'typed', [])+[self.pending.get('text', '')]
         self.pending = None
         self.receipts.append(dict({key: deepcopy(receipt.get(key)) for key in ('type', 'label', 'key', 'status', 'before', 'after', 'native_result', 'effect')
                                    if key != 'effect' or key in receipt},
@@ -1702,6 +1712,10 @@ class ComputerTask:
                 step = self.app_click(step, desktop, snapshot, visual)
                 if fast_pass and step['status'] == 'action' and step['action']['type'] == 'click_point' and not text_grounded_click(step['action'], regions, snapshot, visual['screen']):
                     raise ValidationError('That point is not grounded in OCR text or a current accessible control. Inspect the supplied full image before choosing a click.')
+                if step['status'] == 'action' and step['action']['type'] == 'type_text' and self.goal_mode != 'inspect' and already_typed(step['action'].get('text', ''), getattr(self, 'typed', [])):
+                    # The shopping list was typed, then typed again five times (live, v2): the model doesn't see it worked.
+                    raise ValidationError('That text is already typed in this task. If the goal is done, report status=done; '
+                                          'otherwise type only what is still missing.')
                 if step['status'] == 'action' and self.repeats(step['action']) >= 2:
                     if self.goal_mode == 'inspect' and regions and ASKS_FOR_FACT.search(self.goal) and not self.is_history(step['action']):
                         # A read-only goal whose clicks change nothing: the answer is on the screen already.
