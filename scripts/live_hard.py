@@ -8,6 +8,7 @@ notes and reminders carry the marker "A11y test", and nothing is sent to anyone.
 import json
 import random
 import re
+import time
 import urllib.parse
 import urllib.request
 
@@ -188,7 +189,11 @@ def build(eval_window, count, seed):
         other = pick([('https://en.wikipedia.org/wiki/Coffee', 'Wikipedia', 'Wikipedia'), ('https://github.com/explore', 'GitHub', 'GitHub')])
         def setup(runner):
             eval_window.ensure(other[0], wait_title=other[2])
-            eval_window.ensure('https://duckduckgo.com')
+            # A second tab in front, so the site's tab really is another tab (loading it into the same
+            # tab only left it in that tab's history, and the task could not pass).
+            le.osa('tell application "Safari"', 'tell window id %d' % eval_window.id,
+                   'set current tab to (make new tab at end of tabs with properties {URL:"https://duckduckgo.com"})', 'end tell', 'activate', 'end tell')
+            time.sleep(2)
         before = {}
         def counted(runner):
             setup(runner)

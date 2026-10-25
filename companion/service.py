@@ -542,6 +542,9 @@ class Companion:
             # (the router kept it in the note, live v3). Quoted text is the note's, never a step.
             unquoted = re.sub(r'"[^"]*"|“[^”]*”', lambda m: ' '*len(m.group(0)), request)
             then = re.search(r'(?:,\s*|\s+)(?:and\s+)?then\s+(.+?)\s*[.!?]*$', unquoted, re.I)
+            if then:
+                # The confirmed action carries it: that is what runs it afterwards (it was only on the plan, live v3).
+                self.pending_app_write = dict(value, remaining_request=request[then.start(1):then.end(1)])
             self.last_request_plan = {'operation': 'answer', 'app_name': '', 'target': '', 'computed': True,
                                       'reply': value['label']+'?', 'app_write': True,
                                       **({'remaining_request': request[then.start(1):then.end(1)]} if then else {})}
@@ -817,7 +820,10 @@ class Companion:
         if isinstance(interpreted, dict):
             for key in ('computed', 'full_text', 'read_aloud', 'app_write'):  # set only by code
                 interpreted.pop(key, None)
-            if interpreted.get('operation') == 'browser_search':
+            searching = interpreted.get('operation') == 'browser_search' or (
+                # The router opened the site for "search Apple's support site for battery" (live, v3).
+                interpreted.get('operation') == 'browser_open' and re.match(r'^\W*(?:please\s+)?search\b', request, re.I))
+            if searching:
                 from .web_apps import find_site
                 site = find_site(request)
                 from .web_apps import SEARCH_URLS
@@ -830,7 +836,7 @@ class Companion:
                     from urllib.parse import quote_plus
                     interpreted = dict(interpreted, operation='browser_open', remaining_request='',
                                        target=SEARCH_URLS[site[0]].format(quote_plus(query.group(1).strip(' "\'“”'))))
-                elif site and site[0] not in str(interpreted.get('target', '')).casefold():
+                elif interpreted.get('operation') == 'browser_search' and site and site[0] not in str(interpreted.get('target', '')).casefold():
                     # "On Wikipedia, search for Bucharest" searched the web and lost Wikipedia (live):
                     # open the named site, then search there.
                     from .request_plan import with_opening

@@ -1586,6 +1586,11 @@ class V3RoundThreeTests(LiveRoutingTests):
         self.route('browser_search', "Apple's support site for battery")
         plan = self.app.prepare_request("search Apple's support site for battery")
         self.assertEqual((plan['operation'], plan['target']), ('browser_open', 'https://support.apple.com/kb/index?page=search&q=battery'))
+        self.route('browser_open', 'https://support.apple.com')  # the router opened the site instead (live, v3)
+        plan = self.app.prepare_request("search Apple's support site for battery")
+        self.assertEqual(plan['target'], 'https://support.apple.com/kb/index?page=search&q=battery')
+        self.route('browser_open', 'https://support.apple.com')
+        self.assertNotIn('search', str(self.app.prepare_request("open Apple's support site").get('target')))  # opening is not searching
 
     def test_reported_named_places_inside_sites(self):
         from companion.web_apps import find_site, same_site_hosts
@@ -1674,6 +1679,7 @@ class V3RoundFourTests(LiveRoutingTests):
                                                                              'body': 'the spare key is under the blue pot', 'label': 'Create note “A11y test 9473”'})):
             plan = self.app.prepare_request('make a note titled "A11y test 9473" that says the spare key is under the blue pot, then read it back to me')
         self.assertEqual(plan['remaining_request'], 'read it back to me')
+        self.assertEqual(self.app.pending_app_write['remaining_request'], 'read it back to me')  # what runs it once confirmed
         with patch('companion.mac_apps.prepare', return_value=('confirm', {'type': 'app_write', 'kind': 'create_note', 'title': 'x',
                                                                              'body': 'and then we left', 'label': 'Create note “x”'})):
             plan = self.app.prepare_request('make a note titled "x" that says "and then we left"')
@@ -1817,12 +1823,16 @@ class WindowlessAppTests(unittest.TestCase):
                        'app_windows': [{'bundle_id': 'com.apple.TextEdit', 'title': 'Dentist Appointment'}]}
         for goal, kind in (('in a new TextEdit document write a shopping list', 'new_window'),
                            ('write the date in TextEdit', 'focus_app')):
-            task = ComputerTask(goal, automatic=True)
-            task._catalog = [{'name': 'TextEdit', 'bundle_id': 'com.apple.TextEdit'}]
-            proposed = []
-            with patch('companion.computer_task.validate_step', side_effect=lambda raw, *a, **k: proposed.append(raw['action']) or {'action': raw['action']}):
-                task.plan_start(None, open_window, Mock())
-            self.assertEqual(proposed[0]['type'], kind, goal)
+            for front in ('com.apple.finder', 'com.apple.TextEdit'):  # TextEdit in front too (live, v3)
+                if front == 'com.apple.TextEdit' and kind == 'focus_app':
+                    continue
+                open_window['app'] = {'bundle_id': front, 'name': front.rsplit('.', 1)[1]}
+                task = ComputerTask(goal, automatic=True)
+                task._catalog = [{'name': 'TextEdit', 'bundle_id': 'com.apple.TextEdit'}]
+                proposed = []
+                with patch('companion.computer_task.validate_step', side_effect=lambda raw, *a, **k: proposed.append(raw['action']) or {'action': raw['action']}):
+                    task.plan_start(None, open_window, Mock())
+                self.assertEqual(proposed[0]['type'], kind, (goal, front))
 
 
 class DefaultBrowserTests(unittest.TestCase):

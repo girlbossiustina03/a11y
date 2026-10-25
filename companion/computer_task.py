@@ -1250,7 +1250,9 @@ class ComputerTask:
         if not apps:
             return None
         app = max(apps, key=lambda a: len(a['name']))
-        return False if app['bundle_id'] == (snapshot.get('app') or {}).get('bundle_id') else app
+        # In front already: nothing to open, unless the goal wants a new document (TextEdit was in front and
+        # the population went into the open one, live v3).
+        return False if app['bundle_id'] == (snapshot.get('app') or {}).get('bundle_id') and not NEW_DOCUMENT.search(self.goal) else app
 
     def plan_start(self, desktop, snapshot, provider):
         """Plan once, with the text model, then take the start in code: open the app, go to the

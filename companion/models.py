@@ -116,8 +116,10 @@ def validate_response(value, allowed_sources, *, planning=False, has_screen=Fals
             allowed = {'add_event': ('title', 'start', 'end'), 'add_reminder': ('title', 'due'),
                        'complete_reminder': ('id', 'title'), 'delete_reminder': ('id', 'title'), 'create_note': ('title', 'body'), 'run_shortcut': ('name',)}
             fields = allowed.get(action.get('kind'))
-            if fields is None or set(action) != {'type', 'kind', 'label', *fields}:
+            if fields is None or set(action)-{'remaining_request'} != {'type', 'kind', 'label', *fields}:
                 raise ValidationError('Unsupported app change.')
+            if 'remaining_request' in action and (not isinstance(action['remaining_request'], str) or len(action['remaining_request']) > 500):
+                raise ValidationError('Invalid follow-up for that app change.')  # code's "then …", run after the change
             for key in fields:
                 value = action[key]
                 if key in ('start', 'end', 'due'):
