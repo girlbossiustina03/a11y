@@ -1602,3 +1602,15 @@ class GoBackCountTests(unittest.TestCase):
         task.record({'type': 'press_key', 'label': 'Press ⌘+[ in Safari', 'status': 'executed'})
         step = task.history_step(None, {'app': {'bundle_id': 'com.apple.Safari'}})
         self.assertEqual(step['status'], 'done')
+
+
+
+class SiteNotAppTests(unittest.TestCase):
+    def test_reported_hacker_news_is_not_the_news_app(self):
+        # Live (v3): "what's the fifth story on Hacker News?" launched Apple News and failed.
+        task = ComputerTask("what's the fifth story on Hacker News right now?", automatic=True)
+        task._catalog = [{'name': 'News', 'bundle_id': 'com.apple.news'}, {'name': 'Safari', 'bundle_id': 'com.apple.Safari'}]
+        self.assertIsNone(task.named_app({'app': {'bundle_id': 'com.apple.finder'}}))
+        task = ComputerTask('open the News app and show me the top story', automatic=True)
+        task._catalog = [{'name': 'News', 'bundle_id': 'com.apple.news'}]
+        self.assertEqual(task.named_app({'app': {}})['name'], 'News')  # the app itself still opens

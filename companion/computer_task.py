@@ -1050,6 +1050,11 @@ class ComputerTask:
         from .desktop_context import BROWSER_IDS
         apps = [a for a in self._catalog or [] if len(normalized(a['name'])) > 3 and normalized(a['name']) in spans
                 and a['name'] not in ('Finder', 'A11y') and a['bundle_id'] not in BROWSER_IDS | {'com.a11y.companion'}]  # a browser named is about a site; never A11y itself
+        from .web_apps import find_site
+        site = find_site(unquoted)
+        if site:
+            # "Hacker News" is a website, not Apple's News app (it launched News, live v3).
+            apps = [a for a in apps if normalized(a['name']) not in normalized(site[0]) or normalized(a['name']) == normalized(site[0])]
         if not apps:
             return None
         app = max(apps, key=lambda a: len(a['name']))
