@@ -221,7 +221,9 @@ def build(eval_window, count, seed):
                 name = subprocess_osa(['tell application "Finder" to return name of front Finder window'])
             except RuntimeError:
                 return False
-            return folder.casefold() in name.casefold() and 'added' in column.casefold()
+            chose = any('date added' in str(r.get('label', '')).casefold() for r in (state.get('task') or {}).get('receipts', []))
+            # Finder can't report grouping by AppleScript: grouped by Date Added (when it groups) counts too.
+            return folder.casefold() in name.casefold() and ('added' in column.casefold() or chose)
         return Task('finder_sort', request, [('sorted by date added', sorted_by_added), ('no failure', no_failure)],
                     wanted_app='Finder', timeout=300)
 

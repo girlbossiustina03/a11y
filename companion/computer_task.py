@@ -897,7 +897,8 @@ class ComputerTask:
         elif folder and folder.casefold() not in window.casefold():
             proposal = {'type': 'choose_menu', 'path': 'Go > '+folder}
         else:
-            proposal = {'type': 'choose_menu', 'path': 'View > Sort By > '+column}
+            # Finder has no "Sort By" while it groups items; then grouping by the same column orders them.
+            proposal = {'type': 'choose_menu', 'path': 'View > Sort By > '+column+' | View > Group By > '+column}
         try:
             action = validate_step({'status': 'action', 'message': 'Sorting.', 'risk': 'navigation', 'action': proposal},
                                    desktop, snapshot)['action']

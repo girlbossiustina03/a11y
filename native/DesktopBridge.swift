@@ -594,20 +594,42 @@ if let index = args.firstIndex(of: "--menu"), index+2 < args.count {
     func clean(_ title: String) -> String {
         title.lowercased().replacingOccurrences(of: "…", with: "").replacingOccurrences(of: "...", with: "").trimmingCharacters(in: .whitespaces)
     }
-    let path = args[index+2].components(separatedBy: ">").map { clean($0) }.filter { !$0.isEmpty }
-    guard !path.isEmpty, var level = element(attr(app, "AXMenuBar")) else { emit(["error": "That app has no menu bar."]); exit(1) }
-    var titles: [String] = []
-    for (depth, wanted) in path.enumerated() {
-        let items = depth == 0 ? ((attr(level, "AXChildren") as? [AXUIElement]) ?? [])
-            : (((attr(level, "AXChildren") as? [AXUIElement])?.first).flatMap { attr($0, "AXChildren") as? [AXUIElement] } ?? [])
-        let named = items.filter { !string($0, "AXTitle").isEmpty }
-        guard let match = named.first(where: { clean(string($0, "AXTitle")) == wanted }) else {
-            emit(["error": "No menu item “" + wanted + "”. Available: " + named.map { string($0, "AXTitle") }.prefix(30).joined(separator: ", ")]); exit(1)
+    guard let bar = element(attr(app, "AXMenuBar")) else { emit(["error": "That app has no menu bar."]); exit(1) }
+    // "View > Sort By > Date Added | View > Group By > Date Added": the first path that exists wins
+    // (Finder has no "Sort By" while it groups items).
+    func resolve(_ text: String) -> (AXUIElement, [String], Int)? {
+        let path = text.components(separatedBy: ">").map { clean($0) }.filter { !$0.isEmpty }
+        guard !path.isEmpty else { return nil }
+        var level = bar
+        var titles: [String] = []
+        for (depth, wanted) in path.enumerated() {
+            let items = depth == 0 ? ((attr(level, "AXChildren") as? [AXUIElement]) ?? [])
+                : (((attr(level, "AXChildren") as? [AXUIElement])?.first).flatMap { attr($0, "AXChildren") as? [AXUIElement] } ?? [])
+            guard let match = items.first(where: { !string($0, "AXTitle").isEmpty && clean(string($0, "AXTitle")) == wanted }),
+                  (attr(match, "AXEnabled") as? Bool) != false else { return nil }
+            titles.append(string(match, "AXTitle"))
+            level = match
         }
-        if (attr(match, "AXEnabled") as? Bool) == false { emit(["error": "That menu item is not available right now."]); exit(1) }
-        titles.append(string(match, "AXTitle"))
-        level = match
+        return (level, titles, path.count)
     }
+    let choices = args[index+2].components(separatedBy: "|")
+    guard let (found, titles, depth) = choices.lazy.compactMap({ resolve($0) }).first else {
+        let first = choices[0].components(separatedBy: ">").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        var level = bar
+        var named: [String] = []
+        for (depth, wanted) in first.enumerated() {  // say which item is missing, as before
+            let items = depth == 0 ? ((attr(level, "AXChildren") as? [AXUIElement]) ?? [])
+                : (((attr(level, "AXChildren") as? [AXUIElement])?.first).flatMap { attr($0, "AXChildren") as? [AXUIElement] } ?? [])
+            named = items.map { string($0, "AXTitle") }.filter { !$0.isEmpty }
+            guard let next = items.first(where: { clean(string($0, "AXTitle")) == clean(wanted) }) else {
+                emit(["error": "No menu item “" + wanted + "”. Available: " + named.prefix(30).joined(separator: ", ")]); exit(1)
+            }
+            level = next
+        }
+        emit(["error": "That menu item is not available right now."]); exit(1)
+    }
+    let level = found
+    let path = Array(repeating: "", count: depth)
     owner.activate(options: [])
     AXUIElementSetMessagingTimeout(level, 1)
     if path.count == 1 {

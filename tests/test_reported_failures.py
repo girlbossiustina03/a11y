@@ -1589,7 +1589,7 @@ class V3RoundThreeTests(LiveRoutingTests):
                 step = task.finder_sort_step(None, {'app': {'bundle_id': app}, 'window': {'title': title}})
                 task.record(dict(step['action'], status='executed'))
             done = task.finder_sort_step(None, {'app': {'bundle_id': 'com.apple.finder'}, 'window': {'title': 'Documents'}})
-        self.assertEqual([p.get('path', p['type']) for p in proposals], ['focus_app', 'Go > Documents', 'View > Sort By > Date Added'])
+        self.assertEqual([p.get('path', p['type']) for p in proposals], ['focus_app', 'Go > Documents', 'View > Sort By > Date Added | View > Group By > Date Added'])
         self.assertEqual(done['status'], 'done')
         self.assertTrue(FINDER_SORT.search('show Downloads in Finder, newest added first'))
 
