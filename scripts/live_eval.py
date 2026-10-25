@@ -36,6 +36,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 NEUTRAL = 'https://example.com/'
+ONLY = []  # --only for the task suites too
 TEST_MARKER = 'A11y test'  # the only changes the harness may confirm (see companion/eval_control.py)
 TEAMS_HOSTS = ('teams.microsoft.com', 'teams.cloud.microsoft', 'teams.live.com')
 
@@ -1014,6 +1015,7 @@ def main():
     parser.add_argument('--tasks', type=int, default=14, help='varied suite: how many random tasks')
     parser.add_argument('--seed', type=int, help='varied suite: repeat an earlier run (printed at the start)')
     args = parser.parse_args()
+    ONLY[:] = args.only or []
     out = Path(args.out)/datetime.now().strftime('%Y%m%d-%H%M%S')
     out.mkdir(parents=True, exist_ok=True)
     from companion.instance import build_id
@@ -1073,6 +1075,8 @@ def run_v2(app, eval_window, out, count, seed, hard=False):
         tasks = importlib.import_module(hard).build(eval_window, count, seed)
     else:
         tasks = live_tasks.build(eval_window, count, seed)
+    if ONLY:
+        tasks = [task for task in tasks if any(text.casefold() in task.request.casefold() for text in ONLY)]
     print(hard or 'v2', 'seed', seed, '·', len(tasks), 'tasks', flush=True)
     app.shots = out/'shots'
     records = []

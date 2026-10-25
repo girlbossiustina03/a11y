@@ -963,6 +963,16 @@ class Companion:
                 self.last_request_plan = {'operation': 'answer', 'app_name': '', 'target': '', 'computed': True,
                                           'reply': 'Reading emails directly works with Apple Mail on a Mac.'}
                 return self.last_request_plan
+            if interpreted.get('operation') == 'look_up' and not plain_question(request):
+                from .web_apps import SEARCH_URLS, find_site
+                site = find_site(request)
+                topic = str(interpreted.get('target', '')).strip()
+                if site and site[0] in SEARCH_URLS and topic:
+                    # "Look up Photosynthesis on Wikipedia" names where to look: open it there, as asked (it was
+                    # answered in the background, the page never opened; live A/B). Questions are still answered.
+                    from urllib.parse import quote_plus
+                    interpreted = {'operation': 'browser_open', 'app_name': '', 'target': SEARCH_URLS[site[0]].format(quote_plus(topic)),
+                                   'browser_mode': 'default', 'remaining_request': ''}
             on_site = re.search(r'\b(?:on|in|from)\s+(youtube|spotify|soundcloud)\b', request, re.I)
             if interpreted.get('operation') == 'play_media' and on_site:
                 # "Play Bohemian Rhapsody on YouTube" went to the Music library player and gave up (live,

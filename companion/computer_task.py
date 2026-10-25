@@ -137,11 +137,7 @@ If you propose a click or any other operation, status MUST be action. done and
 needs_user MUST have action=null. These are mutually exclusive response shapes.
 The user has ALREADY authorized opening named apps, creating the requested browser
 window/tab, navigation and reading toward this goal. Do not ask whether to launch
-Safari, open Teams, navigate to a website, or confirm the goal again. worked_before, when
-given, is the route that reached a very similar goal last time: follow it while the screen
-matches it; it is a hint, never a reason to repeat a step that did not work. An action's
-effect says whether it changed the screen; after "nothing changed on screen", choose a
-different target (that one is no longer listed) or report what the screen shows. A closed or
+Safari, open Teams, navigate to a website, or confirm the goal again. A closed or
 nonvisible app is not a blocker: use an installed launch_app or browse_url action.
 browse_url opens the specified browser itself; use browser_mode=window/tab as requested.
 When the goal names a website, use browse_url directly rather than spending a step
@@ -963,8 +959,10 @@ class ComputerTask:
                 or last.get('screen') is None or self.screen_seen is None):
             return
         unchanged = last['screen'] == self.screen_seen
-        last['effect'] = 'nothing changed on screen' if unchanged else 'the screen changed'
-        if unchanged and last.get('label'):
+        if not unchanged:
+            return  # said only when nothing changed: "the screen changed" after every click kept the model clicking (A/B, live)
+        last['effect'] = 'nothing changed on screen'
+        if last.get('label'):
             self.dead_targets.add((self.screen_seen, str(last['label']).casefold().strip()))
 
     def live_marks(self, marks):

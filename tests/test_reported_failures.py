@@ -1723,7 +1723,7 @@ class ClickEffectTests(unittest.TestCase):
         task.record({'type': 'click_point', 'label': 'Dark', 'status': 'executed'})
         task.screen_seen = 'screen C'
         task.check_last_click()
-        self.assertEqual(task.receipts[-1]['effect'], 'the screen changed')
+        self.assertNotIn('effect', task.receipts[-1])  # said only when nothing changed
 
 
 
@@ -1740,3 +1740,14 @@ class RouteHygieneTests(unittest.TestCase):
             self.assertEqual(routes.load(), [])
         with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {'A11Y_DATA_DIR': folder, 'A11Y_ROUTES': '0'}):
             self.assertFalse(routes.remember('open the sound settings', [{'type': 'click_point', 'label': 'Sound', 'status': 'executed'}]))
+
+
+
+class LookUpOnSiteTests(LiveRoutingTests):
+    def test_reported_look_up_on_wikipedia_opens_it(self):
+        # Live A/B: "look up Photosynthesis on Wikipedia" was answered in the background, nothing opened.
+        self.route('look_up', 'Photosynthesis')
+        plan = self.app.prepare_request('look up Photosynthesis on Wikipedia')
+        self.assertEqual((plan['operation'], plan['target']), ('browser_open', 'https://en.wikipedia.org/w/index.php?search=Photosynthesis'))
+        self.route('look_up', 'Ada Lovelace birth')
+        self.assertEqual(self.app.prepare_request('when was Ada Lovelace born? check Wikipedia')['operation'], 'look_up')  # a question
