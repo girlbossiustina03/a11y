@@ -625,6 +625,38 @@ if let index = args.firstIndex(of: "--close-window"), index+4 < args.count {
     let status = AXUIElementPerformAction(close, kAXPressAction as CFString)
     emit(["submitted": status == .success, "verification_required": true]); exit(0)
 }
+if let index = args.firstIndex(of: "--menu-items"), index+1 < args.count {
+    // Every enabled menu item of a running app as "Menu > Item" (one submenu level more), names only:
+    // so "where can I see the sites I visited" can find History > Show All History. Read only.
+    guard AXIsProcessTrusted(), let owner = running.first(where: { $0.bundleIdentifier == args[index+1] }) else {
+        emit(["error": "That app is not open."]); exit(1)
+    }
+    let app = AXUIElementCreateApplication(owner.processIdentifier)
+    AXUIElementSetMessagingTimeout(app, 0.5)
+    guard let bar = element(attr(app, "AXMenuBar")) else { emit(["items": []]); exit(0) }
+    func entries(_ menuTitle: AXUIElement) -> [AXUIElement] {
+        ((attr(menuTitle, "AXChildren") as? [AXUIElement])?.first).flatMap { attr($0, "AXChildren") as? [AXUIElement] } ?? []
+    }
+    var paths: [String] = []
+    let started = CFAbsoluteTimeGetCurrent()
+    for top in ((attr(bar, "AXChildren") as? [AXUIElement]) ?? []).dropFirst() {  // not the Apple menu
+        let menu = string(top, "AXTitle")
+        guard !menu.isEmpty else { continue }
+        for item in entries(top) where paths.count < 400 && CFAbsoluteTimeGetCurrent()-started < 2 {
+            let title = string(item, "AXTitle")
+            guard !title.isEmpty, (attr(item, "AXEnabled") as? Bool) != false else { continue }
+            let sub = entries(item)
+            if sub.isEmpty {
+                paths.append(menu + " > " + title)
+            } else {
+                for leaf in sub.prefix(40) where !string(leaf, "AXTitle").isEmpty && (attr(leaf, "AXEnabled") as? Bool) != false {
+                    paths.append(menu + " > " + title + " > " + string(leaf, "AXTitle"))
+                }
+            }
+        }
+    }
+    emit(["items": paths]); exit(0)
+}
 if let index = args.firstIndex(of: "--menu"), index+2 < args.count {
     // choose_menu: press a menu item by its titles ("View > as List"), through accessibility.
     guard AXIsProcessTrusted(), let owner = running.first(where: { $0.bundleIdentifier == args[index+1] }) else {

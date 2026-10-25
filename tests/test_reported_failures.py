@@ -1857,6 +1857,30 @@ class WindowlessAppTests(unittest.TestCase):
         self.assertFalse(already_typed('onions\nmilk', task.typed))
         self.assertFalse(already_typed('', task.typed))
 
+    def test_reported_the_menu_command_is_picked_from_the_apps_own_menus(self):
+        # Live (v2): "where can I see the sites I visited? open it" clicked around Safari for 22 steps.
+        task = ComputerTask('where can I see the sites I visited? open it', automatic=True)
+        task.brought = {'com.apple.Safari'}  # the task switched to Safari first
+        items = ['Safari > Services > Add to Music as a Spoken Track', 'Safari > Clear History…', 'File > Close Window', 'History > Show All History', 'History > Recently Closed > Example Domain',
+                 'Bookmarks > Show Bookmarks', 'View > Enter Full Screen', 'History > Home', 'History > Weather - BBC News']
+        desktop = Mock(bridge=Mock(menu_items=Mock(return_value=items)))
+        provider = Mock()
+        provider.complete_structured.return_value = {'command': 'History > Show All History'}
+        with patch('companion.computer_task.validate_step', side_effect=lambda raw, *a, **k: {'action': raw['action']}):
+            step = task.menu_pick_step(desktop, {'app': {'bundle_id': 'com.apple.Safari', 'name': 'Safari'}}, provider, {})
+        self.assertEqual(step['action'], {'type': 'choose_menu', 'path': 'History > Show All History'})
+        offered = provider.complete_structured.call_args.kwargs['schema']['properties']['command']['enum']
+        self.assertEqual(offered, ['none', 'History > Show All History', 'History > Home'])  # nothing that clears, closes or lists pages
+        self.assertIsNone(task.menu_pick_step(desktop, {'app': {'bundle_id': 'com.apple.Safari'}}, provider, {}))  # once per task
+        provider.complete_structured.return_value = {'command': 'none'}
+        finder = ComputerTask('where can I see the sites I visited? open it', automatic=True)
+        self.assertIsNone(finder.menu_pick_step(desktop, {'app': {'bundle_id': 'com.apple.finder'}}, provider, {}))  # not its app
+        other = ComputerTask('find the cheapest flight', automatic=True)
+        other.brought = {'com.apple.Safari'}
+        self.assertIsNone(other.menu_pick_step(desktop, {'app': {'bundle_id': 'com.apple.Safari'}}, provider, {}))
+        self.assertIsNone(ComputerTask('open apple.com and find the iPhone page', automatic=True)
+                          .menu_pick_step(desktop, {'app': {'bundle_id': 'com.apple.Safari'}}, provider, {}))  # a site's own pages
+
 
 class DefaultBrowserTests(unittest.TestCase):
     @unittest.skipUnless(__import__('sys').platform == 'darwin', 'macOS LaunchServices')

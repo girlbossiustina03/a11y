@@ -108,6 +108,10 @@ class MacDesktopBridge:
     def activate(self, bundle_id):
         return self.call('--activate', bundle_id)
 
+    def menu_items(self, bundle_id):
+        """The app's enabled menu items as "Menu > Item" paths (names only)."""
+        return self.call('--menu-items', bundle_id).get('items', [])
+
     def hit(self, x, y):
         """What is at a screen point (role, title, the app a Dock icon opens), without pressing it."""
         return self.call('--hit', str(x), str(y))
