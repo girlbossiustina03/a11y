@@ -1756,6 +1756,8 @@ class ComputerTask:
             self.clicked_text = None
             timing('task.step.summary', step_started, step=len(self.receipts)+1, status=result['status'], code='click_result')
             return result
+        from .eval_control import step_shot
+        step_shot(image_data, len(self.receipts)+1, None, 'observed')  # evaluation only: what each step saw, code steps too
         met = self.goal_met(provider, snapshot, regions, {'cancel': self.cancelled} if accepts_cancel(provider) else {})
         if met is not None:
             timing('task.step.summary', step_started, step=len(self.receipts)+1, status='done', code='goal_met')
