@@ -69,6 +69,8 @@ class NativeTests(unittest.TestCase):
         self.window.mascot.close()
         self.window.overlay.close()
         self.window.pointer.close()
+        self.window.cursor_flight.stop()
+        self.window.cursor_flight.close()
         self.window.quitting = True
         self.window.close()
         self.window.deleteLater()

@@ -2445,9 +2445,16 @@ class CompanionWindow(QMainWindow):
         """Wait for background checks (e.g. the first screen-helper build) so Qt never
         destroys a thread that is still running, which aborts the process."""
         deadline = time.monotonic()+timeout_ms/1000
-        for worker in self.findChildren(QThread):
-            if worker.isRunning():
-                worker.wait(max(0, int((deadline-time.monotonic())*1000)))
+        import gc
+        # Its own workers, and any other thread still running (one owned elsewhere aborted the test
+        # process on Windows, at a different test each time).
+        workers = (set(self.findChildren(QThread)) | {o for o in gc.get_objects() if isinstance(o, QThread)}) - {QThread.currentThread()}
+        for worker in workers:
+            try:
+                if worker.isRunning():
+                    worker.wait(max(0, int((deadline-time.monotonic())*1000)))
+            except RuntimeError:
+                pass  # its C++ side is already gone
 
     def closeEvent(self, event):
         if getattr(self, 'setup_dialog', None):

@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="packaging/icons/A11y.png" alt="A11y app icon" width="160">
+
 # A11y
 
 **An adaptive workplace AI companion with floating desktop presence, computer use, and strict local privacy**

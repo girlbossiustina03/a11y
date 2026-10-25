@@ -87,6 +87,7 @@ jobs:
       - name: Test
         env:
           QT_QPA_PLATFORM: offscreen
+          QT_FORCE_STDERR_LOGGING: '1'  # Qt's fatal messages reach the log (they go to the debugger otherwise)
         run: |
           python -m pip install -r requirements.txt
           python scripts/ci_tests.py
