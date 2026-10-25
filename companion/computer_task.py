@@ -1111,6 +1111,12 @@ class ComputerTask:
         match = SECTION.search(self.goal)
         app = snapshot.get('app') or {}
         from .desktop_context import BROWSER_IDS
+        if getattr(self, 'section_done', False) == 'shown':
+            self.section_done = True
+            if self.receipts and self.receipts[-1].get('type') == 'browse_url' and self.goal_mode == 'inspect' and ASKS_FOR_FACT.search(self.goal):
+                # The section is on screen: read it. The model clicked "History of coffee" (another article) instead (live, v3).
+                return {'status': 'done', 'message': 'Read from the screen.', 'action': None}
+            return None
         if not match or getattr(self, 'section_done', False) or app.get('bundle_id') not in BROWSER_IDS:
             return None
         name = match.group('name').strip()
@@ -1136,6 +1142,7 @@ class ComputerTask:
         except (ValueError, ValidationError):
             return None
         self.pending = action
+        self.section_done = 'shown'
         return {'status': 'action', 'message': action.get('label', 'Going to the section')+'…', 'action': action,
                 'review': not self.automatic, 'visual_capture': None}
 
@@ -1693,6 +1700,10 @@ class ComputerTask:
                   or self.menu_step(desktop, snapshot) or self.menu_pick_step(desktop, snapshot, provider, {'cancel': self.cancelled} if accepts_cancel(provider) else {}))
         if opened is not None:
             timing('task.step.summary', step_started, step=len(self.receipts)+1, status=opened['status'], code='menu')
+            if opened['status'] == 'done' and opened.get('message') == 'Read from the screen.' and regions:
+                answer = self.screen_answer(provider, snapshot, regions, opened['message'],
+                                            {'cancel': self.cancelled} if accepts_cancel(provider) else {})
+                opened = dict(opened, message=answer or 'The section is open on the page.')
             return opened
         clicked = (self.row_step(desktop, snapshot, visual, image_data, vision)
                    or self.click_step(desktop, snapshot, regions, visual, image_data, vision))

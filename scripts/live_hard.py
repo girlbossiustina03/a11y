@@ -229,10 +229,13 @@ def build(eval_window, count, seed):
         request = pick(['open my {f} folder and sort it by date added', 'show {f} in Finder, newest added first']).format(f=folder)
         def sorted_by_added(state, events):
             try:
-                column = subprocess_osa(['tell application "Finder" to return (sort column of list view options of front Finder window) as text'])
                 name = subprocess_osa(['tell application "Finder" to return name of front Finder window'])
             except RuntimeError:
                 return False
+            try:  # a list view's column by name ("as text" fails, -1700); icon view doesn't report Sort By at all
+                column = subprocess_osa(['tell application "Finder" to return name of (sort column of list view options of front Finder window)'])
+            except RuntimeError:
+                column = ''
             chose = any('date added' in str(r.get('label', '')).casefold() for r in (state.get('task') or {}).get('receipts', []))
             # Finder can't report grouping by AppleScript: grouped by Date Added (when it groups) counts too.
             return folder.casefold() in name.casefold() and ('added' in column.casefold() or chose)

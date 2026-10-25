@@ -1909,6 +1909,9 @@ class WindowlessAppTests(unittest.TestCase):
             with patch('companion.mac_apps.read_page', return_value=('Coffee', 'https://en.wikipedia.org/wiki/Coffee#Etymology', '')):
                 step = task.section_step(None, front)
                 self.assertEqual((step['action']['url'], step['action']['browser_mode']), ('https://en.wikipedia.org/wiki/Coffee#History', 'current'))
+                task.record({'type': 'browse_url', 'label': 'Go to the History section', 'status': 'submitted'})
+                task.goal_mode = 'inspect'
+                self.assertEqual(task.section_step(None, front)['status'], 'done')  # then read it (it clicked another article, live)
                 self.assertIsNone(task.section_step(None, front))  # once
                 self.assertIsNone(ComputerTask('show me the comments on the top post', automatic=True).section_step(None, front))
                 self.assertIsNone(ComputerTask('take me to the history part', automatic=True).section_step(None, {'app': {'bundle_id': 'com.apple.finder'}}))
