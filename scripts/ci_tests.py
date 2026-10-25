@@ -11,6 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def child():
+    import faulthandler
+    faulthandler.enable(all_threads=True)  # an abort still prints where every thread was
     sys.path.insert(0, str(ROOT))  # as "python -m unittest" from the project root
 
     class Named(unittest.TextTestResult):
