@@ -1936,6 +1936,16 @@ class WindowlessAppTests(unittest.TestCase):
         self.assertFalse(progress_message(brief(long)))
         self.assertTrue(progress_message('Open https://en.wikipedia.org in Safari…'))
 
+    def test_reported_a_click_that_undoes_the_last_one_is_refused(self):
+        # Owner: in Calculator "a11y just presses the tab opener over and over" (Show Sidebar, Hide Sidebar, …).
+        from companion.computer_task import undoes
+        self.assertTrue(undoes('Hide Sidebar', ['Show Sidebar']))
+        self.assertTrue(undoes('show sidebar', ['Calculator', 'Hide  Sidebar']))
+        self.assertTrue(undoes('Collapse Folders', ['Expand Folders']))
+        self.assertFalse(undoes('Show Sidebar', ['Show Sidebar']))   # a plain repeat is the repeat check's
+        self.assertFalse(undoes('Hide Toolbar', ['Show Sidebar']))
+        self.assertFalse(undoes('Sidebar', ['Show Sidebar']))
+
 
 class DefaultBrowserTests(unittest.TestCase):
     @unittest.skipUnless(__import__('sys').platform == 'darwin', 'macOS LaunchServices')

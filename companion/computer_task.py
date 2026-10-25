@@ -339,6 +339,26 @@ def compact_marks(marks):
     return ['%s|%s|%s|%.3f,%.3f' % (m['id'], m['kind'], m['label'], m['x']+m['width']/2, m['y']+m['height']/2) for m in marks]
 
 
+# Verbs whose pair undoes each other: clicking "Hide Sidebar" right after "Show Sidebar" is a loop.
+TOGGLE = re.compile(r'^\s*(show|hide|open|close|expand|collapse|enter|exit|start|stop|enable|disable|turn on|turn off|zoom in|zoom out)\s+(.+)$', re.I)
+OPPOSITE = {'show': 'hide', 'hide': 'show', 'open': 'close', 'close': 'open', 'expand': 'collapse', 'collapse': 'expand',
+            'enter': 'exit', 'exit': 'enter', 'start': 'stop', 'stop': 'start', 'enable': 'disable', 'disable': 'enable',
+            'turn on': 'turn off', 'turn off': 'turn on', 'zoom in': 'zoom out', 'zoom out': 'zoom in'}
+
+
+def undoes(label, earlier):
+    """Whether clicking `label` undoes one of the `earlier` clicks ("Hide Sidebar" after "Show Sidebar")."""
+    match = TOGGLE.match(label or '')
+    if not match:
+        return False
+    verb, rest = match.group(1).casefold(), ' '.join(match.group(2).casefold().split())
+    for before in earlier:
+        other = TOGGLE.match(before or '')
+        if other and other.group(1).casefold() == OPPOSITE.get(verb) and ' '.join(other.group(2).casefold().split()) == rest:
+            return True
+    return False
+
+
 def has_window(snapshot, bundle_id):
     """Whether the app shows a window of its own. Finder's desktop is listed as an untitled window
     the size of the screen; it is not one (Finder with only the desktop stalled tasks, live)."""
@@ -1849,6 +1869,11 @@ class ComputerTask:
                     # The shopping list was typed, then typed again five times (live, v2): the model doesn't see it worked.
                     raise ValidationError('That text is already typed in this task. If the goal is done, report status=done; '
                                           'otherwise type only what is still missing.')
+                if step['status'] == 'action' and step['action']['type'] in ('click_point', 'press_control') and undoes(
+                        step['action'].get('label', ''), [r.get('label', '') for r in self.receipts[-4:] if r.get('type') in ('click_point', 'press_control')]):
+                    # Calculator: Show Sidebar, Hide Sidebar, Show Sidebar… (owner, live held-out).
+                    raise ValidationError('“'+step['action'].get('label', '')+'” undoes your previous click, and that did not help the goal. '
+                                          'Choose a different control, use a menu or tool, or report what the screen shows.')
                 if step['status'] == 'action' and self.repeats(step['action']) >= 2:
                     if self.goal_mode == 'inspect' and regions and ASKS_FOR_FACT.search(self.goal) and not self.is_history(step['action']):
                         # A read-only goal whose clicks change nothing: the answer is on the screen already.
