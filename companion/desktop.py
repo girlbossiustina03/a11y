@@ -1832,7 +1832,7 @@ class CompanionWindow(QMainWindow):
         def failed(message):
             # A changed screen is caught before anything is sent. During a task, look
             # again instead of ending the whole goal (at most twice in a row).
-            if task is not None and 'changed' in message and task.stale_retries < 2 and not task.cancelled.is_set():
+            if task is not None and ('changed' in message or 'did not arrive' in message) and task.stale_retries < 2 and not task.cancelled.is_set():
                 task.stale_retries += 1
                 task.pending = None
                 retry.append(True)

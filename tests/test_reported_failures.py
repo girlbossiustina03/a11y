@@ -1861,6 +1861,7 @@ class WindowlessAppTests(unittest.TestCase):
         # Live (v2): "where can I see the sites I visited? open it" clicked around Safari for 22 steps.
         task = ComputerTask('where can I see the sites I visited? open it', automatic=True)
         task.brought = {'com.apple.Safari'}  # the task switched to Safari first
+        task.receipts = [{'type': 'click_point', 'label': 'Tab Group picker', 'effect': 'nothing changed on screen'}]  # and got stuck
         items = ['Safari > Services > Add to Music as a Spoken Track', 'Edit > Find > Find…', 'Edit > Search', 'File > Save…', 'File > Export as PDF…', 'Safari > Clear History…', 'File > Close Window', 'History > Show All History', 'History > Recently Closed > Example Domain',
                  'Bookmarks > Show Bookmarks', 'View > Enter Full Screen', 'History > Home', 'History > Weather - BBC News']
         desktop = Mock(bridge=Mock(menu_items=Mock(return_value=items)))
@@ -1877,6 +1878,10 @@ class WindowlessAppTests(unittest.TestCase):
         self.assertIsNone(finder.menu_pick_step(desktop, {'app': {'bundle_id': 'com.apple.finder'}}, provider, {}))  # not its app
         other = ComputerTask('find the cheapest flight', automatic=True)
         other.brought = {'com.apple.Safari'}
+        other.receipts = list(task.receipts)
+        fresh = ComputerTask('where can I see the sites I visited? open it', automatic=True)
+        fresh.brought = {'com.apple.Safari'}
+        self.assertIsNone(fresh.menu_pick_step(desktop, {'app': {'bundle_id': 'com.apple.Safari'}}, provider, {}))  # not stuck yet
         self.assertIsNone(other.menu_pick_step(desktop, {'app': {'bundle_id': 'com.apple.Safari'}}, provider, {}))
         self.assertIsNone(ComputerTask('open apple.com and find the iPhone page', automatic=True)
                           .menu_pick_step(desktop, {'app': {'bundle_id': 'com.apple.Safari'}}, provider, {}))  # a site's own pages
