@@ -1702,6 +1702,17 @@ class AppClickTests(unittest.TestCase):
         self.assertTrue(WINDOW_SIZE_WORDS.search('make Safari full screen'))
         self.assertFalse(WINDOW_SIZE_WORDS.search('find the Bluetooth settings'))
 
+    def test_reported_a_second_click_on_the_front_apps_name_is_refused(self):
+        # Live: Finder's menu-bar name was clicked 24 times, each one turned into a wait.
+        hit = {'role': 'AXMenuBarItem', 'app': 'com.apple.finder', 'app_name_item': True, 'title': 'Finder'}
+        from companion.computer_task import ValidationError as TaskValidationError
+        task = ComputerTask('sort Documents by date added', automatic=True)
+        task.receipts.append({'type': 'wait', 'label': 'Finder is already in front; name in the menu bar skipped', 'status': 'executed'})
+        desktop = Mock(bridge=Mock(hit=Mock(return_value=hit)))
+        step = {'status': 'action', 'message': 'Click.', 'action': {'type': 'click_point', 'x': 0.05, 'y': 0.01, 'label': 'Finder'}}
+        with self.assertRaises(TaskValidationError):
+            task.app_click(step, desktop, {'app': {'bundle_id': 'com.apple.finder'}}, {'screen': {'x': 0, 'y': 0, 'width': 1000, 'height': 800}})
+
     def test_an_ordinary_target_is_left_alone(self):
         result = self.run_click({'role': 'AXButton', 'title': 'Bluetooth', 'owner': 'com.apple.systempreferences'})
         self.assertEqual(result['action']['type'], 'click_point')
@@ -1725,6 +1736,15 @@ class ClickEffectTests(unittest.TestCase):
         task.check_last_click()
         self.assertNotIn('effect', task.receipts[-1])  # said only when nothing changed
 
+
+    def test_reported_a_click_that_focused_a_field_says_to_type(self):
+        # Live: the Notes search field was clicked twice ("nothing changed") and the task stopped.
+        task = ComputerTask('find my note about keys', automatic=True)
+        task.screen_seen = 'screen A'
+        task.record({'type': 'click_point', 'label': 'Search', 'status': 'executed'})
+        task.check_last_click({'focused_role': 'AXSearchField'})
+        self.assertIn('type into it', task.receipts[-1]['effect'])
+        self.assertEqual(len(task.live_marks([{'id': 't1', 'label': 'Search'}])), 1)  # not a dead target
 
 
 class RouteHygieneTests(unittest.TestCase):

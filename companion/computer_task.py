@@ -950,7 +950,7 @@ class ComputerTask:
         return {'status': 'action', 'message': action.get('label') or 'Sorting.', 'action': action,
                 'review': not self.automatic, 'visual_capture': None}
 
-    def check_last_click(self):
+    def check_last_click(self, snapshot=None):
         """Did the last click change anything? If the screen reads the same as when it was chosen, it
         did nothing: the model is told so, and that target is left out while the screen stays the same,
         so the next step tries something else instead of the same thing again."""
@@ -959,6 +959,11 @@ class ComputerTask:
                 or last.get('screen') is None or self.screen_seen is None):
             return
         unchanged = last['screen'] == self.screen_seen
+        if unchanged and (snapshot or {}).get('focused_role') in ('AXTextField', 'AXSearchField', 'AXTextArea', 'AXComboBox'):
+            # Clicking into a field changes nothing visible but worked: say so, so the next step types
+            # (the Notes search field was clicked twice and the task stopped, live).
+            last['effect'] = 'the text field is focused: type into it now'
+            return
         if not unchanged:
             return  # said only when nothing changed: "the screen changed" after every click kept the model clicking (A/B, live)
         last['effect'] = 'nothing changed on screen'
@@ -987,6 +992,12 @@ class ComputerTask:
         if not isinstance(hit, dict):
             return step
         window_button = {'AXFullScreenButton': 'full-screen', 'AXZoomButton': 'full-screen', 'AXMinimizeButton': 'minimise'}.get(hit.get('subrole'))
+        skipped = [r for r in self.receipts[-3:] if r.get('type') == 'wait' and 'skipped' in str(r.get('label', ''))]
+        if (window_button and not WINDOW_SIZE_WORDS.search(self.goal) or hit.get('app') == (snapshot.get('app') or {}).get('bundle_id')) and skipped:
+            # Skipped once already: the model kept clicking Finder's menu-bar name and every click became a
+            # wait, 24 steps of them (live). Now it has to choose something else.
+            raise ValidationError('That point is the app’s own name, icon or window button again; it does nothing for this goal. '
+                                  'Use a numbered target inside the window, a tool (search_in_app, type_into), or report the result.')
         if window_button and not WINDOW_SIZE_WORDS.search(self.goal):
             # The green button sent windows full screen, into their own Space, and nothing lined up after
             # (owner, live). A window's size changes only when the goal asks for it.
@@ -1457,7 +1468,7 @@ class ComputerTask:
         regions = screen_text(visual, snapshot)
         import hashlib
         self.screen_seen = hashlib.sha256('\n'.join(sorted(r.get('text', '') for r in regions)).encode()).hexdigest()[:16]
-        self.check_last_click()
+        self.check_last_click(snapshot)
         result = self.click_result(regions, image_data, visual, vision)
         if result is not None:
             for _ in range(3):  # a page can take a moment to show what the click opened
