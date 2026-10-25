@@ -339,6 +339,15 @@ def compact_marks(marks):
     return ['%s|%s|%s|%.3f,%.3f' % (m['id'], m['kind'], m['label'], m['x']+m['width']/2, m['y']+m['height']/2) for m in marks]
 
 
+def has_window(snapshot, bundle_id):
+    """Whether the app shows a window of its own. Finder's desktop is listed as an untitled window
+    the size of the screen; it is not one (Finder with only the desktop stalled tasks, live)."""
+    def real(window):
+        return not (bundle_id == 'com.apple.finder' and not str(window.get('title') or '').strip())
+    front = snapshot.get('window') if (snapshot.get('app') or {}).get('bundle_id') == bundle_id else None
+    return bool(front and real(front)) or any(w.get('bundle_id') == bundle_id and real(w) for w in snapshot.get('app_windows') or [])
+
+
 def already_typed(text, typed):
     """Whether every line of text was typed already in this task (case and spacing aside)."""
     words = lambda value: ' '.join(value.casefold().split())
@@ -1387,7 +1396,7 @@ class ComputerTask:
         # the population went into the open one, live v3).
         # In front without a window (Finder showing only the desktop) is not ready either: it gets one (the
         # model said "the Finder window is not visible, please open it" and stopped, live held-out).
-        windowed = bool(snapshot.get('window')) or any(w.get('bundle_id') == app['bundle_id'] for w in snapshot.get('app_windows') or [])
+        windowed = has_window(snapshot, app['bundle_id']) or 'app_windows' not in snapshot and bool(snapshot.get('window'))
         return False if app['bundle_id'] == (snapshot.get('app') or {}).get('bundle_id') and windowed and not NEW_DOCUMENT.search(self.goal) else app
 
     def plan_start(self, desktop, snapshot, provider):
@@ -1404,7 +1413,7 @@ class ComputerTask:
             # The goal names an installed app ("in the Calculator app", "a new TextEdit document"):
             # open it in code. The model kept asking the user to open it from the Dock (live).
             running = {a.get('bundle_id') for a in snapshot.get('available_apps') or []}
-            windowed = any(w.get('bundle_id') == named['bundle_id'] for w in snapshot.get('app_windows') or [])
+            windowed = has_window(snapshot, named['bundle_id'])
             # Running without a window (TextEdit after its document closed): a new window, as launching it
             # would give; switching to it left nothing to type into ("Input is unavailable", live).
             # "In a new TextEdit document": a new window even when one is open. Switching to the open one
@@ -1481,7 +1490,9 @@ class ComputerTask:
             matches = resolve_app(str(plan.get('app', '')), self._catalog or [])
             if len(matches) == 1 and matches[0]['name'] != front:
                 running = {a.get('bundle_id') for a in snapshot.get('available_apps') or []}
-                kind = 'focus_app' if matches[0]['bundle_id'] in running else 'launch_app'
+                windowed = has_window(snapshot, matches[0]['bundle_id'])
+                # Running without a window (Finder with only the desktop): a new one, or nothing to work in (live).
+                kind = ('focus_app' if windowed or 'app_windows' not in snapshot else 'new_window') if matches[0]['bundle_id'] in running else 'launch_app'
                 action = {'type': kind, 'bundle_id': matches[0]['bundle_id']}
             elif not matches:
                 # Not installed: its website, else a search for it (GitHub went to Mail without one, live).

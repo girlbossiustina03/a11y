@@ -1840,7 +1840,8 @@ class WindowlessAppTests(unittest.TestCase):
         task._catalog = [{'name': 'Finder', 'bundle_id': 'com.apple.finder'}]
         front = {'app': {'bundle_id': 'com.apple.finder', 'name': 'Finder'}, 'available_apps': [{'bundle_id': 'com.apple.finder'}]}
         with patch('companion.computer_task.validate_step', side_effect=lambda raw, *a, **k: {'action': raw['action']}):
-            step = task.plan_start(None, dict(front, app_windows=[]), Mock())
+            desktop_only = [{'bundle_id': 'com.apple.finder', 'title': ''}]  # Finder lists the desktop as an untitled window
+            step = task.plan_start(None, dict(front, app_windows=desktop_only, window={'title': ''}), Mock())
             self.assertEqual(step['action'], {'type': 'new_window', 'bundle_id': 'com.apple.finder'})
             again = ComputerTask('show me what is in my Movies folder in Finder', automatic=True)
             again._catalog = task._catalog
