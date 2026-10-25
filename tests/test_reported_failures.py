@@ -1834,6 +1834,18 @@ class WindowlessAppTests(unittest.TestCase):
                     task.plan_start(None, open_window, Mock())
                 self.assertEqual(proposed[0]['type'], kind, (goal, front))
 
+    def test_reported_a_launch_for_a_new_document_is_followed_by_one(self):
+        # Live (v3): TextEdit reopened "Dentist Appointment" on launch and the number went into it.
+        task = ComputerTask('put "54.2 million" in a new TextEdit document', automatic=True)
+        task._catalog = [{'name': 'TextEdit', 'bundle_id': 'com.apple.TextEdit'}]
+        with patch('companion.computer_task.validate_step', side_effect=lambda raw, *a, **k: {'action': raw['action']}):
+            first = task.plan_start(None, {'app': {'bundle_id': 'com.apple.finder', 'name': 'Finder'}, 'available_apps': [], 'app_windows': []}, Mock())
+            self.assertEqual(first['action']['type'], 'launch_app')
+            self.assertIsNone(task.new_document_step(None, {'app': {'bundle_id': 'com.apple.finder'}}))  # not in front yet
+            then = task.new_document_step(None, {'app': {'bundle_id': 'com.apple.TextEdit'}})
+            self.assertEqual(then['action'], {'type': 'new_window', 'bundle_id': 'com.apple.TextEdit'})
+            self.assertIsNone(task.new_document_step(None, {'app': {'bundle_id': 'com.apple.TextEdit'}}))  # once
+
 
 class DefaultBrowserTests(unittest.TestCase):
     @unittest.skipUnless(__import__('sys').platform == 'darwin', 'macOS LaunchServices')

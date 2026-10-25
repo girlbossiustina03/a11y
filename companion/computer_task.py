@@ -1030,6 +1030,22 @@ class ComputerTask:
                                  desktop, snapshot, catalog=self._catalog or (), goal=self.goal)
         return dict(step, action=switched['action'], message=switched.get('message', step.get('message')))
 
+    def new_document_step(self, desktop, snapshot):
+        """"In a new TextEdit document": after launching, a new document. TextEdit reopened last time's
+        document on launch and the population went into it (live, v3)."""
+        bundle = getattr(self, 'new_after_launch', None)
+        if not bundle or (snapshot.get('app') or {}).get('bundle_id') != bundle:
+            return None
+        self.new_after_launch = None
+        try:
+            action = validate_step({'status': 'action', 'message': 'A new document.', 'risk': 'navigation',
+                                    'action': {'type': 'new_window', 'bundle_id': bundle}}, desktop, snapshot,
+                                   catalog=self._catalog or (), goal=self.goal)['action']
+        except (ValueError, ValidationError):
+            return None
+        self.pending = action
+        return {'status': 'action', 'message': action.get('label', 'A new document')+'…', 'action': action, 'review': not self.automatic, 'visual_capture': None}
+
     def sites_step(self, desktop, snapshot):
         """"Open apple.com and duckduckgo.com in two tabs": each named site opens in code, one after
         the other (an open tab of the site is reused), then done when opening was all it asked. The
@@ -1285,6 +1301,8 @@ class ComputerTask:
                     action = None
             if action is None:
                 return None
+            if action['type'] == 'launch_app' and NEW_DOCUMENT.search(self.goal):
+                self.new_after_launch = named['bundle_id']  # a launch reopens last time's windows: ⌘N follows
             self.pending = action
             return {'status': 'action', 'message': action.get('label', 'Opening')+'…', 'action': action, 'review': not self.automatic,
                     'visual_capture': None}
@@ -1554,7 +1572,7 @@ class ComputerTask:
         if read is not None:
             timing('task.step.summary', step_started, step=len(self.receipts)+1, status=read['status'], code='view_answer')
             return read
-        opened = (self.sites_step(desktop, snapshot) or self.tab_step(desktop, snapshot) or self.history_step(desktop, snapshot) or self.finder_sort_step(desktop, snapshot)
+        opened = (self.new_document_step(desktop, snapshot) or self.sites_step(desktop, snapshot) or self.tab_step(desktop, snapshot) or self.history_step(desktop, snapshot) or self.finder_sort_step(desktop, snapshot)
                   or self.menu_step(desktop, snapshot))
         if opened is not None:
             timing('task.step.summary', step_started, step=len(self.receipts)+1, status=opened['status'], code='menu')
