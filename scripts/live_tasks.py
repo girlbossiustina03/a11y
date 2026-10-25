@@ -119,7 +119,10 @@ def url(pattern):
 
 
 def no_failure(state, events):
-    return not le.failed_reply(answer(events)) and (state.get('task') or {}).get('status') not in ('blocked', 'stopped')
+    # The task status only counts when this request ran a task: a question answered without one kept the
+    # previous task's "stopped" and failed (weather and pesto answers marked as failures).
+    ran_task = any(e['kind'] == 'timing' and e['data']['event'].startswith('task.') for e in events)
+    return not le.failed_reply(answer(events)) and not (ran_task and (state.get('task') or {}).get('status') in ('blocked', 'stopped'))
 
 
 def build(eval_window, count, seed, only=None):

@@ -31,6 +31,9 @@ def default_browser_id():
                     if isinstance(handler, dict) and handler.get('LSHandlerURLScheme') == scheme:
                         bundle = str(handler.get('LSHandlerRoleAll', ''))
                         return next((known for known in BROWSER_IDS if known.casefold() == bundle.casefold()), None)
+            # No browser was ever chosen: macOS uses Safari. Returning None let callers take the first
+            # browser in the app list, Google Chrome, so one task opened in Chrome and the next in Safari.
+            return 'com.apple.Safari'
         elif sys.platform == 'win32':
             import winreg
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice') as key:
@@ -38,6 +41,8 @@ def default_browser_id():
             for prefix, browser in (('MSEdge', 'browser:edge'), ('ChromeHTML', 'browser:chrome'), ('Firefox', 'browser:firefox')):
                 if prog_id.startswith(prefix):
                     return browser
+    except FileNotFoundError:
+        return 'com.apple.Safari' if sys.platform == 'darwin' else None  # never set: the system default
     except (OSError, ValueError, ImportError):
         return None
     return None

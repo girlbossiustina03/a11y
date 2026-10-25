@@ -1764,3 +1764,23 @@ class WindowlessAppTests(unittest.TestCase):
             task.plan_start(None, {'app': {'bundle_id': 'com.apple.finder', 'name': 'Finder'},
                                    'available_apps': [{'bundle_id': 'com.apple.TextEdit'}], 'app_windows': []}, Mock())
         self.assertEqual(proposed[0]['type'], 'new_window')
+
+
+class DefaultBrowserTests(unittest.TestCase):
+    @unittest.skipUnless(__import__('sys').platform == 'darwin', 'macOS LaunchServices')
+    def test_reported_no_chosen_browser_means_safari(self):
+        # Live: with no browser ever chosen, one task opened in Google Chrome and the next in Safari.
+        import plistlib, tempfile
+        from pathlib import Path
+        from companion import desktop_context
+        with tempfile.TemporaryDirectory() as home:
+            folder = Path(home)/'Library/Preferences/com.apple.LaunchServices'
+            with patch('pathlib.Path.home', return_value=Path(home)):
+                self.assertEqual(desktop_context.default_browser_id(), 'com.apple.Safari')  # no file at all
+                folder.mkdir(parents=True)
+                (folder/'com.apple.launchservices.secure.plist').write_bytes(plistlib.dumps({'LSHandlers': [
+                    {'LSHandlerContentType': 'public.html', 'LSHandlerRoleAll': 'com.google.chrome'}]}))
+                self.assertEqual(desktop_context.default_browser_id(), 'com.apple.Safari')  # no https choice
+                (folder/'com.apple.launchservices.secure.plist').write_bytes(plistlib.dumps({'LSHandlers': [
+                    {'LSHandlerURLScheme': 'https', 'LSHandlerRoleAll': 'com.google.chrome'}]}))
+                self.assertEqual(desktop_context.default_browser_id(), 'com.google.Chrome')  # a real choice wins
