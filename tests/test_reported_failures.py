@@ -1861,7 +1861,7 @@ class WindowlessAppTests(unittest.TestCase):
         # Live (v2): "where can I see the sites I visited? open it" clicked around Safari for 22 steps.
         task = ComputerTask('where can I see the sites I visited? open it', automatic=True)
         task.brought = {'com.apple.Safari'}  # the task switched to Safari first
-        items = ['Safari > Services > Add to Music as a Spoken Track', 'Edit > Find > Find…', 'Edit > Search', 'Safari > Clear History…', 'File > Close Window', 'History > Show All History', 'History > Recently Closed > Example Domain',
+        items = ['Safari > Services > Add to Music as a Spoken Track', 'Edit > Find > Find…', 'Edit > Search', 'File > Save…', 'File > Export as PDF…', 'Safari > Clear History…', 'File > Close Window', 'History > Show All History', 'History > Recently Closed > Example Domain',
                  'Bookmarks > Show Bookmarks', 'View > Enter Full Screen', 'History > Home', 'History > Weather - BBC News']
         desktop = Mock(bridge=Mock(menu_items=Mock(return_value=items)))
         provider = Mock()

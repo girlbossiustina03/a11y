@@ -353,7 +353,8 @@ def build(eval_window, count, seed, only=None):
         missing = [name for name in WEB_SERVICES if name not in have]
         name = pick(missing or ['Notion'])
         request = pick(['open {n}', 'launch {n} for me', 'I want to use {n}']).format(n=name)
-        return Task('missing_app', request, [('web version', url(re.escape(WEB_SERVICES[name])))], setup=web_setup)
+        return Task('missing_app', request, [('web version', url(re.escape(WEB_SERVICES[name]).replace(r'notion\.so', r'notion\.(?:so|com)')))],  # notion.so moved to notion.com
+                    setup=web_setup)
 
     @family
     def github_notifications():

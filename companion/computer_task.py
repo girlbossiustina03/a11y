@@ -100,7 +100,8 @@ MENU_SYSTEM = '''The user wants something done in the app in front. Below are th
 the goal is about something inside the window (a link, a file, a message, a page's content).'''
 # Menu commands never offered to the menu pick: they end, remove, send or reset something.
 MENU_UNSAFE = re.compile(r'\b(?:quit|close|delete|remove|erase|clear|empty|trash|log\s*out|sign\s*out|send|print|restart|shut\s*down|'
-                         r'uninstall|reset|revert|discard|eject|lock|sleep|force|archive|block|report|move to)\b', re.I)
+                         r'uninstall|reset|revert|discard|eject|lock|sleep|force|archive|block|report|move to|save|export|duplicate|'
+                         r'rename|share|publish|upload|import|install|update|purchase|buy|subscribe)\b', re.I)
 # Menus that list content, not commands: pages, windows, bookmarks, recent files.
 MENU_CONTENT = re.compile(r'^(?:bookmarks|window|help)\s*>|>\s*(?:services|recently closed|recently visited|open recent|recent items|'
                           r'favou?rites|history)\s*>', re.I)
