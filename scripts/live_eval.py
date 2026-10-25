@@ -406,7 +406,8 @@ class App:
                if not key.startswith(('ANTHROPIC_', 'OPENAI_')) and key not in ('A11Y_AI_BASE_URL', 'A11Y_AI_KEY')}
         if getattr(self, 'shots', None):
             env['A11Y_EVAL_SHOTS'] = str(self.shots)
-        env.update(A11Y_EVAL='1', A11Y_EVAL_SOCKET=str(self.socket), A11Y_AI_PROVIDER='ollama', A11Y_WEB_ANSWERS=os.getenv('A11Y_WEB_ANSWERS', '1'), PYTHONUNBUFFERED='1')
+        env.update(A11Y_EVAL='1', A11Y_EVAL_SOCKET=str(self.socket), A11Y_AI_PROVIDER='ollama', A11Y_WEB_ANSWERS=os.getenv('A11Y_WEB_ANSWERS', '1'),
+                   A11Y_ROUTES='0', PYTHONUNBUFFERED='1')  # a test run neither learns nor follows routes (they leaked between runs)
         if self.socket.exists():
             self.socket.unlink()
         self.process = subprocess.Popen([sys.executable, str(ROOT/'a11y_desktop.py')], cwd=ROOT, env=env,

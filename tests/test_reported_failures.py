@@ -1715,3 +1715,19 @@ class ClickEffectTests(unittest.TestCase):
         task.screen_seen = 'screen C'
         task.check_last_click()
         self.assertEqual(task.receipts[-1]['effect'], 'the screen changed')
+
+
+
+class RouteHygieneTests(unittest.TestCase):
+    def test_reported_a_looping_route_is_never_remembered(self):
+        # Live: "done" after clicking "All iCloud" three times was saved as a route to follow.
+        import tempfile
+        from companion import routes
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {'A11Y_DATA_DIR': folder, 'A11Y_ROUTES': '1'}):
+            loop = [{'type': 'click_point', 'label': 'All iCloud', 'status': 'executed'}]*3
+            self.assertFalse(routes.remember('which folders do I have in Notes', loop))
+            dead = [{'type': 'click_point', 'label': 'Videos', 'status': 'executed', 'effect': 'nothing changed on screen'}]
+            self.assertFalse(routes.remember('show my videos in Photos', dead))
+            self.assertEqual(routes.load(), [])
+        with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {'A11Y_DATA_DIR': folder, 'A11Y_ROUTES': '0'}):
+            self.assertFalse(routes.remember('open the sound settings', [{'type': 'click_point', 'label': 'Sound', 'status': 'executed'}]))

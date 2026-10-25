@@ -58,10 +58,16 @@ def step_of(receipt):
 
 
 def remember(goal, receipts, now=None):
-    """Keep the route of a finished task (replacing the one for the same goal)."""
+    """Keep the route of a finished task (replacing the one for the same goal). Not when a step
+    changed nothing or repeated the one before: "done" after clicking "All iCloud" three times was
+    saved and handed back as a route to follow (live)."""
+    if os.getenv('A11Y_ROUTES', '1') == '0':
+        return False
+    if any(receipt.get('effect') == 'nothing changed on screen' for receipt in receipts):
+        return False
     words = goal_words(goal)
     steps = [step for step in map(step_of, receipts) if step]
-    if not words or not steps or len(steps) > 12:
+    if not words or not steps or len(steps) > 12 or any(a == b for a, b in zip(steps, steps[1:])):
         return False
     entries = [entry for entry in load() if set(entry.get('words', [])) != words]
     entries.append({'words': sorted(words), 'goal': goal[:160], 'steps': steps, 'at': int(now or time.time())})
