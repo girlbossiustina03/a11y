@@ -1855,18 +1855,13 @@ class WindowlessAppTests(unittest.TestCase):
             again._catalog = task._catalog
             self.assertIsNone(again.plan_start(None, dict(front, app_windows=[{'bundle_id': 'com.apple.finder', 'title': 'Downloads'}]), Mock()))
 
-    def test_reported_staying_in_a_windowless_app_opens_a_window(self):
-        # Live (held-out): "How many visible items are directly inside my Movies folder?" with Finder showing only the desktop.
-        class Planner:
-            def plan_task(self, observation):
-                return {'start': 'current', 'app': '', 'url': '', 'query': '', 'steps': [], 'done_when': ''}
-        task = ComputerTask('How many visible items are directly inside my Movies folder?', automatic=True)
-        task._catalog = [{'name': 'Finder', 'bundle_id': 'com.apple.finder'}]
-        desktop_only = {'app': {'bundle_id': 'com.apple.finder', 'name': 'Finder'}, 'window': {'title': ''},
-                        'available_apps': [{'bundle_id': 'com.apple.finder'}], 'app_windows': [{'bundle_id': 'com.apple.finder', 'title': ''}]}
+    def test_reported_a_look_only_goal_never_creates_a_document(self):
+        # Live (held-out): "Which documents are currently open in TextEdit? … do not make a new document" made one.
+        task = ComputerTask('Which documents are currently open in TextEdit? Read their names; do not make a new document.', automatic=True, goal_mode='inspect')
+        task._catalog = [{'name': 'TextEdit', 'bundle_id': 'com.apple.TextEdit'}]
+        windowless = {'app': {'bundle_id': 'com.apple.finder', 'name': 'Finder'}, 'available_apps': [{'bundle_id': 'com.apple.TextEdit'}], 'app_windows': []}
         with patch('companion.computer_task.validate_step', side_effect=lambda raw, *a, **k: {'action': raw['action']}):
-            step = task.plan_start(None, desktop_only, Planner())
-        self.assertEqual(step['action'], {'type': 'new_window', 'bundle_id': 'com.apple.finder'})
+            self.assertEqual(task.plan_start(None, windowless, Mock())['action']['type'], 'focus_app')
 
     def test_reported_a_launch_for_a_new_document_is_followed_by_one(self):
         # Live (v3): TextEdit reopened "Dentist Appointment" on launch and the number went into it.

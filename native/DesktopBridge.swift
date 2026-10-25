@@ -296,6 +296,16 @@ if let index = args.firstIndex(of: "--click"), index+4 < args.count {
           expected["y"] == actual.origin.y, expected["width"] == actual.width, expected["height"] == actual.height else {
         emit(["error": "The display changed. No click was sent."]); exit(1)
     }
+    // A11y's own window (her, or her reply beside her) over the point would take the click, and screenshots
+    // leave her out, so nothing would seem to happen (Battery, Calculator's sidebar, live). Refuse it.
+    if let ownPID, let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]],
+       let top = list.first(where: { info in
+           guard (info[kCGWindowLayer as String] as? Int) == 0, let frame = info[kCGWindowBounds as String] as? NSDictionary,
+                 let rect = CGRect(dictionaryRepresentation: frame as CFDictionary) else { return false }
+           return rect.contains(point) }),
+       (top[kCGWindowOwnerPID as String] as? pid_t) == ownPID {
+        emit(["error": "The companion's window covers that point. No click was sent."]); exit(1)
+    }
     // A click on a window of an app that is not active is often swallowed: the app only comes
     // forward (web pages, Teams and other Electron apps). Bring the target's app forward first.
     var activated = false

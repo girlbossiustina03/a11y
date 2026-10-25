@@ -1833,6 +1833,14 @@ class CompanionWindow(QMainWindow):
         def failed(message):
             # A changed screen is caught before anything is sent. During a task, look
             # again instead of ending the whole goal (at most twice in a row).
+            if task is not None and 'covers that point' in message and task.stale_retries < 2 and not task.cancelled.is_set():
+                # Her window was over the target: out of the way (the far bottom corner), then look again.
+                task.stale_retries += 1
+                task.pending = None
+                retry.append(True)
+                self.mascot.hide_reply()
+                self.move_companion('bottom_right' if float(proposal.get('x', 0.5)) < 0.5 else 'bottom_left')
+                return
             if task is not None and ('changed' in message or 'did not arrive' in message) and task.stale_retries < 2 and not task.cancelled.is_set():
                 task.stale_retries += 1
                 task.pending = None

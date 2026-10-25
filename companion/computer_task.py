@@ -1439,7 +1439,8 @@ class ComputerTask:
         # In front without a window (Finder showing only the desktop) is not ready either: it gets one (the
         # model said "the Finder window is not visible, please open it" and stopped, live held-out).
         windowed = has_window(snapshot, app['bundle_id']) or 'app_windows' not in snapshot and bool(snapshot.get('window'))
-        return False if app['bundle_id'] == (snapshot.get('app') or {}).get('bundle_id') and windowed and not NEW_DOCUMENT.search(self.goal) else app
+        new = NEW_DOCUMENT.search(self.goal) and self.goal_mode != 'inspect'  # "do not make a new document" is look-only
+        return False if app['bundle_id'] == (snapshot.get('app') or {}).get('bundle_id') and windowed and not new else app
 
     def plan_start(self, desktop, snapshot, provider):
         """Plan once, with the text model, then take the start in code: open the app, go to the
@@ -1460,7 +1461,10 @@ class ComputerTask:
             # would give; switching to it left nothing to type into ("Input is unavailable", live).
             # "In a new TextEdit document": a new window even when one is open. Switching to the open one
             # wrote the list into an existing document (live, v2).
-            kind = 'launch_app' if named['bundle_id'] not in running else 'focus_app' if windowed and not NEW_DOCUMENT.search(self.goal) else 'new_window'
+            # A look-only goal never creates a document ("which documents are open… do not make a new document"
+            # got one, live held-out); Finder's windows are only views of folders.
+            creates = self.goal_mode != 'inspect' or named['bundle_id'] == 'com.apple.finder'
+            kind = 'launch_app' if named['bundle_id'] not in running else 'focus_app' if not creates or windowed and not NEW_DOCUMENT.search(self.goal) else 'new_window'
             choices = [kind]+(['focus_app'] if kind == 'new_window' and windowed else [])  # no new_window (Windows): switch
             for kind in choices:
                 try:
@@ -1472,7 +1476,7 @@ class ComputerTask:
                     action = None
             if action is None:
                 return None
-            if action['type'] == 'launch_app' and NEW_DOCUMENT.search(self.goal):
+            if action['type'] == 'launch_app' and NEW_DOCUMENT.search(self.goal) and self.goal_mode != 'inspect':
                 self.new_after_launch = named['bundle_id']  # a launch reopens last time's windows: ⌘N follows
             self.pending = action
             return {'status': 'action', 'message': action.get('label', 'Opening')+'…', 'action': action, 'review': not self.automatic,
@@ -1534,7 +1538,8 @@ class ComputerTask:
                 running = {a.get('bundle_id') for a in snapshot.get('available_apps') or []}
                 windowed = has_window(snapshot, matches[0]['bundle_id'])
                 # Running without a window (Finder with only the desktop): a new one, or nothing to work in (live).
-                kind = ('focus_app' if windowed or 'app_windows' not in snapshot else 'new_window') if matches[0]['bundle_id'] in running else 'launch_app'
+                creates = self.goal_mode != 'inspect' or matches[0]['bundle_id'] == 'com.apple.finder'
+                kind = ('focus_app' if windowed or not creates or 'app_windows' not in snapshot else 'new_window') if matches[0]['bundle_id'] in running else 'launch_app'
                 action = {'type': kind, 'bundle_id': matches[0]['bundle_id']}
             elif not matches:
                 # Not installed: its website, else a search for it (GitHub went to Mail without one, live).
@@ -1557,11 +1562,6 @@ class ComputerTask:
             if browser and urlsplit(address).scheme in ('http', 'https'):
                 action = {'type': 'browse_url', 'bundle_id': browser['bundle_id'], 'url': address, 'label': 'Open '+address+' in '+browser['name'],
                           'browser_mode': 'default'}
-        here = (snapshot.get('app') or {}).get('bundle_id')
-        if action is None and start == 'current' and here and here not in BROWSER_IDS and not has_window(snapshot, here):
-            # Staying in the app in front, which shows no window (Finder with only the desktop): open one.
-            # "How many items are in my Movies folder" stopped asking to open Finder (live, held-out).
-            action = {'type': 'new_window', 'bundle_id': here}
         if action is None:
             return None
         try:
