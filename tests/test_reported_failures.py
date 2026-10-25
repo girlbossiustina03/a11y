@@ -1903,8 +1903,10 @@ class WindowlessAppTests(unittest.TestCase):
         self.assertEqual(offered, ['none', 'History > Show All History', 'History > Home'])  # nothing that clears, closes or lists pages
         self.assertIsNone(task.menu_pick_step(desktop, {'app': {'bundle_id': 'com.apple.Safari'}}, provider, {}))  # once per task
         provider.complete_structured.return_value = {'command': 'none'}
-        finder = ComputerTask('where can I see the sites I visited? open it', automatic=True)
-        self.assertIsNone(finder.menu_pick_step(desktop, {'app': {'bundle_id': 'com.apple.finder'}}, provider, {}))  # not its app
+        finder = ComputerTask('open my notes in Notes', automatic=True)
+        finder._catalog = [{'name': 'Notes', 'bundle_id': 'com.apple.Notes'}]
+        finder.receipts = list(task.receipts)
+        self.assertIsNone(finder.menu_pick_step(desktop, {'app': {'bundle_id': 'com.apple.finder'}}, provider, {}))  # another app's goal
         other = ComputerTask('find the cheapest flight', automatic=True)
         other.brought = {'com.apple.Safari'}
         other.receipts = list(task.receipts)

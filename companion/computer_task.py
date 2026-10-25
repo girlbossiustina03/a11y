@@ -309,7 +309,7 @@ def compact_regions(regions):
     return ['%s|%.3f,%.3f' % (r['text'], r['x']+r['width']/2, r['y']+r['height']/2) for r in regions]
 
 
-ROLE_NAMES = {'AXButton': 'button', 'AXLink': 'link', 'AXCheckBox': 'checkbox', 'AXRadioButton': 'option', 'AXPopUpButton': 'menu',
+ROLE_NAMES = {'AXButton': 'button', 'AXLink': 'link', 'AXCheckBox': 'checkbox', 'AXRadioButton': 'tab or option', 'AXPopUpButton': 'menu',
               'AXMenuButton': 'menu', 'AXTab': 'tab', 'AXDisclosureTriangle': 'expander', 'AXMenuItem': 'menu item', 'AXTextField': 'field',
               'AXTextArea': 'field', 'AXSearchField': 'search field', 'AXComboBox': 'field', 'AXSlider': 'slider', 'AXSwitch': 'switch',
               'AXCell': 'item', 'AXRow': 'row'}
@@ -1118,8 +1118,8 @@ class ComputerTask:
         if not app.get('bundle_id') or not hasattr(bridge, 'menu_items') or named_addresses(self.goal):
             return None  # a named website's content is in the page, not the menus
         named = self.named_app(snapshot)
-        if app['bundle_id'] not in getattr(self, 'brought', set()) and named is not False:
-            return None  # only the app the goal is about: with Finder in front it picked a Finder Service (live)
+        if named and app['bundle_id'] not in getattr(self, 'brought', set()):
+            return None  # the goal names another app: its menus, not these (Finder Services for a Safari goal, live)
         self.menu_picked = True
         try:
             items = bridge.menu_items(app['bundle_id'])
