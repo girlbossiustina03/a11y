@@ -192,12 +192,15 @@ if let index = args.firstIndex(of: "--input"), index+1 < args.count {
         // Did it arrive? The field's own text must now hold the last line typed (keystrokes were lost
         // right after a new TextEdit document opened, live). A field that reports no text is not judged.
         let lastLine = text.split(separator: "\n").last.map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+        // A field that counts its characters is judged even when empty: an open menu (Notes' search scope)
+        // swallowed every keystroke and the field stayed empty (live).
+        let judged = attr(focused, "AXNumberOfCharacters") != nil
         var arrived = lastLine.isEmpty
         let deadline = Date().addingTimeInterval(0.8)
         while !arrived && Date() < deadline {
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
             let value = string(focused, "AXValue")
-            arrived = value.isEmpty || value.contains(lastLine)
+            arrived = (value.isEmpty && !judged) || value.contains(lastLine)
         }
         if !arrived {
             emit(["error": "The typed text did not arrive in the field. Look again before retrying."]); exit(1)
