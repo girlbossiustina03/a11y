@@ -1693,6 +1693,15 @@ class AppClickTests(unittest.TestCase):
         self.assertEqual(result['action']['type'], 'wait')       # never a refusal that ends the task
         self.assertIn('already in front', result['action']['label'])
 
+    def test_reported_the_full_screen_button_is_skipped_unless_asked(self):
+        # Owner: "it loves to fullscreen shit and that breaks the whole thing".
+        result = self.run_click({'role': 'AXButton', 'subrole': 'AXFullScreenButton', 'title': ''})
+        self.assertEqual(result['action']['type'], 'wait')
+        from companion.computer_task import FULL_SCREEN_MENU, WINDOW_SIZE_WORDS
+        self.assertTrue(FULL_SCREEN_MENU.search('View > Enter Full Screen'))
+        self.assertTrue(WINDOW_SIZE_WORDS.search('make Safari full screen'))
+        self.assertFalse(WINDOW_SIZE_WORDS.search('find the Bluetooth settings'))
+
     def test_an_ordinary_target_is_left_alone(self):
         result = self.run_click({'role': 'AXButton', 'title': 'Bluetooth', 'owner': 'com.apple.systempreferences'})
         self.assertEqual(result['action']['type'], 'click_point')

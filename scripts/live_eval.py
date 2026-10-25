@@ -170,6 +170,17 @@ def restore(before):
                 closed.append('test mail draft')
         except (RuntimeError, ValueError, subprocess.TimeoutExpired):
             pass
+    # A window left full screen is in its own Space and breaks every task after it (owner): undo it.
+    try:
+        undone = osa('set out to 0', 'tell application "System Events"', 'repeat with p in (every process whose visible is true)',
+                     'repeat with w in (every window of p)', 'try', 'if value of attribute "AXFullScreen" of w is true then',
+                     'set value of attribute "AXFullScreen" of w to false', 'set out to out + 1', 'end if', 'end try',
+                     'end repeat', 'end repeat', 'end tell', 'return out', timeout=20)
+        if undone and undone != '0':
+            closed.append('left full screen ×'+undone)
+            time.sleep(1.5)  # the window animates back from its Space
+    except (RuntimeError, subprocess.TimeoutExpired):
+        pass
     for app in sorted(now-before['apps']-KEEP_RUNNING):
         if not quietly('tell application "%s" to quit saving no' % app) and not quietly('tell application "%s" to quit' % app):
             subprocess.run(['pkill', '-x', app])

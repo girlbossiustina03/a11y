@@ -439,6 +439,9 @@ MENU_GOAL = re.compile(r"^\W*(?:please\s+)?(?:open|show(?: me)?|click(?: on)?)\s
                        r"(?P<menu2>[\w&'-]+(?:\s+[\w&'-]+)?)\s+menu[\s.!?]*$", re.I)
 ORDINALS = {'first': 1, 'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5, 'sixth': 6, 'seventh': 7, 'eighth': 8,
             'ninth': 9, 'tenth': 10, '1st': 1, '2nd': 2, '3rd': 3, '4th': 4, '5th': 5, '6th': 6, '7th': 7, '8th': 8, '9th': 9, '10th': 10}
+# A window goes full screen or into the Dock only when the goal says so.
+WINDOW_SIZE_WORDS = re.compile(r'\b(?:full[\s-]?screen|zoom|maximi[sz]e|minimi[sz]e|bigger window|enlarge)\b', re.I)
+FULL_SCREEN_MENU = re.compile(r'\b(?:enter|exit|toggle)?\s*full[\s-]?screen\b|\bminimi[sz]e\b|\bzoom\b', re.I)
 # "Sort my Documents by date added", "show Downloads in Finder, newest added first": Finder's own
 # View > Sort By menu, in code (the model clicked around for 24 steps, live v3).
 FINDER_SORT = re.compile(r'\bsort(?:ed)?\b.*?\bby\s+(?P<column>name|kind|date added|date modified|date created|date last opened|last opened|size|tags)\b'
@@ -632,6 +635,8 @@ def validate_step(raw, desktop, snapshot, *, goal_mode=None, screen=None, text_r
     validated = validate_response({'request_kind': 'answer', 'message': message, 'desktop_action': action,
         'target': None, 'source_ids': [], 'workflow': None}, set(), has_screen=True, desktop=desktop, desktop_snapshot=snapshot)
     action = validated['desktop_action']
+    if action['type'] == 'choose_menu' and FULL_SCREEN_MENU.search(action.get('path', '')) and not WINDOW_SIZE_WORDS.search(goal or ''):
+        raise ValidationError('Leave the window as it is: full screen moves it to its own Space. Choose another way.')
     if goal_mode == 'inspect' and action['type'] == 'choose_menu' and MENU_CHANGES.search(action.get('path', '')):
         raise ValidationError('This goal only authorizes looking. That menu item changes something; choose another way or stop.')
     if goal_mode == 'inspect':
@@ -981,7 +986,16 @@ class ComputerTask:
             hit = bridge.hit(screen['x']+action['x']*screen['width'], screen['y']+action['y']*screen['height'])
         except (RuntimeError, ValueError, OSError, KeyError, TypeError):
             return step
-        app = hit.get('app') if isinstance(hit, dict) else None
+        if not isinstance(hit, dict):
+            return step
+        window_button = {'AXFullScreenButton': 'full-screen', 'AXZoomButton': 'full-screen', 'AXMinimizeButton': 'minimise'}.get(hit.get('subrole'))
+        if window_button and not WINDOW_SIZE_WORDS.search(self.goal):
+            # The green button sent windows full screen, into their own Space, and nothing lined up after
+            # (owner, live). A window's size changes only when the goal asks for it.
+            self.dead_targets.add((self.screen_seen, str(action.get('label', '')).casefold().strip()))
+            return dict(step, action={'type': 'wait', 'milliseconds': 500, 'label': 'the window’s '+window_button+' button skipped'},
+                        message='Left the window as it is.')
+        app = hit.get('app')
         if not app:
             return step
         name = hit.get('title') or hit.get('owner_name') or 'that app'
