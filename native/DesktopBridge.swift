@@ -655,7 +655,7 @@ if let index = args.firstIndex(of: "--menu-items"), index+1 < args.count {
     }
     var paths: [String] = []
     let started = CFAbsoluteTimeGetCurrent()
-    for top in ((attr(bar, "AXChildren") as? [AXUIElement]) ?? []).dropFirst() {  // not the Apple menu
+    for top in ((attr(bar, "AXChildren") as? [AXUIElement]) ?? []) {  // the Apple menu too: About This Mac, System Settings…
         let menu = string(top, "AXTitle")
         guard !menu.isEmpty else { continue }
         for item in entries(top) where paths.count < 400 && CFAbsoluteTimeGetCurrent()-started < 2 {

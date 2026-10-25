@@ -99,7 +99,7 @@ MENU_SYSTEM = '''The user wants something done in the app in front. Below are th
 ("the sites I visited" is History > Show All History). Pick "none" when no command does it, or when
 the goal is about something inside the window (a link, a file, a message, a page's content).'''
 # Menu commands never offered to the menu pick: they end, remove, send or reset something.
-MENU_UNSAFE = re.compile(r'\b(?:quit|close|delete|remove|erase|clear|empty|trash|log\s*out|sign\s*out|send|print|restart|shut\s*down|'
+MENU_UNSAFE = re.compile(r'\b(?:quit|close|delete|remove|erase|clear|empty|trash|log\s*out|sign\s*out|send|print|restart|shut\s*down|recent|'
                          r'uninstall|reset|revert|discard|eject|lock|sleep|force|archive|block|report|move to|save|export|duplicate|'
                          r'rename|share|publish|upload|import|install|update|purchase|buy|subscribe)\b', re.I)
 # Menus that list content, not commands: pages, windows, bookmarks, recent files.
@@ -1058,7 +1058,8 @@ class ComputerTask:
         if getattr(self, 'menu_picked', False) or self.queue or self.goal_mode == 'draft' \
                 or any(r.get('type') in ('new_window', 'type_text', 'choose_menu') for r in self.receipts):
             return None  # writing has its own steps: it chose File > New after the new document opened (live)
-        if not any(r.get('effect') == 'nothing changed on screen' for r in self.receipts):
+        if not any(r.get('effect') == 'nothing changed on screen' or r.get('type') == 'wait' and 'skipped' in str(r.get('label', ''))
+                   for r in self.receipts):  # a click on the app's own name, skipped, is being stuck too (live, held-out)
             return None  # a fallback once a click did nothing: as a first move it chose Chrome's History for a Commons goal (live)
         from .web_apps import named_addresses
         app = snapshot.get('app') or {}

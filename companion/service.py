@@ -1023,7 +1023,7 @@ class Companion:
             from . import weather
             from .paths import saved_ai_settings
             several = weather.places(plan.get('target', ''), request)
-            place = plan.get('target', '').strip() or weather.home_place(saved_ai_settings().get('home_place', ''))
+            place = weather.place_named(plan.get('target', '')) or weather.home_place(saved_ai_settings().get('home_place', ''))
             if not place and not several:
                 return 'Which city should I check?'
             try:

@@ -70,6 +70,11 @@ class DirectAnswerServiceTests(CompanionFixture, unittest.TestCase):
                 patch('companion.weather.forecast', return_value={'place': 'Bucharest', 'sentence': '10°C and cloudy in Bucharest.'}) as forecast:
             self.ask('what is the weather like?', {'operation': 'weather', 'app_name': '', 'target': '', 'when': ''})
         forecast.assert_called_once_with('Bucharest', 'now')
+        # Reported: the router put "today" where the place goes and it was geocoded to a town called Todaya.
+        with patch.dict('os.environ', {'A11Y_WEB_ANSWERS': '1'}), patch('companion.weather.home_place', return_value='Bucharest'), \
+                patch('companion.weather.forecast', return_value={'place': 'Bucharest', 'sentence': '10°C in Bucharest.'}) as forecast:
+            self.ask('will it be foggy today?', {'operation': 'weather', 'app_name': '', 'target': 'today', 'when': ''})
+        forecast.assert_called_once_with('Bucharest', 'now')
 
     def test_reported_two_cities_are_compared(self):
         # Live (v3): "is it warmer in Lima or Nairobi right now?" got Lima's weather only.

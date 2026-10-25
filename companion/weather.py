@@ -141,6 +141,18 @@ def wet_hour(data):
     return None
 
 
+# Words a router puts where the place goes ("weather today"): never a place. "today" was geocoded to a
+# town called Todaya (live).
+NOT_A_PLACE = re.compile(r'^(?:(?:right\s+)?now|today|tonight|tomorrow|this\s+(?:week|weekend|morning|afternoon|evening)|'
+                         r'(?:the\s+)?weekend|here|outside|currently|later|soon|my\s+(?:area|city|location)|local(?:ly)?)$', re.I)
+
+
+def place_named(target):
+    """The place in a router's target, '' when it names only a time or "here"."""
+    target = (target or '').strip(' ?.!')
+    return '' if NOT_A_PLACE.match(target) else target
+
+
 def places(target, request):
     """The places a weather question names: "Lima or Nairobi" → two of them."""
     parts = [p.strip(' ?.!') for p in re.split(r'\s*(?:,|\bor\b|\bvs\.?|\bversus\b|\band\b)\s*', target or '') if p.strip(' ?.!')]
