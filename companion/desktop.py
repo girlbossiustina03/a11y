@@ -222,7 +222,8 @@ def brief(message, sentences=2, words=40):
     text = ' '.join(parts[:sentences])
     tokens = text.split()
     if len(tokens) > words:
-        text = ' '.join(tokens[:words]).rstrip(',;:')+'…'
+        # "...", not "…": a line ending in "…" is progress, and a cut-short answer was left out of History (live).
+        text = ' '.join(tokens[:words]).rstrip(',;:')+'...'
     return text[:1].upper()+text[1:] if text else 'Done.'
 
 

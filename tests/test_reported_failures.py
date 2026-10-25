@@ -1916,6 +1916,13 @@ class WindowlessAppTests(unittest.TestCase):
                 self.assertIsNone(ComputerTask('show me the comments on the top post', automatic=True).section_step(None, front))
                 self.assertIsNone(ComputerTask('take me to the history part', automatic=True).section_step(None, {'app': {'bundle_id': 'com.apple.finder'}}))
 
+    def test_reported_a_long_answer_is_not_mistaken_for_progress(self):
+        # Live: a 40-word answer cut with "…" was treated as a progress line, left out of History and the reply.
+        from companion.desktop import brief, progress_message
+        long = 'There are multiple anecdotal origin stories about coffee '+'and its long history '*12+'in Ethiopia.'
+        self.assertFalse(progress_message(brief(long)))
+        self.assertTrue(progress_message('Open https://en.wikipedia.org in Safari…'))
+
 
 class DefaultBrowserTests(unittest.TestCase):
     @unittest.skipUnless(__import__('sys').platform == 'darwin', 'macOS LaunchServices')
