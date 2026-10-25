@@ -121,6 +121,11 @@ class MacDesktopBridge:
         return self.call('--click', str(screen['x']+action['x']*screen['width']),
                          str(screen['y']+action['y']*screen['height']), str(guard['display_id']), json.dumps(screen), action.get('button', 'left'), str(action.get('click_count', 1)))
 
+    def drag(self, action, guard):
+        screen = guard['screen']
+        at = lambda fx, fy: (str(screen['x']+fx*screen['width']), str(screen['y']+fy*screen['height']))
+        return self.call('--drag', *at(action['x'], action['y']), *at(action['to_x'], action['to_y']), str(guard['display_id']), json.dumps(screen))
+
     def catalog(self):
         return self.call('--catalog').get('installed_apps', [])
 

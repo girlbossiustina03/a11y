@@ -178,7 +178,7 @@ class ScreenVision:
             raise ValueError('The target or its window changed. No click was sent; ask for a fresh target.')
         if not self.enabled or self.generation != generation:
             raise ValueError('Screen vision was paused. No click was sent.')
-        result = desktop.bridge.click(proposal, guard)
+        result = desktop.bridge.drag(proposal, guard) if proposal.get('type') == 'drag' else desktop.bridge.click(proposal, guard)
         # How it clicked: "press" (accessibility, the user's pointer untouched), "focus", or "pointer" (borrowed, put back).
         timing('click.method', time.monotonic(), method=str(result.get('method', 'pointer'))[:10])
         if not result.get('submitted'):

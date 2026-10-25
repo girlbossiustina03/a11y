@@ -147,6 +147,15 @@ def validate_response(value, allowed_sources, *, planning=False, has_screen=Fals
                     raise ValidationError('Click coordinates must be finite image fractions from 0 up to 1.')
             result['desktop_action'] = dict(action, label=text(action['label'], 'click label', 240),
                                             confirmation_label=('Right-click' if action.get('button') == 'right' else 'Double-click' if action.get('click_count', 1) == 2 else 'Click')+' “'+action['label']+'”')
+        elif isinstance(action, dict) and action.get('type') == 'drag':
+            keys(action, ('type', 'x', 'y', 'to_x', 'to_y', 'label'), ('type', 'x', 'y', 'to_x', 'to_y', 'label'))
+            if not has_screen:
+                raise ValidationError('Dragging requires a fresh screen image.')
+            for coordinate in ('x', 'y', 'to_x', 'to_y'):
+                number = action[coordinate]
+                if isinstance(number, bool) or not isinstance(number, (int, float)) or not math.isfinite(number) or not 0 <= number < 1:
+                    raise ValidationError('Drag coordinates must be finite image fractions from 0 up to 1.')
+            result['desktop_action'] = dict(action, label=text(action['label'], 'drag label', 240), confirmation_label=action['label'])
         elif isinstance(action, dict) and action.get('type') == 'browse_url':
             from urllib.parse import urlsplit
             keys(action, ('type', 'bundle_id', 'url', 'label', 'browser_mode', 'window_hint'), ('type', 'bundle_id', 'url', 'label'))

@@ -1478,7 +1478,7 @@ class CompanionWindow(QMainWindow):
     @staticmethod
     def action_point(action, visual):
         """Desktop point an action will touch, if it has one."""
-        if action.get('type') == 'click_point' and visual and visual.get('screen'):
+        if action.get('type') in ('click_point', 'drag') and visual and visual.get('screen'):
             screen = visual['screen']
             return QPoint(round(screen['x']+action['x']*screen['width']), round(screen['y']+action['y']*screen['height']))
         bounds = action.get('bounds') if action.get('type') == 'press_control' else None
@@ -1503,6 +1503,7 @@ class CompanionWindow(QMainWindow):
         self.mascot.move(spot)
         self.cursor_flight.set_colors(self.mascot.colors)
         def landed():
+            self.pointer.dismiss()  # never a second pointer left at the end (owner)
             self.mascot.show()
             self.mascot.raise_()
             finished()
@@ -1968,7 +1969,7 @@ class CompanionWindow(QMainWindow):
                     worker.finished.connect(lambda: self.set_busy(False))
                     worker.start()
                     return
-                if proposed['type'] in ('focus_app', 'press_control', 'launch_app', 'quit_app', 'new_window', 'close_window', 'close_tab', 'choose_menu', 'browse_url', 'click_point', 'play_media', 'type_text', 'press_key', 'scroll', 'wait'):
+                if proposed['type'] in ('focus_app', 'press_control', 'launch_app', 'quit_app', 'new_window', 'close_window', 'close_tab', 'choose_menu', 'browse_url', 'click_point', 'drag', 'play_media', 'type_text', 'press_key', 'scroll', 'wait'):
                     self.execute_desktop_action(proposed)
                     return
                 current = self.desktop_monitor.authorize_action({'type': 'highlight_control', 'control_id': proposed['control_id']})

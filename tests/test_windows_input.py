@@ -160,7 +160,7 @@ class InputTests(unittest.TestCase):
         context.application_action(scroll)
         self.assertEqual(b._sender.events, [('key', 'cmd_n'), ('scroll', 620, 440, 'down')])
         self.assertEqual(set(CTRL_LETTERS) | set(KEYS), {'enter', 'tab', 'escape', 'space', 'backspace', 'left', 'right',
-                         'up', 'down', 'cmd_l', 'cmd_f', 'cmd_t', 'cmd_n', 'cmd_w', 'cmd_a', 'cmd_r'})
+                         'up', 'down', 'cmd_l', 'cmd_f', 'cmd_t', 'cmd_n', 'cmd_w', 'cmd_a', 'cmd_r', 'cmd_s'})  # cmd_s (save) always asks the user first
 
     def test_companion_focus_brings_the_observed_window_forward_before_input(self):
         own = (__import__('os').getpid(), 'C:\\a11y\\python.exe', 'A11y', NOTEPAD[3])

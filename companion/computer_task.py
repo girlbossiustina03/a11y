@@ -8,7 +8,7 @@ import time
 from .models import RESPONSE_SCHEMA, ValidationError, validate_response, text
 from .timing import timing
 
-TOOLS = {'click_point', 'press_control', 'type_text', 'press_key', 'scroll', 'launch_app', 'focus_app', 'new_window', 'browse_url', 'wait', 'choose_menu'}
+TOOLS = {'click_point', 'press_control', 'type_text', 'press_key', 'scroll', 'launch_app', 'focus_app', 'new_window', 'browse_url', 'wait', 'choose_menu', 'drag'}
 SCHEMA = {'type': 'object', 'additionalProperties': False,
           'required': ['status', 'message', 'risk', 'action'],
           'properties': {'status': {'enum': ['action', 'done', 'needs_user']},
@@ -61,6 +61,11 @@ def schema_for(platform, fast, control_ids=None, target_ids=None):
             'type': 'object', 'additionalProperties': False, 'required': ['type', 'target_id'],
             'properties': {'type': {'enum': ['click_target']}, 'target_id': {'enum': list(target_ids)},
                            'button': {'enum': ['left', 'right']}, 'click_count': {'enum': [1, 2]}}})
+        # Press at one target and release at another: selecting text (from a line's start to another line's end)
+        # or moving an item onto a place. The model tried to select text with clicks (owner).
+        variants.insert(1, {'type': 'object', 'additionalProperties': False, 'required': ['type', 'from_target', 'to_target'],
+                            'properties': {'type': {'enum': ['drag_target']}, 'from_target': {'enum': list(target_ids)},
+                                           'to_target': {'enum': list(target_ids)}}})
         # Tools that code finishes step by step (TaskTools): one decision instead of several.
         variants.insert(1, {'type': 'object', 'additionalProperties': False, 'required': ['type', 'target_id', 'text'],
                             'properties': {'type': {'enum': ['type_into']}, 'target_id': {'enum': list(target_ids)}, 'text': {'type': 'string'}}})
@@ -209,7 +214,8 @@ missing control names are NOT missing screen access. The supplied screenshot is 
 visual evidence. Click the center of the target, then inspect the NEW screenshot
 after execution. This works across apps, not only the apps named in examples.
 Optional button left/right and click_count 1/2 support double-clicking
-(left only) and context menus. Use type_text only when metadata confirms a focused non-password text field,
+(left only) and context menus. drag_target presses on one target and releases on another: from one
+text line to another selects that text. press_key cmd_s saves (the user confirms). Use type_text only when metadata confirms a focused non-password text field,
 with literal user-requested text OR text you compose when the goal explicitly asks
 you to write/draft a summary or other content. Do not invent recipient data or secrets.
 It does not press Enter. To search: if desktop.focused_role is not already a text field, click
@@ -273,8 +279,10 @@ def needs_review(action, risk):
         return False
     if risk != 'navigation':
         return True
-    if action.get('type') == 'press_key' and action.get('key') in ('enter', 'cmd_w'):
-        return True
+    if action.get('type') == 'press_key' and action.get('key') in ('enter', 'cmd_w', 'cmd_s'):
+        return True  # ⌘S writes a file: always the user's OK (owner: "why can't a11y press save")
+    if action.get('type') == 'drag' and not action.get('selects_text'):
+        return True  # a drag can move files, windows or items; selecting text in a field is only selecting
     import re
     return bool(re.search(r'\b(send|post|delete|remove|buy|pay|purchase|subscribe|install|download|upload|allow|permission|password|sign.?in|log.?in|submit|'
                           r'turn on|turn off|enable|disable|accept|block|unsubscribe|save|continue (?:as|with))\b', action.get('label', ''), re.I))
@@ -366,8 +374,19 @@ def already_typed(text, typed):
 
 
 def resolve_target(raw, marks):
-    """click_target → the click at that target's center, labelled with its name."""
+    """click_target → the click at that target's center, labelled with its name; drag_target → a drag
+    between two targets (lines of text: from the first's start to the second's end, which selects them)."""
     action = raw.get('action') if isinstance(raw, dict) else None
+    if isinstance(action, dict) and action.get('type') == 'drag_target':
+        first = next((m for m in marks if m['id'] == action.get('from_target')), None)
+        second = next((m for m in marks if m['id'] == action.get('to_target')), None)
+        if first is None or second is None:
+            raise ValidationError('Those target numbers are not on the current screen. Choose listed targets.')
+        text = first['kind'] == 'text' and second['kind'] == 'text'
+        x, y = (first['x']+0.001 if text else first['x']+first['width']/2), first['y']+first['height']/2
+        to_x, to_y = (second['x']+second['width']-0.001 if text else second['x']+second['width']/2), second['y']+second['height']/2
+        label = ('Select from “%s” to “%s”' if text else 'Drag “%s” to “%s”') % (first['label'][:40], second['label'][:40])
+        return dict(raw, action={'type': 'drag', 'x': round(x, 4), 'y': round(y, 4), 'to_x': round(to_x, 4), 'to_y': round(to_y, 4), 'label': label})
     if not isinstance(action, dict) or action.get('type') != 'click_target':
         return raw
     mark = next((m for m in marks if m['id'] == action.get('target_id')), None)
@@ -2095,8 +2114,15 @@ class ComputerTask:
                     return {'status': 'done', 'message': answer, 'action': None}
             return {'status': 'needs_user', 'message': 'The same action was proposed on an unchanged screen. I stopped rather than repeat an uncertain action.', 'action': None}
         self.last_proposal = signature
-        if action['type'] == 'click_point':
+        if action['type'] in ('click_point', 'drag'):
             action['capture_guard'] = vision.click_guard(image_data, visual, action)
+        if action['type'] == 'drag':
+            # Selecting text inside the focused field or document is only selecting; any other drag can move things.
+            box, screen = snapshot.get('focused_bounds') or {}, visual.get('screen') or {}
+            inside = lambda fx, fy: all(k in box for k in ('x', 'y', 'width', 'height')) and screen.get('width') and \
+                box['x'] <= screen['x']+fx*screen['width'] <= box['x']+box['width'] and box['y'] <= screen['y']+fy*screen['height'] <= box['y']+box['height']
+            action['selects_text'] = snapshot.get('focused_role') in ('AXTextArea', 'AXTextField') and bool(inside(action['x'], action['y'])) \
+                and bool(inside(action['to_x'], action['to_y']))
         self.pending = action
         # Enter in a search field during a read-only goal is a search, not a submission: it ran
         # nowhere before (Wikipedia, live) because every Enter waited for a confirmation.

@@ -2046,6 +2046,22 @@ class WindowlessAppTests(unittest.TestCase):
             with patch('companion.mac_apps.read_page', return_value=('Example', 'https://example.com/', '')):
                 self.assertEqual(web.navigation_check(None, {'app': {'bundle_id': 'com.apple.Safari'}})['action']['url'], 'https://www.apple.com')
 
+    def test_owner_a_drag_between_two_lines_selects_them_and_other_drags_ask(self):
+        # Owner: "it should have a double click and a click and drag ability cause i see it try and text select".
+        from companion.computer_task import resolve_target, needs_review, schema_for
+        marks = [{'id': 't1', 'kind': 'text', 'label': 'onions', 'x': .1, 'y': .2, 'width': .1, 'height': .02},
+                 {'id': 't2', 'kind': 'text', 'label': 'apples', 'x': .1, 'y': .26, 'width': .1, 'height': .02},
+                 {'id': 't3', 'kind': 'button', 'label': 'Trash', 'x': .5, 'y': .9, 'width': .05, 'height': .05}]
+        drag = resolve_target({'action': {'type': 'drag_target', 'from_target': 't1', 'to_target': 't2'}}, marks)['action']
+        self.assertEqual((drag['type'], drag['label']), ('drag', 'Select from “onions” to “apples”'))
+        self.assertLess(drag['x'], .102)            # from the first line's start
+        self.assertGreater(drag['to_x'], .198)      # to the second line's end
+        self.assertFalse(needs_review(dict(drag, selects_text=True), 'navigation'))
+        self.assertTrue(needs_review(dict(drag, selects_text=False), 'navigation'))   # could move a file to the Trash
+        self.assertTrue(needs_review({'type': 'press_key', 'key': 'cmd_s'}, 'navigation'))  # saving: the user's OK
+        kinds = [v['properties']['type']['enum'][0] for v in schema_for('Darwin', False, target_ids=['t1', 't2'])['anyOf'][0]['properties']['action']['anyOf']]
+        self.assertIn('drag_target', kinds)
+
 
 class DefaultBrowserTests(unittest.TestCase):
     @unittest.skipUnless(__import__('sys').platform == 'darwin', 'macOS LaunchServices')

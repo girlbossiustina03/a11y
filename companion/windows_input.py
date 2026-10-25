@@ -29,7 +29,7 @@ VK_RETURN = 0x0D
 KEYS = {'enter': (0x0D, False), 'tab': (0x09, False), 'escape': (0x1B, False), 'space': (0x20, False),
         'backspace': (0x08, False), 'left': (0x25, True), 'up': (0x26, True), 'right': (0x27, True),
         'down': (0x28, True)}
-CTRL_LETTERS = {'cmd_l': 'L', 'cmd_f': 'F', 'cmd_t': 'T', 'cmd_n': 'N', 'cmd_w': 'W', 'cmd_a': 'A', 'cmd_r': 'R'}
+CTRL_LETTERS = {'cmd_l': 'L', 'cmd_f': 'F', 'cmd_t': 'T', 'cmd_n': 'N', 'cmd_w': 'W', 'cmd_a': 'A', 'cmd_r': 'R', 'cmd_s': 'S'}
 MONITOR_DEFAULTTONEAREST = 2
 MDT_EFFECTIVE_DPI = 0
 GWL_STYLE = -16

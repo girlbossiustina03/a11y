@@ -220,7 +220,7 @@ if let index = args.firstIndex(of: "--input"), index+1 < args.count {
     } else if kind == "press_key" {
         let keys: [String: CGKeyCode] = ["enter": 36, "tab": 48, "escape": 53, "space": 49, "backspace": 51,
             "left": 123, "right": 124, "up": 126, "down": 125, "cmd_l": 37, "cmd_f": 3, "cmd_t": 17,
-            "cmd_n": 45, "cmd_w": 13, "cmd_a": 0, "cmd_r": 15, "cmd_[": 33, "cmd_]": 30]
+            "cmd_n": 45, "cmd_w": 13, "cmd_a": 0, "cmd_r": 15, "cmd_[": 33, "cmd_]": 30, "cmd_s": 1]
         guard let name = action["key"] as? String, let key = keys[name],
               let down = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: true),
               let up = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: false) else {
@@ -389,6 +389,61 @@ if let index = args.firstIndex(of: "--click"), index+4 < args.count {
     }
     CGDisplayShowCursor(CGMainDisplayID())
     emit(["submitted": true, "verification_required": true, "method": "pointer", "activated_target_app": activated]); exit(0)
+}
+if let index = args.firstIndex(of: "--drag"), index+6 < args.count {
+    // Press at one point, move to another, release (select text, move an item). The user's pointer is hidden,
+    // borrowed for it and put back, as for a click.
+    guard AXIsProcessTrusted(), let x = Double(args[index+1]), let y = Double(args[index+2]),
+          let x2 = Double(args[index+3]), let y2 = Double(args[index+4]), [x, y, x2, y2].allSatisfy({ $0.isFinite }),
+          let displayID = UInt32(args[index+5]), CGDisplayIsActive(displayID) != 0,
+          let data = args[index+6].data(using: .utf8),
+          let expected = (try? JSONSerialization.jsonObject(with: data)) as? [String: Double] else {
+        emit(["error": "A current display and macOS Accessibility permission are required for dragging."]); exit(1)
+    }
+    let from = CGPoint(x: x, y: y), to = CGPoint(x: x2, y: y2)
+    let actual = CGDisplayBounds(displayID)
+    guard actual.contains(from), actual.contains(to), expected["x"] == actual.origin.x, expected["y"] == actual.origin.y,
+          expected["width"] == actual.width, expected["height"] == actual.height else {
+        emit(["error": "The display changed. Nothing was dragged."]); exit(1)
+    }
+    if let ownPID, let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] {
+        for info in list {
+            guard let frame = info[kCGWindowBounds as String] as? NSDictionary,
+                  let rect = CGRect(dictionaryRepresentation: frame as CFDictionary), rect.contains(from) else { continue }
+            if (info[kCGWindowOwnerPID as String] as? pid_t) == ownPID && rect.width <= 700 {
+                emit(["error": "The companion's window covers that point. Nothing was dragged."]); exit(1)
+            }
+            if (info[kCGWindowLayer as String] as? Int) == 0 { break }
+        }
+    }
+    if let pid = windowOwner(at: from), let target = NSRunningApplication(processIdentifier: pid), !target.isActive {
+        target.activate(options: [.activateIgnoringOtherApps])
+        let deadline = Date().addingTimeInterval(1.0)
+        while !target.isActive && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.03)) }
+    }
+    let saved = CGEvent(source: nil)?.location
+    CGDisplayHideCursor(CGMainDisplayID())
+    let source = CGEventSource(stateID: .hidSystemState)
+    func post(_ type: CGEventType, _ point: CGPoint) {
+        CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left)?.post(tap: .cghidEventTap)
+    }
+    post(.mouseMoved, from)
+    RunLoop.current.run(until: Date().addingTimeInterval(0.03))
+    post(.leftMouseDown, from)
+    RunLoop.current.run(until: Date().addingTimeInterval(0.06))
+    for step in 1...12 {  // a short, even glide so apps see a drag, not a jump
+        let t = Double(step)/12
+        post(.leftMouseDragged, CGPoint(x: from.x+(to.x-from.x)*t, y: from.y+(to.y-from.y)*t))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.015))
+    }
+    post(.leftMouseUp, to)
+    RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+    if let saved, let now = CGEvent(source: nil)?.location, hypot(now.x-to.x, now.y-to.y) < 3 {
+        CGWarpMouseCursorPosition(saved)
+        CGAssociateMouseAndMouseCursorPosition(1)
+    }
+    CGDisplayShowCursor(CGMainDisplayID())
+    emit(["submitted": true, "verification_required": true, "method": "drag"]); exit(0)
 }
 if let index = args.firstIndex(of: "--activate"), index+1 < args.count {
     let bundle = args[index+1]
