@@ -64,6 +64,34 @@ def find_site(text):
     return None
 
 
+# A written address ("apple.com", "en.wikipedia.org/wiki/Tea"); never the domain of an e-mail address.
+DOMAIN = re.compile(r'(?<![@\w.])((?:[a-z0-9-]+\.)+(?:com|org|net|io|dev|edu|gov|co|uk|de|fr|it|ro|es|nl|eu|app|ai|info)(?:/[^\s,]*)?)(?![\w@])', re.I)
+
+
+def site_mentions(text):
+    """(start, end, address) for every site a request names, in order: addresses written out and
+    known web apps by name ("teams" inside "microsoft teams" counts once)."""
+    lowered = re.sub(r"['’]s\b", lambda m: '\0'*len(m.group()), text.casefold())  # same length, so spans line up
+    found = []
+    for match in DOMAIN.finditer(text):
+        address = match.group(1).rstrip('.')
+        found.append((match.start(), match.end(), address if '://' in address else 'https://'+address))
+    for name in sorted(WEB_APPS, key=len, reverse=True):
+        for match in re.finditer(r'\b'+re.escape(name).replace('\\ ', r'[\s\0]+')+r'\b', lowered):
+            if not any(start < match.end() and match.start() < end for start, end, _ in found):
+                found.append((match.start(), match.end(), WEB_APPS[name]))
+    return sorted(found)
+
+
+def named_addresses(text):
+    """Every site a request names, in the order named, each once."""
+    result = []
+    for _, _, address in site_mentions(text):
+        if address not in result:
+            result.append(address)
+    return result
+
+
 # "the article on Penguin" first, then "the Coffee article" (which also matches "the Wikipedia article").
 ARTICLES = (re.compile(r"\b(?:article|page)\s+(?:on|about|for)\s+(?:the\s+)?([\w'’\- ]+?)(?=\s+(?:and|then|to|in)\b|[,.?!]|$)", re.I),
             re.compile(r"\bthe\s+([\w'’\-]+(?:\s+[\w'’\-]+){0,2})\s+(?:article|page)\b", re.I))

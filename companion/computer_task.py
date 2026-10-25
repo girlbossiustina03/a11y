@@ -450,6 +450,10 @@ NTH_ITEM = re.compile(r"\b(?:what(?:'s|s| is| are)|tell me|read(?: me)?|which is
                       r"sixth|seventh|eighth|ninth|tenth|\d{1,2}(?:st|nd|rd|th)?)\s+(?:top\s+)?(?:story|post|headline|result|item|article|link|entry)\b", re.I)
 WORD_NUMBERS = {'first': 1, 'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5, 'sixth': 6, 'seventh': 7, 'eighth': 8, 'ninth': 9, 'tenth': 10}
 # "Switch to the GitHub tab", "go back to the Wikipedia tab I had open": that site's open tab.
+# What is left of "open X and Y in two separate tabs" once the sites are taken out: opening, nothing more.
+ONLY_OPENING = re.compile(r'^\W*(?:please\s+|can\s+you\s+|could\s+you\s+)?(?:open|go\s+to|show\s+me|pull\s+up|bring\s+up|load)\s+'
+                          r'(?:both\s+)?\S+(?:\s*(?:,|and|&)\s*\S+)+'
+                          r'(?:\s+(?:in|as|on)\s+(?:\w+\s+){0,2}(?:tabs?|windows?))?(?:\s+(?:please|for\s+me))?\W*$', re.I)
 SWITCH_TAB = re.compile(r'^\W*(?:please\s+)?(?:switch|go\s+back|get\s+back|return|go|take\s+me)\s+(?:back\s+)?to\s+(?:the\s+|my\s+)?(?P<site>.+?)\s+tab\b', re.I)
 # "Go back", "go back in Safari", "go forward two pages": the browser's own back/forward, in code.
 HISTORY_GOAL = re.compile(r'^\W*(?:please\s+|can you\s+)?(?:go|take me|bring me|navigate|move)\s+(?P<way>back|forward)(?:\s+(?P<count>one|a|two|three|1|2|3)\s+pages?)?'
@@ -1021,6 +1025,44 @@ class ComputerTask:
                                  desktop, snapshot, catalog=self._catalog or (), goal=self.goal)
         return dict(step, action=switched['action'], message=switched.get('message', step.get('message')))
 
+    def sites_step(self, desktop, snapshot):
+        """"Open apple.com and duckduckgo.com in two tabs": each named site opens in code, one after
+        the other (an open tab of the site is reused), then done when opening was all it asked. The
+        model clicked a Favourites icon ten times instead of opening the second site (live, v2)."""
+        from .web_apps import named_addresses
+        addresses = named_addresses(self.goal)
+        if len(addresses) < 2:
+            return None
+        opened = getattr(self, 'sites_opened', [])
+        waiting = [address for address in addresses if address not in opened]
+        if not waiting:
+            from .web_apps import site_mentions
+            plain = self.goal
+            for start, end, _ in reversed(site_mentions(self.goal)):
+                plain = plain[:start]+'SITE'+plain[end:]
+            if ONLY_OPENING.match(plain):
+                return {'status': 'done', 'action': None, 'message': 'Opened them in separate tabs.'}
+            return None
+        from .desktop_context import BROWSER_IDS, default_browser_id
+        from .web_apps import browser_named
+        front = (snapshot.get('app') or {}).get('bundle_id')
+        wanted = browser_named(self.goal) or ''
+        browser = next((a for a in self._catalog or [] if wanted and a['name'] == wanted), None) or \
+            next((a for a in self._catalog or [] if a['bundle_id'] == (front if front in BROWSER_IDS else default_browser_id())), None) or \
+            next((a for a in self._catalog or [] if a['bundle_id'] in BROWSER_IDS), None)
+        if browser is None:
+            return None
+        try:
+            action = validate_step({'status': 'action', 'message': 'Opening.', 'risk': 'navigation',
+                                    'action': {'type': 'browse_url', 'bundle_id': browser['bundle_id'], 'url': waiting[0],
+                                               'label': 'Open '+waiting[0].split('://', 1)[-1]+' in '+browser['name'], 'browser_mode': 'default'}},
+                                   desktop, snapshot, catalog=self._catalog or (), goal=self.goal)['action']
+        except (ValueError, ValidationError):
+            return None
+        self.sites_opened = opened+[waiting[0]]
+        self.pending = action
+        return {'status': 'action', 'message': action.get('label', 'Opening')+'…', 'action': action, 'review': not self.automatic, 'visual_capture': None}
+
     def tab_step(self, desktop, snapshot):
         """"Switch to the Wikipedia tab": open the site, which brings its open tab forward (the bridge
         reuses it), then done. The model clicked Back twice after the tab was already in front (live, v3)."""
@@ -1255,6 +1297,7 @@ class ComputerTask:
                 except (ValueError, ValidationError):
                     action = None
                 if action:
+                    self.sites_opened = [address]
                     self.pending = action
                     return {'status': 'action', 'message': action.get('label', 'Opening')+'…', 'action': action,
                             'review': not self.automatic, 'visual_capture': None}
@@ -1497,7 +1540,7 @@ class ComputerTask:
         if read is not None:
             timing('task.step.summary', step_started, step=len(self.receipts)+1, status=read['status'], code='view_answer')
             return read
-        opened = (self.tab_step(desktop, snapshot) or self.history_step(desktop, snapshot) or self.finder_sort_step(desktop, snapshot)
+        opened = (self.sites_step(desktop, snapshot) or self.tab_step(desktop, snapshot) or self.history_step(desktop, snapshot) or self.finder_sort_step(desktop, snapshot)
                   or self.menu_step(desktop, snapshot))
         if opened is not None:
             timing('task.step.summary', step_started, step=len(self.receipts)+1, status=opened['status'], code='menu')

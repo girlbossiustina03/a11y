@@ -1641,6 +1641,20 @@ class V3RoundFourTests(LiveRoutingTests):
         task.record(dict(first['action'], status='executed'))
         self.assertEqual(task.tab_step(None, {'app': {'bundle_id': 'com.apple.Safari'}})['status'], 'done')
 
+    def test_reported_two_named_sites_open_in_code_one_tab_each(self):
+        # Live (v2): "open apple.com and duckduckgo.com in two separate tabs" clicked a Favourites icon ten times.
+        task = ComputerTask('open apple.com and duckduckgo.com in two separate tabs', automatic=True)
+        task._catalog = [{'name': 'Safari', 'bundle_id': 'com.apple.Safari'}]
+        front = {'app': {'bundle_id': 'com.apple.Safari'}}
+        with patch('companion.computer_task.validate_step', side_effect=lambda raw, *a, **k: {'action': raw['action']}):
+            urls = [task.sites_step(None, front)['action']['url'] for _ in range(2)]
+            self.assertEqual(urls, ['https://apple.com', 'https://duckduckgo.com'])
+            self.assertEqual(task.sites_step(None, front)['status'], 'done')
+            more = ComputerTask('open Wikipedia and Hacker News and tell me which one loads faster', automatic=True)
+            more._catalog, more.sites_opened = task._catalog, ['https://www.wikipedia.org', 'https://news.ycombinator.com']
+            self.assertIsNone(more.sites_step(None, front))                       # opened; the rest is the model's
+            self.assertIsNone(ComputerTask('email test@example.com and open apple.com', automatic=True).sites_step(None, front))
+
     def test_reported_then_read_it_back_follows_the_note(self):
         # Live (v3): "make a note … then read it back to me" made the note and stopped.
         self.route('create_note', 'A11y test 9473 | the spare key is under the blue pot')
