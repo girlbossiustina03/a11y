@@ -321,6 +321,47 @@ if let index = args.firstIndex(of: "--click"), index+4 < args.count {
         RunLoop.current.run(until: Date().addingTimeInterval(0.15))
         activated = target.isActive
     }
+    // 1. Without the user's pointer: press the element at the point through accessibility (buttons, links,
+    //    tabs, menus) or focus it (text fields). Single left clicks only; the element must belong to the
+    //    app under the point, never to A11y. Walks up from a label to the control that holds it.
+    if buttonName == "left" && count == 1, let pid = windowOwner(at: point) {
+        var found: AXUIElement?
+        if AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(point.x), Float(point.y), &found) == .success,
+           var node = found {
+            var owner: pid_t = 0
+            AXUIElementGetPid(node, &owner)
+            let pressable: Set<String> = ["AXButton", "AXLink", "AXRadioButton", "AXTab", "AXCheckBox", "AXMenuButton",
+                                          "AXPopUpButton", "AXMenuBarItem", "AXMenuItem", "AXDisclosureTriangle", "AXCell", "AXRow"]
+            let fields: Set<String> = ["AXTextField", "AXSearchField", "AXTextArea", "AXComboBox"]
+            for _ in 0..<4 where owner == pid {
+                let role = string(node, "AXRole")
+                var names: CFArray?
+                AXUIElementCopyActionNames(node, &names)
+                let actions = (names as? [String]) ?? []
+                AXUIElementSetMessagingTimeout(node, 1)
+                if pressable.contains(role) && actions.contains(kAXPressAction as String) {
+                    if AXUIElementPerformAction(node, kAXPressAction as CFString) == .success {
+                        emit(["submitted": true, "verification_required": true, "method": "press", "activated_target_app": activated]); exit(0)
+                    }
+                    break
+                }
+                if fields.contains(role) {
+                    if AXUIElementSetAttributeValue(node, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success,
+                       (attr(node, kAXFocusedAttribute as String) as? Bool) == true {
+                        emit(["submitted": true, "verification_required": true, "method": "focus", "activated_target_app": activated]); exit(0)
+                    }
+                    break
+                }
+                guard let parent = element(attr(node, "AXParent")) else { break }
+                node = parent
+            }
+        }
+    }
+    // 2. The pointer, borrowed for a moment: hidden, a quick click at the point, and put back where the user
+    //    left it (unless they moved it meanwhile, then it stays with them).
+    let saved = CGEvent(source: nil)?.location
+    CGDisplayHideCursor(CGMainDisplayID())
+    defer { CGDisplayShowCursor(CGMainDisplayID()) }
     // A real left (or right) click: move there, press, hold briefly, release, as a mouse does.
     let source = CGEventSource(stateID: .hidSystemState)
     let button: CGMouseButton = buttonName == "left" ? .left : .right
@@ -332,17 +373,22 @@ if let index = args.firstIndex(of: "--click"), index+4 < args.count {
         emit(["error": "The mouse events could not be created. No click was sent."]); exit(1)
     }
     move.post(tap: .cghidEventTap)
-    RunLoop.current.run(until: Date().addingTimeInterval(0.06))
+    RunLoop.current.run(until: Date().addingTimeInterval(0.025))
     for click in 1...count {
         down.setIntegerValueField(.mouseEventClickState, value: Int64(click))
         up.setIntegerValueField(.mouseEventClickState, value: Int64(click))
         down.post(tap: .cghidEventTap)
-        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        RunLoop.current.run(until: Date().addingTimeInterval(0.03))
         up.post(tap: .cghidEventTap)
         if click < count { RunLoop.current.run(until: Date().addingTimeInterval(0.08)) }
     }
     RunLoop.current.run(until: Date().addingTimeInterval(0.05))  // let the events reach the app before exiting
-    emit(["submitted": true, "verification_required": true, "activated_target_app": activated]); exit(0)
+    if let saved, let now = CGEvent(source: nil)?.location, hypot(now.x-point.x, now.y-point.y) < 3 {
+        CGWarpMouseCursorPosition(saved)
+        CGAssociateMouseAndMouseCursorPosition(1)
+    }
+    CGDisplayShowCursor(CGMainDisplayID())
+    emit(["submitted": true, "verification_required": true, "method": "pointer", "activated_target_app": activated]); exit(0)
 }
 if let index = args.firstIndex(of: "--activate"), index+1 < args.count {
     let bundle = args[index+1]

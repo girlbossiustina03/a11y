@@ -6,6 +6,7 @@ import subprocess
 import sys
 import threading
 import time
+from .timing import timing
 from .ollama import OllamaProvider
 
 
@@ -178,6 +179,8 @@ class ScreenVision:
         if not self.enabled or self.generation != generation:
             raise ValueError('Screen vision was paused. No click was sent.')
         result = desktop.bridge.click(proposal, guard)
+        # How it clicked: "press" (accessibility, the user's pointer untouched), "focus", or "pointer" (borrowed, put back).
+        timing('click.method', time.monotonic(), method=str(result.get('method', 'pointer'))[:10])
         if not result.get('submitted'):
             raise RuntimeError('The click result is uncertain. Check the app before trying again.')
         desktop.collect_once()
