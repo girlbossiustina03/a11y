@@ -995,7 +995,7 @@ def main():
     parser.add_argument('--only', action='append', help='run only requests containing this text (repeatable)')
     parser.add_argument('--out', default=str(ROOT/'.data'/'live_eval'))
     parser.add_argument('--compare', help='an earlier summary.json to show next to the results')
-    parser.add_argument('--suite', choices=('requests', 'navigation', 'varied', 'v2', 'v3', 'answers', 'all'), default='requests',
+    parser.add_argument('--suite', choices=('requests', 'navigation', 'varied', 'v2', 'v3', 'heldout', 'answers', 'all'), default='requests',
                         help='requests: the reported requests; navigation: getting somewhere by clicking; '
                              'varied: new random tasks across many apps every run')
     parser.add_argument('--tasks', type=int, default=14, help='varied suite: how many random tasks')
@@ -1007,9 +1007,9 @@ def main():
     print('build', build_id(), '→', out, flush=True)
     app = App(ROOT/'.data', out/'app.log')
     eval_window = EvalWindow()
-    if args.suite in ('v2', 'v3'):
+    if args.suite in ('v2', 'v3', 'heldout'):
         return run_v2(app, eval_window, out, args.tasks, args.seed if args.seed is not None else int(time.time()) % 100000,
-                      hard=args.suite == 'v3')
+                      hard={'v2': False, 'v3': 'live_hard', 'heldout': 'live_heldout'}[args.suite])
     seed = args.seed if args.seed is not None else int(time.time()) % 100000
     if args.suite in ('varied', 'all'):
         PANES[:] = settings_panes()
@@ -1054,11 +1054,13 @@ def run_v2(app, eval_window, out, count, seed, hard=False):
     import live_tasks
     PANES[:] = settings_panes()
     if hard:
-        import live_hard
-        tasks = live_hard.build(eval_window, count, seed)
+        # live_hard (v3) or live_heldout: the held-out set is written by someone else and only its
+        # total score is looked at, so fixes can't be tuned to its tasks.
+        import importlib
+        tasks = importlib.import_module(hard).build(eval_window, count, seed)
     else:
         tasks = live_tasks.build(eval_window, count, seed)
-    print('v3' if hard else 'v2', 'seed', seed, '·', len(tasks), 'tasks', flush=True)
+    print(hard or 'v2', 'seed', seed, '·', len(tasks), 'tasks', flush=True)
     app.shots = out/'shots'
     records = []
     app.launch()
