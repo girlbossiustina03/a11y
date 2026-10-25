@@ -169,6 +169,18 @@ class InputTests(unittest.TestCase):
         b.input({'type': 'press_key', 'key': 'tab', 'bundle_id': 'notepad.exe', 'window_title': NOTEPAD[2], 'bounds': NOTEPAD[3]})
         self.assertEqual(b.win32.foreground, 1)
 
+    def test_a_line_break_is_shift_enter_never_a_plain_enter(self):
+        from companion.windows_input import SendInput, VK_RETURN, VK_SHIFT
+        sender = SendInput.__new__(SendInput)
+        sent = []
+        sender.send = sent.append
+        sender.key = lambda vk, up=False, extended=False: ('key', vk, up)
+        sender.unicode = lambda unit, up=False: ('unit', unit, up)
+        sender.type_text('a\nb', lambda: True)
+        self.assertEqual(sent[1], [('key', VK_SHIFT, False), ('key', VK_RETURN, False), ('key', VK_RETURN, True), ('key', VK_SHIFT, True)])
+        self.assertEqual(sent[0], [('unit', 0x61, False), ('unit', 0x61, True)])
+        self.assertEqual(len(sent), 3)
+
     def test_utf16_units_cover_astral_characters(self):
         self.assertEqual(utf16_units('a👋'), [0x61, 0xD83D, 0xDC4B])
 

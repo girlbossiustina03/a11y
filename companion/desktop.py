@@ -5,14 +5,14 @@ import re
 from pathlib import Path
 import sys
 import time
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QByteArray, QBuffer, QIODevice, QPoint, QUrl, QRect, QPropertyAnimation, QVariantAnimation, QEasingCurve
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QByteArray, QBuffer, QIODevice, QPoint, QUrl, QRect, QSize, QPropertyAnimation, QVariantAnimation, QEasingCurve
 from PyQt6.QtGui import QKeySequence, QShortcut, QDesktopServices
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
     QPlainTextEdit, QPushButton, QLabel, QLineEdit, QComboBox, QCheckBox,
     QFileDialog, QMessageBox, QDialog, QDialogButtonBox, QFormLayout, QFrame, QListWidget)
 from .adaptation import CHOICES
-from .mascot import Mascot
+from .mascot import Mascot, REPLY_WIDTH
 from .faces import SKIN_NAMES
 from .terminal_theme import THEME_NAMES, saved_appearance, save_appearance
 from .overlay import GuidanceOverlay, CompanionPointer
@@ -1482,14 +1482,16 @@ class CompanionWindow(QMainWindow):
         return None
 
     def companion_spot(self, target, screen_rect):
-        """Where the companion waits beside a target point without covering it."""
+        """Where the companion waits beside a target point without covering it. Beside it, her
+        reply window (it opens on either side of her as each step is said) must not cover it
+        either: clicks on the Battery pane and Notes' search field landed on the reply (live)."""
         size = self.mascot.size()
-        gap = 48
-        x = target.x()+gap if target.x() < screen_rect.center().x() else target.x()-gap-size.width()
+        gap, reply = 48, REPLY_WIDTH
+        x = target.x()+gap+reply if target.x() < screen_rect.center().x() else target.x()-gap-reply-size.width()
         y = target.y()-size.height()//2
         x = max(screen_rect.left()+8, min(x, screen_rect.right()-size.width()-8))
         y = max(screen_rect.top()+8, min(y, screen_rect.bottom()-size.height()-8))
-        spot = QRect(QPoint(x, y), size).adjusted(-24, -24, 24, 24)
+        spot = QRect(QPoint(x-reply, y), QSize(size.width()+2*reply, size.height())).adjusted(-24, -24, 24, 24)
         if spot.contains(target):
             # Squeezed at a screen edge: go above or below the target instead.
             y = target.y()+gap if target.y() < screen_rect.center().y() else target.y()-gap-size.height()

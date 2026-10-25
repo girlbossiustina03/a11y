@@ -125,10 +125,46 @@ def tab_counts(app):
     return counts
 
 
+DISCARD_DRAFT = '''on run argv
+tell application "System Events" to tell process "Mail"
+    set w to window (item 1 of argv)
+    if not ((value of every text field of w) as string) contains "test@example.com" then return "not a test draft"
+    click (first button of w whose subrole is "AXCloseButton")
+    delay 0.8
+    click button 2 of sheet 1 of w
+end tell
+return "discarded"
+end run'''
+
+
+def mail_window_ids():
+    try:
+        return {int(v) for v in osa('tell application "Mail" to return id of every window', timeout=8).split(', ') if v.strip()}
+    except (RuntimeError, ValueError, subprocess.TimeoutExpired):
+        return set()
+
+
+def discard_test_drafts(before):
+    """Close compose windows a test opened to the test address, without saving and never sending.
+    Mail ignores a scripted close of a compose window and lists it as no "outgoing message", so its
+    close button is pressed and the sheet answered “Don’t Save” (button 2: Save, Don’t Save, Cancel)."""
+    closed = []
+    for window in sorted(mail_window_ids()-before):
+        try:
+            name = osa('tell application "Mail" to return name of (window id %d)' % window, timeout=8)
+            result = subprocess.run(['osascript', '-e', DISCARD_DRAFT, name], capture_output=True, text=True, timeout=15)
+        except (RuntimeError, subprocess.TimeoutExpired):
+            continue
+        if result.stdout.strip() == 'discarded':
+            closed.append('test mail draft')
+    return closed
+
+
 def snapshot():
     """What is open before a test: running apps, window ids, browser tab counts."""
     apps = app_names()
-    return {'apps': apps, 'windows': {app: window_ids(app) for app in WINDOW_APPS if app in apps},
+    return {'apps': apps, 'mail_windows': mail_window_ids() if 'Mail' in apps else set(),
+            'windows': {app: window_ids(app) for app in WINDOW_APPS if app in apps},
             'tabs': {app: tab_counts(app) for app in TAB_APPS if app in apps}}
 
 
@@ -161,6 +197,8 @@ def restore(before):
                 saving = ' saving no' if app in ('TextEdit', 'Preview') else ''
                 if quietly('tell application "%s" to close (%s id %d)%s' % (app, kind[:-1], window, saving)):
                     closed.append('%s window' % app)
+    if 'Mail' in now and 'Mail' in before['apps']:
+        closed += discard_test_drafts(before.get('mail_windows', set()))
     if 'Mail' in now:
         # Only drafts a test wrote (to the test address); never send, never touch other drafts.
         script = ('tell application "Mail"', 'set n to 0', 'repeat with m in (every outgoing message)',

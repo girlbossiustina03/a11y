@@ -94,7 +94,8 @@ def delete_test_notes():
     """Only notes carrying the test marker, which the harness created through A11y."""
     try:
         subprocess_osa(['on run argv', 'tell application "Notes"',
-                        'repeat with n in (every note whose name contains (item 1 of argv))', 'delete n', 'end repeat',
+                        # One delete of the whole set: a repeat over a "whose" list fails with -1728 (left 6 notes, live).
+                        'delete (every note whose name starts with (item 1 of argv))',
                         'end tell', 'end run'], le.TEST_MARKER)
     except RuntimeError:
         pass

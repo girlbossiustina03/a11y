@@ -527,6 +527,7 @@ class NativeTests(unittest.TestCase):
 
     def test_companion_waits_beside_a_target_without_covering_it(self):
         from PyQt6.QtCore import QRect
+        from companion.mascot import REPLY_WIDTH
         screen = QRect(0, 0, 1440, 900)
         size = self.window.mascot.size()
         for x in range(0, 1440, 60):
@@ -536,6 +537,10 @@ class NativeTests(unittest.TestCase):
                 if spot is not None:
                     covered = QRect(spot, size).adjusted(-24, -24, 24, 24)
                     self.assertFalse(covered.contains(target), (x, y))
+                    # Reported: the reply window, open beside her on either side, took the click.
+                    for side in (-REPLY_WIDTH, size.width()):
+                        reply = QRect(spot.x()+side, spot.y(), REPLY_WIDTH, size.height())
+                        self.assertFalse(reply.contains(target), (x, y, side))
                     self.assertTrue(screen.contains(QRect(spot, size)), (x, y))
 
     def test_task_action_waits_for_the_glide_and_stop_during_glide_sends_nothing(self):

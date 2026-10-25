@@ -36,6 +36,18 @@ class InputTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 authorize_input({'type': 'type_text', 'text': text}, context())
 
+    def test_reported_line_breaks_are_typed_only_into_a_document_area(self):
+        # Live: "a shopping list with onions, bread and apples, one per line" was refused as one action.
+        document = dict(context(), focused_role='AXTextArea')
+        action = authorize_input({'type': 'type_text', 'text': 'onions\r\nbread\napples'}, document)
+        self.assertEqual(action['text'], 'onions\nbread\napples')
+        self.assertIn('onions ⏎ bread', action['label'])
+        for text in ('onions\nbread', 'onions\tbread'):   # a one-line field never takes a line break
+            with self.assertRaises(ValueError):
+                authorize_input({'type': 'type_text', 'text': text}, context())
+        with self.assertRaises(ValueError):
+            authorize_input({'type': 'type_text', 'text': 'a\tb'}, document)
+
     def test_keyboard_and_scroll_are_allowlisted(self):
         self.assertEqual(authorize_input({'type': 'press_key', 'key': 'cmd_l'}, context())['key'], 'cmd_l')
         self.assertEqual(authorize_input({'type': 'scroll', 'direction': 'down'}, context())['direction'], 'down')

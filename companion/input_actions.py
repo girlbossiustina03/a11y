@@ -23,11 +23,18 @@ def authorize_input(action, context):
         raise ValueError('Input is blocked while a password field is focused.')
     value = action[field]
     if kind == 'type_text':
-        if not isinstance(value, str) or not value.strip() or len(value) > 2000 or any(ord(c) < 32 for c in value):
-            raise ValueError('Type one line of text, at most 2000 characters. Enter is a separate action.')
+        if isinstance(value, str):
+            value = value.replace('\r\n', '\n').replace('\r', '\n')
+            action = dict(action, text=value)
+        # Line breaks only in a multi-line text area (a document, a note): typed as Shift+Return, which
+        # starts a new line and never sends in chat apps. A shopping list went in as one line or not at all (live).
+        lines_ok = context.get('focused_role') == 'AXTextArea'
+        if not isinstance(value, str) or not value.strip() or len(value) > 2000 or any(ord(c) < 32 and not (c == '\n' and lines_ok) for c in value):
+            raise ValueError('Type one line of text, at most 2000 characters (several lines only in a document area). Enter is a separate action.')
         if context.get('focused_role') not in ('AXTextField', 'AXTextArea', 'AXComboBox') or not context.get('focused_bounds'):
             raise ValueError('Focus a non-password text field before requesting text entry.')
-        label = 'Type “'+value[:100]+('…' if len(value) > 100 else '')+'” in '+app.get('name', 'the app')
+        shown = value.replace('\n', ' ⏎ ')
+        label = 'Type “'+shown[:100]+('…' if len(shown) > 100 else '')+'” in '+app.get('name', 'the app')
     elif kind == 'press_key':
         if value not in KEYS:
             raise ValueError('Unsupported keyboard command. Use a named navigation key or supported Command shortcut.')

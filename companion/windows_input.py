@@ -23,6 +23,8 @@ MOUSEEVENTF_WHEEL = 0x0800
 KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE = 0x0001, 0x0002, 0x0004
 WHEEL_DELTA = 120
 VK_CONTROL = 0x11
+VK_SHIFT = 0x10
+VK_RETURN = 0x0D
 # The shared key vocabulary names macOS Command shortcuts; Windows uses Ctrl.
 KEYS = {'enter': (0x0D, False), 'tab': (0x09, False), 'escape': (0x1B, False), 'space': (0x20, False),
         'backspace': (0x08, False), 'left': (0x25, True), 'up': (0x26, True), 'right': (0x27, True),
@@ -193,14 +195,20 @@ class SendInput:
 
     def type_text(self, text, still_focused, chunk=20):
         """Type UTF-16 units in small chunks, stopping if focus moves between chunks."""
-        units = utf16_units(text)
-        for start in range(0, len(units), chunk):
-            if not still_focused():
-                raise RuntimeError('Typing stopped because focus changed. Some text may already have been entered; check before retrying.')
-            events = []
-            for unit in units[start:start+chunk]:
-                events += [self.unicode(unit), self.unicode(unit, up=True)]
-            self.send(events)
+        for number, line in enumerate(text.split('\n')):
+            if number:
+                # A new line in a document: Shift+Enter, which never sends in chat apps (as on macOS).
+                if not still_focused():
+                    raise RuntimeError('Typing stopped because focus changed. Some text may already have been entered; check before retrying.')
+                self.send([self.key(VK_SHIFT), self.key(VK_RETURN), self.key(VK_RETURN, up=True), self.key(VK_SHIFT, up=True)])
+            units = utf16_units(line)
+            for start in range(0, len(units), chunk):
+                if not still_focused():
+                    raise RuntimeError('Typing stopped because focus changed. Some text may already have been entered; check before retrying.')
+                events = []
+                for unit in units[start:start+chunk]:
+                    events += [self.unicode(unit), self.unicode(unit, up=True)]
+                self.send(events)
 
 
 class Win32Focus:

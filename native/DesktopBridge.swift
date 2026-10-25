@@ -147,7 +147,7 @@ if let index = args.firstIndex(of: "--input"), index+1 < args.count {
     let kind = action["type"] as? String ?? ""
     if kind == "type_text" {
         guard let text = action["text"] as? String, !text.isEmpty, text.count <= 2000,
-              text.unicodeScalars.allSatisfy({ $0.value >= 32 }),
+              text.unicodeScalars.allSatisfy({ $0.value >= 32 || ($0 == "\n" && string(focused, "AXRole") == "AXTextArea") }),
               ["AXTextField", "AXTextArea", "AXComboBox"].contains(string(focused, "AXRole")),
               string(focused, "AXRole") == action["focused_role"] as? String,
               bounds(focused) == action["focused_bounds"] as? [String: Double] else {
@@ -156,6 +156,12 @@ if let index = args.firstIndex(of: "--input"), index+1 < args.count {
         var chunks: [[UInt16]] = []
         var chunk: [UInt16] = []
         for character in text {
+            if character == "\n" {
+                // A new line: Shift+Return (an empty chunk), never a plain Return that sends in chat apps.
+                if !chunk.isEmpty { chunks.append(chunk); chunk = [] }
+                chunks.append([])
+                continue
+            }
             let units = Array(String(character).utf16)
             guard units.count <= 20 else { emit(["error": "That text contains an unsupported long grapheme."]); exit(1) }
             if chunk.count+units.count > 20 { chunks.append(chunk); chunk = [] }
@@ -168,6 +174,14 @@ if let index = args.firstIndex(of: "--input"), index+1 < args.count {
                   let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
                   let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else {
                 emit(["error": "Typing stopped because focus changed. Some text may already have been entered; check before retrying."]); exit(1)
+            }
+            if characters.isEmpty {
+                guard let returnDown = CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: true),
+                      let returnUp = CGEvent(keyboardEventSource: nil, virtualKey: 36, keyDown: false) else { continue }
+                returnDown.flags = .maskShift; returnUp.flags = .maskShift
+                returnDown.post(tap: .cghidEventTap); returnUp.post(tap: .cghidEventTap)
+                usleep(20_000)
+                continue
             }
             characters.withUnsafeBufferPointer { buffer in
                 down.keyboardSetUnicodeString(stringLength: buffer.count, unicodeString: buffer.baseAddress!)
