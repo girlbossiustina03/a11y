@@ -1696,3 +1696,22 @@ class AppClickTests(unittest.TestCase):
     def test_an_ordinary_target_is_left_alone(self):
         result = self.run_click({'role': 'AXButton', 'title': 'Bluetooth', 'owner': 'com.apple.systempreferences'})
         self.assertEqual(result['action']['type'], 'click_point')
+
+
+
+class ClickEffectTests(unittest.TestCase):
+    def test_a_click_that_changed_nothing_is_reported_and_its_target_dropped(self):
+        task = ComputerTask('turn on dark mode', automatic=True)
+        task.screen_seen = 'screen A'
+        task.record({'type': 'click_point', 'label': 'Appearance', 'status': 'executed'})
+        task.screen_seen = 'screen A'          # the next observation reads the same
+        task.check_last_click()
+        self.assertEqual(task.receipts[-1]['effect'], 'nothing changed on screen')
+        marks = [{'id': 't1', 'label': 'Appearance'}, {'id': 't2', 'label': 'Dark'}]
+        self.assertEqual([m['label'] for m in task.live_marks(marks)], ['Dark'])
+        task.screen_seen = 'screen B'          # a different screen: it is offered again
+        self.assertEqual(len(task.live_marks(marks)), 2)
+        task.record({'type': 'click_point', 'label': 'Dark', 'status': 'executed'})
+        task.screen_seen = 'screen C'
+        task.check_last_click()
+        self.assertEqual(task.receipts[-1]['effect'], 'the screen changed')

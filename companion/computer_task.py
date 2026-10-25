@@ -139,7 +139,9 @@ The user has ALREADY authorized opening named apps, creating the requested brows
 window/tab, navigation and reading toward this goal. Do not ask whether to launch
 Safari, open Teams, navigate to a website, or confirm the goal again. worked_before, when
 given, is the route that reached a very similar goal last time: follow it while the screen
-matches it; it is a hint, never a reason to repeat a step that did not work. A closed or
+matches it; it is a hint, never a reason to repeat a step that did not work. An action's
+effect says whether it changed the screen; after "nothing changed on screen", choose a
+different target (that one is no longer listed) or report what the screen shows. A closed or
 nonvisible app is not a blocker: use an installed launch_app or browse_url action.
 browse_url opens the specified browser itself; use browser_mode=window/tab as requested.
 When the goal names a website, use browse_url directly rather than spending a step
@@ -707,6 +709,7 @@ class ComputerTask:
         # scrolling until something shows); code runs them without asking the model again.
         self.queue = []
         self.screen_seen = None  # what the screen read when the latest step was chosen (see repeats)
+        self.dead_targets = set()  # (screen, label) clicked with no effect (see check_last_click)
         self.planned = opening is not None  # a known opening needs no plan for where to start
         # "Click the first email": the nth visible row of the window's list (see row_step).
         self.row = row_goal(self.goal)
@@ -945,6 +948,24 @@ class ComputerTask:
         self.pending = action
         return {'status': 'action', 'message': action.get('label') or 'Sorting.', 'action': action,
                 'review': not self.automatic, 'visual_capture': None}
+
+    def check_last_click(self):
+        """Did the last click change anything? If the screen reads the same as when it was chosen, it
+        did nothing: the model is told so, and that target is left out while the screen stays the same,
+        so the next step tries something else instead of the same thing again."""
+        last = self.receipts[-1] if self.receipts else None
+        if (not last or last.get('type') not in ('click_point', 'press_control') or 'effect' in last
+                or last.get('screen') is None or self.screen_seen is None):
+            return
+        unchanged = last['screen'] == self.screen_seen
+        last['effect'] = 'nothing changed on screen' if unchanged else 'the screen changed'
+        if unchanged and last.get('label'):
+            self.dead_targets.add((self.screen_seen, str(last['label']).casefold().strip()))
+
+    def live_marks(self, marks):
+        """Numbered targets without the ones already clicked to no effect on this same screen."""
+        dead = {label for screen, label in self.dead_targets if screen == self.screen_seen}
+        return [m for m in marks if str(m.get('label', '')).casefold().strip() not in dead] if dead else marks
 
     def app_click(self, step, desktop, snapshot, visual):
         """A click that would land on an app's Dock icon or its name in the menu bar: switch to that app
@@ -1353,7 +1374,8 @@ class ComputerTask:
 
     def record(self, receipt):
         self.pending = None
-        self.receipts.append(dict({key: deepcopy(receipt.get(key)) for key in ('type', 'label', 'key', 'status', 'before', 'after', 'native_result')},
+        self.receipts.append(dict({key: deepcopy(receipt.get(key)) for key in ('type', 'label', 'key', 'status', 'before', 'after', 'native_result', 'effect')
+                                   if key != 'effect' or key in receipt},
                                   screen=self.screen_seen))
 
     def propose(self, desktop, vision, provider, geometry, *, progress=None):
@@ -1416,6 +1438,7 @@ class ComputerTask:
         regions = screen_text(visual, snapshot)
         import hashlib
         self.screen_seen = hashlib.sha256('\n'.join(sorted(r.get('text', '') for r in regions)).encode()).hexdigest()[:16]
+        self.check_last_click()
         result = self.click_result(regions, image_data, visual, vision)
         if result is not None:
             for _ in range(3):  # a page can take a moment to show what the click opened
@@ -1482,7 +1505,7 @@ class ComputerTask:
         # and grow every turn. Keep only compact action outcomes in model context.
         history = []
         for receipt in self.receipts[-4:]:
-            outcome = {key: receipt.get(key) for key in ('type', 'label', 'status')}
+            outcome = {key: receipt.get(key) for key in ('type', 'label', 'status', 'effect') if key != 'effect' or receipt.get('effect')}
             result = receipt.get('native_result') or {}
             outcome['native_result'] = {key: result[key] for key in
                 ('submitted', 'activated', 'running', 'url', 'window_id', 'tab_count', 'new_window') if key in result}
@@ -1490,6 +1513,9 @@ class ComputerTask:
         model_desktop = compact_desktop(snapshot)
         model_visual = {'screen': visual['screen']} if 'screen' in visual else {}
         marks = screen_marks(snapshot.get('targets'), regions, visual.get('screen')) if snapshot.get('targets') is not None else []
+        live = self.live_marks(marks)
+        if live and len(live) < len(marks):
+            marks = [dict(m, id='t%d' % (i+1)) for i, m in enumerate(live)]  # renumbered: ids stay consecutive
         if marks:
             # Everything clickable, numbered: the model picks a number and code knows where it is.
             # The same names would otherwise appear again as controls and text lines.
