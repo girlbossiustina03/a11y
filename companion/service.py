@@ -930,7 +930,10 @@ class Companion:
                 interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
             from . import mac_apps
             from .web_lookup import plain_question
-            if interpreted.get('operation') == 'open_file' and plain_question(request):
+            if (interpreted.get('operation') == 'open_file' or interpreted.get('operation') == 'computer_task'
+                    and re.search(r'\b(?:newest|latest|last|most recent)\b.*\b(?:file|download(?:ed)?|thing)\b', request, re.I)
+                    and re.search(r'\b(?:downloads?|downloaded|desktop|documents)\b', request, re.I)) and plain_question(request):
+                # (and "how big is the newest file in my Downloads folder?", a task clicking through Finder, live v3)
                 # "What's the size of the last thing I downloaded?" opened the file (live, v3): a
                 # question about files is answered from the listing, which has sizes and ages.
                 folder = next((name for name in ('downloads', 'desktop', 'documents') if name[:-1] in request.casefold()), '')

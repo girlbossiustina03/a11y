@@ -1475,6 +1475,11 @@ class QuestionsDoNotOpenTests(LiveRoutingTests):
             response = self.app.ask("what's the size of the last thing I downloaded?")
         listing.assert_called_once_with('downloads')
         self.assertIsNone(response.get('desktop_action'))
+        self.route('computer_task', 'how big is the newest file in my Downloads folder?')
+        with patch('companion.mac_apps.recent_files', return_value=[]) as listing:
+            response = self.app.ask('how big is the newest file in my Downloads folder?')
+        listing.assert_called_once_with('downloads')
+        self.assertIsNone(response.get('desktop_action'))
 
     def test_reported_a_named_site_is_where_the_task_starts(self):
         # Live (v3): Preview in front, the planner kept "current", and the task gave up.
