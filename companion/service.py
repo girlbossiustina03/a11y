@@ -815,7 +815,17 @@ class Companion:
             if interpreted.get('operation') == 'browser_search':
                 from .web_apps import find_site
                 site = find_site(request)
-                if site and site[0] not in str(interpreted.get('target', '')).casefold():
+                from .web_apps import SEARCH_URLS
+                query = re.search(r'\bfor\s+(.+?)\s*[.?!]*$', request, re.I)
+                before = request[:query.start()] if query else ''
+                if (site and site[0] in SEARCH_URLS and query and not re.search(r'\b(?:and|then)\b', query.group(1))
+                        and find_site(before) == site):  # the site is where to search, not part of the query ("search for youtube cats")
+                    # "Search Apple's support site for battery" searched the web for the whole sentence
+                    # (live, v3): a site with its own search page is searched there, in one step.
+                    from urllib.parse import quote_plus
+                    interpreted = dict(interpreted, operation='browser_open', remaining_request='',
+                                       target=SEARCH_URLS[site[0]].format(quote_plus(query.group(1).strip(' "\'“”'))))
+                elif site and site[0] not in str(interpreted.get('target', '')).casefold():
                     # "On Wikipedia, search for Bucharest" searched the web and lost Wikipedia (live):
                     # open the named site, then search there.
                     from .request_plan import with_opening
@@ -1171,7 +1181,10 @@ class Companion:
                     # "Look up the population of Norway and write it in a new TextEdit document": the
                     # answer was found, then the rest was dropped (live, v3). Carry on with it, answer in hand.
                     found = message.split('\n\nSource:')[0].strip()
-                    prebuilt['desktop_action'] = {'type': 'start_task', 'goal': rest+' (the answer to use: '+found+')'}
+                    # "put the number in a new TextEdit document" → 'put "54 million" in …': the model clicked the
+                    # document over and over with the answer only in a note (live, v3).
+                    goal, named = re.subn(r'\b(?:it|that|this|the (?:number|answer|result|figure|population))\b', '"'+found.rstrip('.')+'"', rest, count=1)
+                    prebuilt['desktop_action'] = {'type': 'start_task', 'goal': goal if named else rest+' (the answer to use: '+found+')'}
                     request_plan = dict(request_plan, remaining_request='')
         if prebuilt is None and (request_plan and request_plan['operation'] == 'answer' and request_plan.get('reply', '').strip()
                 and (request_plan.get('computed') or not sources and not workflow) and not image_data and mode in ('answer', 'assist')):

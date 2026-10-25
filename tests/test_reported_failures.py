@@ -1483,7 +1483,7 @@ class QuestionsDoNotOpenTests(LiveRoutingTests):
                          'https://en.wikipedia.org/w/index.php?search=Coffee')
         self.assertEqual(site_address('open the Wikipedia article on Penguin and tell me the first sentence'),
                          'https://en.wikipedia.org/w/index.php?search=Penguin')
-        self.assertEqual(site_address('check my GitHub notifications'), 'https://github.com')
+        self.assertEqual(site_address('check my GitHub notifications'), 'https://github.com/notifications')
         self.assertIsNone(site_address('what is the weather like'))
 
 
@@ -1561,3 +1561,34 @@ class OwnAppTests(unittest.TestCase):
         task = ComputerTask('open A11y settings', automatic=True)
         task._catalog = [{'name': 'A11y', 'bundle_id': 'com.a11y.companion'}]
         self.assertIsNone(task.named_app({'app': {}}))
+
+
+class V3RoundThreeTests(LiveRoutingTests):
+    def test_reported_apple_support_search_uses_its_search_page(self):
+        # Live (v3): a DuckDuckGo search for "Apple's support site for battery".
+        self.route('browser_search', "Apple's support site for battery")
+        plan = self.app.prepare_request("search Apple's support site for battery")
+        self.assertEqual((plan['operation'], plan['target']), ('browser_open', 'https://support.apple.com/kb/index?page=search&q=battery'))
+
+    def test_reported_named_places_inside_sites(self):
+        from companion.web_apps import find_site, same_site_hosts
+        self.assertEqual(find_site('check my GitHub notifications')[1], 'https://github.com/notifications')
+        self.assertIn('en.wikipedia.org', same_site_hosts('https://www.wikipedia.org'))  # an open article is reused
+
+    def test_reported_finder_sort_is_the_menu(self):
+        # Live (v3): 24 steps of clicking around to sort Documents by date added.
+        from companion.computer_task import FINDER_SORT
+        task = ComputerTask('open my Documents folder and sort it by date added', automatic=True)
+        proposals = []
+        def fake_validate(raw, *a, **k):
+            proposals.append(raw['action'])
+            return {'action': dict(raw['action'], label='Choose '+raw['action'].get('path', '').replace(' > ', ' › '))}
+        with patch('companion.computer_task.validate_step', side_effect=fake_validate):
+            for title in ('', 'Recents', 'Documents'):
+                app = 'com.apple.finder' if title else 'com.apple.Safari'
+                step = task.finder_sort_step(None, {'app': {'bundle_id': app}, 'window': {'title': title}})
+                task.record(dict(step['action'], status='executed'))
+            done = task.finder_sort_step(None, {'app': {'bundle_id': 'com.apple.finder'}, 'window': {'title': 'Documents'}})
+        self.assertEqual([p.get('path', p['type']) for p in proposals], ['focus_app', 'Go > Documents', 'View > Sort By > Date Added'])
+        self.assertEqual(done['status'], 'done')
+        self.assertTrue(FINDER_SORT.search('show Downloads in Finder, newest added first'))

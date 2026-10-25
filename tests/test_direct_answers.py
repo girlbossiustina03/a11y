@@ -88,8 +88,7 @@ class DirectAnswerServiceTests(CompanionFixture, unittest.TestCase):
                               {'operation': 'look_up', 'app_name': '', 'target': 'population of Norway',
                                'remaining_request': 'write it in a new TextEdit document'})
         self.assertEqual(result['desktop_action']['type'], 'start_task')
-        self.assertIn('write it in a new TextEdit document', result['desktop_action']['goal'])
-        self.assertIn('5.6 million', result['desktop_action']['goal'])
+        self.assertEqual(result['desktop_action']['goal'], 'write "5.6 million" in a new TextEdit document')  # the text itself
         self.assertNotIn('Still pending', result['message'])
 
     def test_changing_facts_are_looked_up_in_the_background(self):

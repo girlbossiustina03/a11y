@@ -433,6 +433,12 @@ MENU_GOAL = re.compile(r"^\W*(?:please\s+)?(?:open|show(?: me)?|click(?: on)?)\s
                        r"(?P<menu2>[\w&'-]+(?:\s+[\w&'-]+)?)\s+menu[\s.!?]*$", re.I)
 ORDINALS = {'first': 1, 'second': 2, 'third': 3, 'fourth': 4, 'fifth': 5, 'sixth': 6, 'seventh': 7, 'eighth': 8,
             'ninth': 9, 'tenth': 10, '1st': 1, '2nd': 2, '3rd': 3, '4th': 4, '5th': 5, '6th': 6, '7th': 7, '8th': 8, '9th': 9, '10th': 10}
+# "Sort my Documents by date added", "show Downloads in Finder, newest added first": Finder's own
+# View > Sort By menu, in code (the model clicked around for 24 steps, live v3).
+FINDER_SORT = re.compile(r'\bsort(?:ed)?\b.*?\bby\s+(?P<column>name|kind|date added|date modified|date created|date last opened|last opened|size|tags)\b'
+                         r'|\b(?P<newest>newest|latest|most recently)\s+(?:added|first)\b', re.I)
+SORT_TITLES = {'name': 'Name', 'kind': 'Kind', 'date added': 'Date Added', 'date modified': 'Date Modified', 'date created': 'Date Created',
+               'date last opened': 'Date Last Opened', 'last opened': 'Date Last Opened', 'size': 'Size', 'tags': 'Tags'}
 # "Go back", "go back in Safari", "go forward two pages": the browser's own back/forward, in code.
 HISTORY_GOAL = re.compile(r'^\W*(?:please\s+|can you\s+)?(?:go|take me|bring me|navigate|move)\s+(?P<way>back|forward)(?:\s+(?P<count>one|a|two|three|1|2|3)\s+pages?)?'
                           r'(?:\s+(?:a\s+page|to\s+the\s+(?:previous|last|next)\s+page))?(?:\s+(?:in|on)\s+(?P<app>safari|chrome|google chrome|the browser))?\W*$', re.I)
@@ -875,6 +881,32 @@ class ComputerTask:
         check_active()
         return {'status': 'done', 'message': answer, 'action': None} if answer else None
 
+    def finder_sort_step(self, desktop, snapshot):
+        """Finder in front, the folder the goal names open (Go menu), then View > Sort By > column."""
+        match = FINDER_SORT.search(self.goal)
+        if not match or not re.search(r'\b(?:finder|folder|downloads|documents|desktop)\b', self.goal, re.I):
+            return None
+        column = 'Date Added' if match.group('newest') else SORT_TITLES[match.group('column').casefold()]
+        if self.receipts and self.receipts[-1].get('type') == 'choose_menu' and 'Sort By' in str(self.receipts[-1].get('label', '')):
+            return {'status': 'done', 'action': None, 'message': 'Sorted by '+column.lower()+'.'}
+        folder = next((name for name in ('Downloads', 'Documents', 'Desktop') if name.casefold() in self.goal.casefold()), '')
+        front = snapshot.get('app') or {}
+        window = ((snapshot.get('window') or {}).get('title') or '')
+        if front.get('bundle_id') != 'com.apple.finder':
+            proposal = {'type': 'focus_app', 'bundle_id': 'com.apple.finder'}
+        elif folder and folder.casefold() not in window.casefold():
+            proposal = {'type': 'choose_menu', 'path': 'Go > '+folder}
+        else:
+            proposal = {'type': 'choose_menu', 'path': 'View > Sort By > '+column}
+        try:
+            action = validate_step({'status': 'action', 'message': 'Sorting.', 'risk': 'navigation', 'action': proposal},
+                                   desktop, snapshot)['action']
+        except ValidationError:
+            return None
+        self.pending = action
+        return {'status': 'action', 'message': action.get('label') or 'Sorting.', 'action': action,
+                'review': not self.automatic, 'visual_capture': None}
+
     def history_step(self, desktop, snapshot):
         """"Go back in Safari" is one press of ⌘[ in the browser, then done. The model went back
         13 times in a row instead (v3 suite, live)."""
@@ -1302,7 +1334,7 @@ class ComputerTask:
         if read is not None:
             timing('task.step.summary', step_started, step=len(self.receipts)+1, status=read['status'], code='view_answer')
             return read
-        opened = self.history_step(desktop, snapshot) or self.menu_step(desktop, snapshot)
+        opened = self.history_step(desktop, snapshot) or self.finder_sort_step(desktop, snapshot) or self.menu_step(desktop, snapshot)
         if opened is not None:
             timing('task.step.summary', step_started, step=len(self.receipts)+1, status=opened['status'], code='menu')
             return opened

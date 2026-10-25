@@ -16,6 +16,8 @@ WEB_APPS = {
     'whatsapp': 'https://web.whatsapp.com', 'slack': 'https://app.slack.com',
     'github': 'https://github.com', 'linkedin': 'https://www.linkedin.com',
     'hacker news': 'https://news.ycombinator.com', 'reddit': 'https://www.reddit.com',
+    # Places inside a site that people name: straight there, not the home page (live, v3).
+    'github notifications': 'https://github.com/notifications', 'apple support': 'https://support.apple.com',
 }
 # Where a site really lives once open: Teams redirects teams.microsoft.com to
 # teams.cloud.microsoft, so the open tab never matched and every request opened another one
@@ -25,6 +27,7 @@ SITE_ALIASES = {
     'outlook.office.com': ('outlook.cloud.microsoft', 'outlook.office365.com', 'outlook.live.com'),
     'www.office.com': ('m365.cloud.microsoft', 'www.microsoft365.com'),
     'onedrive.live.com': ('onedrive.cloud.microsoft',),
+    'www.wikipedia.org': ('en.wikipedia.org',),  # the portal: an open English article is Wikipedia too
 }
 
 
@@ -45,7 +48,7 @@ SEARCH_URLS = {
     'youtube': 'https://www.youtube.com/results?search_query={}', 'google': 'https://www.google.com/search?q={}',
     'wikipedia': 'https://en.wikipedia.org/w/index.php?search={}', 'github': 'https://github.com/search?q={}',
     'duckduckgo': 'https://duckduckgo.com/?q={}', 'bing': 'https://www.bing.com/search?q={}',
-    'amazon': 'https://www.amazon.com/s?k={}',
+    'amazon': 'https://www.amazon.com/s?k={}', 'apple support': 'https://support.apple.com/kb/index?page=search&q={}',
 }
 SEARCH_PHRASE = re.compile(r'^(?:search|look)(?:\s+(?:it|up|for))*\s+(?P<query>.+?)(?:\s+(?:there|on it))?$', re.I)
 BROWSER_WORDS = {'safari': 'Safari', 'chrome': 'Google Chrome', 'edge': 'Microsoft Edge', 'firefox': 'Firefox'}
@@ -53,7 +56,8 @@ BROWSER_WORDS = {'safari': 'Safari', 'chrome': 'Google Chrome', 'edge': 'Microso
 
 def find_site(text):
     """(name, url) of the longest known web app named in text, else None."""
-    lowered = text.casefold()
+    lowered = re.sub(r"['’]s\b", '', text.casefold())  # "Apple's support site" names apple support
+    lowered = re.sub(r'\bsupport site\b', 'support', lowered)
     for name in sorted(WEB_APPS, key=len, reverse=True):
         if re.search(r'\b'+re.escape(name)+r'\b', lowered):
             return name, WEB_APPS[name]
