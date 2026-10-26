@@ -1159,6 +1159,59 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(mascot.size(), start.size())          # back to her normal size
         self.assertFalse(mascot.stretching)
 
+    def test_grouped_menus_cover_flat_actions_and_refresh_state(self):
+        from PyQt6.QtWidgets import QMenu
+        mascot = self.window.mascot
+        def leaves(entries):
+            return [leaf for entry in entries if entry is not None
+                    for leaf in (leaves(entry[1]) if isinstance(entry[1], list) else [entry])]
+        grouped = mascot.grouped_menu_entries()
+        self.assertEqual(set(grouped), {'A11y', 'Chat', 'View'})
+        self.assertCountEqual(leaves(mascot.menu_entries()), leaves([entry for group in grouped.values() for entry in group]))
+        actions = [entry[1] for entry in leaves(mascot.menu_entries())]
+        self.assertEqual(set(actions), {'talk', 'reply', 'computer:prompt', 'computer:stop', 'confirm', 'tasks',
+                                      'settings', 'setup:wizard', 'readiness', 'quit', 'vision:toggle', 'voice:toggle'} |
+                         {'face:'+key for key in faces.SKIN_NAMES})
+        menu = QMenu()
+        mascot.fill_menu(menu, grouped['View'])
+        mascot.voice_on = True
+        mascot.skin = 'robot'
+        mascot.refresh_menu(menu, mascot.grouped_menu_entries()['View'])
+        self.assertEqual(menu.actions()[-1].text(), 'Turn off voice')
+        checked = [item.text() for item in menu.actions()[0].menu().actions() if item.isChecked()]
+        self.assertEqual(checked, [faces.SKIN_NAMES['robot']])
+        menu.deleteLater()
+
+    def test_mac_menu_roles_shortcuts_and_action_strings(self):
+        from PyQt6.QtGui import QAction
+        from PyQt6.QtWidgets import QMenu
+        mascot = self.window.mascot
+        menu = QMenu('A11y')
+        mascot.fill_menu(menu, mascot.grouped_menu_entries()['A11y'], native_roles=True)
+        settings, personalize, readiness, quit_item = menu.actions()
+        self.assertEqual(settings.menuRole(), QAction.MenuRole.PreferencesRole)
+        self.assertEqual(quit_item.menuRole(), QAction.MenuRole.QuitRole)
+        self.assertFalse(settings.shortcut().isEmpty())
+        self.assertFalse(quit_item.shortcut().isEmpty())
+        emitted = []
+        mascot.action_requested.disconnect(self.window.mascot_action)
+        self.addCleanup(lambda: mascot.action_requested.connect(self.window.mascot_action))
+        mascot.action_requested.connect(emitted.append)
+        for item in (settings, personalize, readiness):
+            item.trigger()
+        self.assertEqual(emitted, ['settings', 'setup:wizard', 'readiness'])
+        menu.deleteLater()
+
+    def test_offscreen_user_clicks_never_call_appkit(self):
+        mascot = self.window.mascot
+        self.assertFalse(mascot.native)
+        with patch('companion.mac_window.activate_app') as activate, patch('companion.mac_window.make_key') as key:
+            mascot.open_chat_from_user()
+            mascot.toggle_chat()
+            mascot.set_proxy_icon(mascot)
+        activate.assert_not_called()
+        key.assert_not_called()
+
     def test_face_can_be_changed_from_her_menu_and_is_remembered(self):
         mascot = self.window.mascot
         self.window.mascot_action('face:robot')

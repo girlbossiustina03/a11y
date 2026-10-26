@@ -129,6 +129,32 @@ class TerminalThemeTests(unittest.TestCase):
         behavior = dict(calls)['setCollectionBehavior:'][0]
         self.assertTrue(behavior & mac_window.ALL_SPACES and behavior & mac_window.FULL_SCREEN_AUXILIARY)
 
+    def test_user_activation_uses_an_exact_boolean_prototype(self):
+        from companion import mac_window
+        calls = []
+        runtime = type('Runtime', (), {'objc_getClass': lambda self, name: 1})()
+        def send(receiver, selector, *args, **kwargs):
+            calls.append((selector, args, kwargs))
+            return 2
+        with patch.object(mac_window, 'runtime', return_value=runtime), patch.object(mac_window, 'send', send):
+            self.assertTrue(mac_window.activate_app())
+        self.assertEqual(calls[-1], ('activateIgnoringOtherApps:', (True,),
+                                    {'restype': None, 'argtypes': (mac_window.ctypes.c_bool,)}))
+
+    def test_proxy_icon_is_a_resource_and_cannot_be_dragged(self):
+        from companion import mac_window
+        calls = []
+        runtime = type('Runtime', (), {'objc_getClass': lambda self, name: 1})()
+        def send(receiver, selector, *args, **kwargs):
+            calls.append((selector, args))
+            return 2
+        with patch.object(mac_window, 'runtime', return_value=runtime), patch.object(mac_window, 'send', send), \
+                patch.object(mac_window, 'ns_window', return_value=1), patch.object(mac_window, 'ns_string', return_value=3):
+            self.assertTrue(mac_window.set_proxy_icon(object(), '/app/packaging/icons/A11y.png', b'png'))
+        self.assertIn(('setEnabled:', (False,)), calls)
+        self.assertIn(('setTitleVisibility:', (0,)), calls)
+        self.assertIn(('setRepresentedURL:', (2,)), calls)
+
     def test_appearance_is_saved_in_the_data_folder(self):
         with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {'A11Y_DATA_DIR': folder}):
             self.assertEqual(terminal_theme.saved_appearance(), {'theme': 'terminal', 'face': 'blob'})

@@ -10,15 +10,16 @@ import os
 import sys
 from .theme import MENU_STYLE, native_mac
 from . import faces, mac_window
+from .paths import resource_dir
 from .terminal_theme import palette as load_palette, saved_appearance
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QFrame, QVBoxLayout, QHBoxLayout, QPushButton,
-    QPlainTextEdit, QLabel, QAbstractButton, QMenu, QScrollArea, QGraphicsDropShadowEffect)
+    QPlainTextEdit, QLabel, QAbstractButton, QMenu, QMenuBar, QScrollArea, QGraphicsDropShadowEffect)
 from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtCore import (Qt, QTimer, QPoint, QPointF, QRectF, QElapsedTimer, pyqtSignal, QRect, QSize, QEvent,
                           QVariantAnimation, QEasingCurve)
 from PyQt6.QtGui import (QPainter, QPainterPath, QColor, QPen, QShortcut, QKeySequence, QFontMetrics, QFontMetricsF,
-                         QTextLayout, QTextOption, QFont, QFontDatabase, QRawFont, QTextCursor, QTextCharFormat)
+                         QIcon, QPixmap, QAction, QTextLayout, QTextOption, QFont, QFontDatabase, QRawFont, QTextCursor, QTextCharFormat)
 
 MARGIN = 10          # room for her shadow around the windows
 TITLE_HEIGHT = 28
@@ -350,10 +351,11 @@ class Mascot(QWidget):
         frame.addStretch(1)
         self.character = CharacterButton(self)
         self.character.clicked.connect(self.toggle_chat)
-        self.character.setToolTip('Click to chat · Drag to move · Right-click for actions')
-        self.character.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.character.customContextMenuRequested.connect(
-            lambda point: self.show_menu(self.character.mapToGlobal(point)))
+        self.character.setToolTip('Click to chat · Drag to move' + ('' if self.native else ' · Right-click for actions'))
+        if not self.native:
+            self.character.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            self.character.customContextMenuRequested.connect(
+                lambda point: self.show_menu(self.character.mapToGlobal(point)))
         frame.addSpacing(10)  # about half a line of room between the title bar and the face
         frame.addWidget(self.character, 0, Qt.AlignmentFlag.AlignHCenter)
         self.status = QLabel('')
@@ -447,6 +449,8 @@ class Mascot(QWidget):
         QShortcut(QKeySequence('Escape'), self).activated.connect(lambda: self.collapse_chat(animate=True))
         QShortcut(QKeySequence('Shift+F10'), self).activated.connect(lambda: self.show_menu())
         QShortcut(QKeySequence('Menu'), self).activated.connect(lambda: self.show_menu())
+        if self.native:
+            self.setup_mac_menus()
 
     # Appearance
 
@@ -552,6 +556,7 @@ class Mascot(QWidget):
             self.reply_window.show()
             if not self.reply_window.property('prepared'):
                 self.reply_window.setProperty('prepared', mac_window.prepare_window(self.reply_window))
+                self.set_proxy_icon(self.reply_window, reply=True)
                 self.place_reply_window()
             mac_window.keep_below(self, self.reply_window)
             self.apply_blur()
@@ -887,7 +892,10 @@ class Mascot(QWidget):
 
     def style_titlebar(self):
         """A real title bar like Terminal's, with only the red button working."""
+        if not self.native:
+            return
         mac_window.prepare_window(self)
+        self.set_proxy_icon(self)
         self.apply_blur()
 
     def apply_blur(self):
@@ -964,6 +972,8 @@ class Mascot(QWidget):
             self.input.setFocus()
 
     def toggle_chat(self):
+        if self.native:
+            mac_window.activate_app()
         if self.user_collapsed or self.card.isHidden():
             self.expand_chat()
             if self.native:
@@ -987,16 +997,69 @@ class Mascot(QWidget):
             self.expand_chat()
             self.open_reply()
 
+    def grouped_menu_entries(self):
+        """One source for the macOS menu bar and the keyboard/context menu."""
+        return {
+            'A11y': [('Settings…', 'settings'), ('Personalize and set up access…', 'setup:wizard'),
+                     ('Set up AI and voice…', 'readiness'), ('Quit companion', 'quit')],
+            'Chat': [('Talk to me', 'talk'), ('Show last reply', 'reply'), ('Computer task…', 'computer:prompt'),
+                     ('Stop computer task', 'computer:stop'), ('Mark current step done', 'confirm'), ('My saved tasks', 'tasks')],
+            'View': [('Face', [(name, 'face:'+key, key == self.skin) for key, name in faces.SKIN_NAMES.items()]),
+                     ('Pause screen vision' if self.vision_button.text() == 'Screen on' else 'Enable screen vision…', 'vision:toggle'),
+                     ('Turn off voice' if getattr(self, 'voice_on', False) else 'Turn on voice (“Hey Ally”)…', 'voice:toggle')],
+        }
+
     def menu_entries(self):
-        """Her actions: (title, action), (title, action, checked), (title, [entries]) or None."""
-        entries = [('Talk to me', 'talk'), ('Computer task…', 'computer:prompt'), ('Stop computer task', 'computer:stop'),
-                   ('Show last reply', 'reply'), ('My saved tasks', 'tasks'), ('Mark current step done', 'confirm'), None,
-                   ('Pause screen vision' if self.vision_button.text() == 'Screen on' else 'Enable screen vision…', 'vision:toggle'),
-                   ('Turn off voice' if getattr(self, 'voice_on', False) else 'Turn on voice (“Hey Ally”)…', 'voice:toggle'),
-                   ('Personalize and set up access…', 'setup:wizard'), ('Set up AI and voice…', 'readiness'), None,
-                   ('Face', [(name, 'face:'+key, key == self.skin) for key, name in faces.SKIN_NAMES.items()]),
-                   ('Settings…', 'settings'), None, ('Quit companion', 'quit')]
-        return entries
+        """Keep the historical flat menu, including its order and separators."""
+        groups = self.grouped_menu_entries()
+        entries = {entry[1] if isinstance(entry[1], str) else 'Face': entry
+                   for group in groups.values() for entry in group}
+        order = ('talk', 'computer:prompt', 'computer:stop', 'reply', 'tasks', 'confirm', None,
+                 'vision:toggle', 'voice:toggle', 'setup:wizard', 'readiness', None,
+                 'Face', 'settings', None, 'quit')
+        return [entries[key] if key else None for key in order]
+
+    def setup_mac_menus(self):
+        self.menu_bar = QMenuBar(None)
+        self.menu_bar.setNativeMenuBar(True)
+        for title in self.grouped_menu_entries():
+            menu = self.menu_bar.addMenu(title)
+            self.fill_menu(menu, self.grouped_menu_entries()[title], native_roles=True)
+            menu.aboutToShow.connect(lambda m=menu, t=title: self.refresh_menu(m, self.grouped_menu_entries()[t]))
+        self.menu_bar.addMenu('Window')
+        self.menu_bar.addMenu('Help')
+
+    def refresh_menu(self, menu, entries):
+        for item, entry in zip(menu.actions(), entries):
+            if entry is None:
+                continue
+            item.setText('Quit' if entry[1] == 'quit' and menu.title() == 'A11y' else entry[0])
+            if isinstance(entry[1], list):
+                self.refresh_menu(item.menu(), entry[1])
+            elif len(entry) > 2:
+                item.setChecked(entry[2])
+
+    @staticmethod
+    def app_icon_path():
+        return resource_dir()/'packaging'/'icons'/'A11y.png'
+
+    def set_proxy_icon(self, window, *, reply=False):
+        if not self.native:
+            return
+        path = self.app_icon_path()
+        image = QPixmap(str(path))
+        if reply:
+            image = QPixmap(64, 64)
+            image.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(image)
+            painter.setFont(QFont('Apple Color Emoji', 40))
+            painter.drawText(image.rect(), Qt.AlignmentFlag.AlignCenter, '💬')
+            painter.end()
+        from PyQt6.QtCore import QBuffer, QIODevice
+        buffer = QBuffer()
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        image.save(buffer, 'PNG')
+        mac_window.set_proxy_icon(window, str(path), bytes(buffer.data()))
 
     def show_menu(self, position=None):
         position = position or self.character.mapToGlobal(self.character.rect().topLeft())
@@ -1015,14 +1078,29 @@ class Mascot(QWidget):
         menu.exec(position)
         menu.deleteLater()
 
-    def fill_menu(self, menu, entries):
+    def fill_menu(self, menu, entries, *, native_roles=False):
         for entry in entries:
             if entry is None:
                 menu.addSeparator()
             elif isinstance(entry[1], list):
-                self.fill_menu(menu.addMenu(entry[0]), entry[1])
+                self.fill_menu(menu.addMenu(entry[0]), entry[1], native_roles=native_roles)
             else:
-                item = menu.addAction(entry[0])
+                item = QAction(entry[0], menu)
+                if self.native:
+                    item.setMenuRole(QAction.MenuRole.NoRole)
+                if native_roles:
+                    if entry[1] == 'settings':
+                        item.setMenuRole(QAction.MenuRole.PreferencesRole)
+                        item.setShortcut(QKeySequence('Ctrl+,'))
+                    elif entry[1] == 'quit':
+                        item.setText('Quit')
+                        item.setMenuRole(QAction.MenuRole.QuitRole)
+                        item.setShortcut(QKeySequence('Ctrl+Q'))
+                    elif entry[1] == 'computer:stop':
+                        item.setShortcut(QKeySequence('Ctrl+.'))
+                    elif entry[1] in ('setup:wizard', 'readiness'):
+                        item.setMenuRole(QAction.MenuRole.ApplicationSpecificRole)
+                menu.addAction(item)
                 if len(entry) > 2:
                     item.setCheckable(True)
                     item.setChecked(entry[2])
@@ -1054,6 +1132,7 @@ class Mascot(QWidget):
             self.expand_chat()
         self.set_reply_shown(False)
         if self.native:
+            mac_window.activate_app()
             mac_window.make_key(self)
         if self.entry_row.isVisible():
             self.input.setFocus(Qt.FocusReason.MouseFocusReason)

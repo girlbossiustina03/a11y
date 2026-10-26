@@ -231,3 +231,39 @@ def popup_menu(entries, x, y, screen_height):
         return actions[_menu_choice[-1]] if _menu_choice else ''
     except (AttributeError, TypeError, ValueError, OSError, ctypes.ArgumentError, IndexError):
         return None
+
+
+def activate_app():
+    """Activate only after the user asks to interact with her."""
+    try:
+        if runtime() is None:
+            return False
+        app = send(runtime().objc_getClass(b'NSApplication'), 'sharedApplication')
+        send(app, 'activateIgnoringOtherApps:', True, restype=None, argtypes=(ctypes.c_bool,))
+        return True
+    except (AttributeError, TypeError, ValueError, OSError, ctypes.ArgumentError):
+        return False
+
+
+def set_proxy_icon(widget, path, png):
+    """A document icon backed by an app resource, with file interactions disabled."""
+    try:
+        window = ns_window(widget)
+        if not window:
+            return False
+        url = send(runtime().objc_getClass(b'NSURL'), 'fileURLWithPath:', ns_string(path), argtypes=(ctypes.c_void_p,))
+        send(window, 'setRepresentedURL:', url, restype=None, argtypes=(ctypes.c_void_p,))
+        data = send(runtime().objc_getClass(b'NSData'), 'dataWithBytes:length:', png, len(png),
+                    argtypes=(ctypes.c_char_p, ctypes.c_ulong))
+        image = send(send(runtime().objc_getClass(b'NSImage'), 'alloc'), 'initWithData:', data, argtypes=(ctypes.c_void_p,))
+        if not image:
+            return False
+        button = send(window, 'standardWindowButton:', 4, argtypes=(ctypes.c_long,))  # document icon
+        send(button, 'setImage:', image, restype=None, argtypes=(ctypes.c_void_p,))
+        send(button, 'setEnabled:', False, restype=None, argtypes=(ctypes.c_bool,))
+        send(button, 'setHidden:', False, restype=None, argtypes=(ctypes.c_bool,))
+        send(window, 'setTitleVisibility:', 0, restype=None, argtypes=(ctypes.c_long,))
+        send(image, 'release', restype=None)
+        return True
+    except (AttributeError, TypeError, ValueError, OSError, ctypes.ArgumentError):
+        return False
