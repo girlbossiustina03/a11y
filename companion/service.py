@@ -339,6 +339,8 @@ def plain_text(message):
     return re.sub(r'\n{3,}', '\n\n', message).strip()
 
 
+# "Make all the text in this document bold": a command about what is open in front (not a question).
+THIS_THING = re.compile(r'\b(?:this|the current|the open)\s+(?:document|file|note|window|folder|text|selection|list|spreadsheet)\b', re.I)
 THIS_PAGE = re.compile(r'\b(?:this|the current|the open)\s+(?:web\s*)?(?:page|article|site|website|tab)\b', re.I)
 # "close this tab", "close the current Safari tab".
 CLOSE_TAB = re.compile(r'^\W*(?:please\s+)?close\b.*\btabs?\b', re.I)
@@ -987,10 +989,15 @@ class Companion:
                 interpreted = (dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='', goal_mode='change')
                                if acts else dict(interpreted, operation='answer', app_name='', target='', remaining_request='',
                                                  reply=str(interpreted.get('reply', '')).strip() or 'Got it.'))
+            if (interpreted.get('operation') in ('answer', 'type_text') and THIS_THING.search(request) and not request.rstrip().endswith('?')
+                    and not re.match(r'^\W*(?:what|who|why|how|when|where|is|are|does|do|can|could)\b', request, re.I) and self.front_app()):
+                # "Make all the text in this document bold" got "I don't have access to the document" (live, broad).
+                interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='', goal_mode='change')
+            other_app = str(interpreted.get('app_name', '')).strip() and 'remind' not in str(interpreted.get('app_name', '')).casefold()
             if (interpreted.get('operation') in ('add_reminder', 'complete_reminder', 'delete_reminder', 'read_reminders')
-                    and str(interpreted.get('app_name', '')).strip() and 'remind' not in str(interpreted.get('app_name', '')).casefold()):
-                # "Delete only the note titled …" became delete_reminder with app Notes (live, broad): a reminder
-                # operation for another app is work in that app.
+                    and not re.search(r'\bremind|\bto-?dos?\b', request, re.I) and (other_app or re.search(r'\bnotes?\b', request, re.I))):
+                # "Delete only the note titled …" became delete_reminder (live, broad): a reminder operation
+                # needs a reminder; otherwise it is work in the app the request is about.
                 interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
             if interpreted.get('operation') == 'read_mail' and not MAIL_WORDS.search(request) and not after_mail:
                 # "Are there any notifications that require my attention" read the last email (live).

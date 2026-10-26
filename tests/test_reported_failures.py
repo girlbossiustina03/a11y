@@ -2179,8 +2179,14 @@ class AppNamedTests(unittest.TestCase):
         self.assertEqual(self.app.prepare_request('Make all the text in this document bold.')['operation'], 'computer_task')
         self.route('type_text', 'Ana', acts_on_computer=False)
         self.assertEqual(self.app.prepare_request('My name is Ana')['operation'], 'answer')
+        self.route('answer', reply="I don't have access to the document.", acts_on_computer=False)  # the same request, another run
+        with patch.object(type(self.app), 'front_app', return_value='TextEdit — Untitled'):
+            self.assertEqual(self.app.prepare_request('Make all the text in this document bold.')['operation'], 'computer_task')
+            self.route('answer', reply='It is a draft.', acts_on_computer=False)
+            self.assertEqual(self.app.prepare_request('What is this document about?')['operation'], 'answer')
 
     def test_reported_a_reminder_operation_in_another_app_is_a_task(self):
         # Live (broad): "Delete only the note titled …" searched Reminders.
-        self.route('delete_reminder', 'A11y test 12', app_name='Notes', acts_on_computer=True)
-        self.assertEqual(self.app.prepare_request('Delete only the note titled A11y test 12.')['operation'], 'computer_task')
+        for app in ('Notes', ''):
+            self.route('delete_reminder', 'A11y test 12', app_name=app, acts_on_computer=True)
+            self.assertEqual(self.app.prepare_request('Delete only the note titled A11y test 12.')['operation'], 'computer_task')
