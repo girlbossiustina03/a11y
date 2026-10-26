@@ -35,7 +35,7 @@ class Capture(Planner):
 def plan(op, target='', app='', **extra):
     value = dict(operation=op, app_name=app, target=target, browser_mode='default',
                  remaining_request='', goal_mode='inspect', reply='', when='', acts_on_computer=True)
-    if op in ('inspect_screen', 'weather', 'look_up', 'inspect_media'):
+    if op in ('inspect_screen', 'weather', 'look_up', 'inspect_media', 'system_info', 'read_calendar'):
         value['acts_on_computer'] = False
     if op == 'answer':
         value.update(acts_on_computer=False, reply='You’re welcome.')
@@ -43,7 +43,13 @@ def plan(op, target='', app='', **extra):
         value['goal_mode'] = 'draft'
     if op in ('add_event', 'add_reminder', 'complete_reminder', 'delete_reminder', 'run_shortcut'):
         value['goal_mode'] = 'change'
-    value['referent'] = {'move_geometry': 'companion', 'move_object': 'companion', 'highlight': 'visible_target'}.get(op, 'other')
+    # Defaults cover these reviewed synthetic families, not a production router.
+    value['referent'] = {
+        'move_geometry': 'companion', 'move_object': 'companion',
+        'highlight': 'visible_target', 'browser_open': 'destination',
+        'browser_search': 'destination', 'open_file': 'destination',
+        'launch_app': 'destination', 'focus_app': 'destination',
+    }.get(op, 'other')
     value.update(extra)
     return validate_plan(value)
 
@@ -63,14 +69,14 @@ def messages(request, label, recent=(), context=None, last_task=None):
 @lru_cache(maxsize=1)
 def harder_strings():
     """Conservative superset: exclude every literal, including f-string fragments."""
-    tree = ast.parse((ROOT / 'scripts/live_harder.py').read_text())
+    tree = ast.parse('\n'.join((ROOT / 'scripts' / name).read_text() for name in ('live_harder.py', 'live_features.py')))
     return {' '.join(n.value.casefold().split()) for n in ast.walk(tree)
             if isinstance(n, ast.Constant) and isinstance(n.value, str) and n.value.strip()}
 
 @lru_cache(maxsize=1)
 def harder_patterns():
     """Also protect variable fixture names and concatenated live requests."""
-    tree = ast.parse((ROOT/'scripts/live_harder.py').read_text())
+    tree = ast.parse('\n'.join((ROOT / 'scripts' / name).read_text() for name in ('live_harder.py', 'live_features.py')))
     patterns = []
     def pattern(node):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
@@ -145,6 +151,10 @@ def seeds():
             # Identical semantics share a family even across different seeds.
             family = f'{op}:{target or app or request}'.casefold()
             label = plan(op, request if target is None else target, app)
+            if op == 'computer_task':  # All five seed families navigate to Settings panes.
+                label['referent'] = 'destination'
+            if op == 'read_reminders' and i in (2, 4):
+                label['acts_on_computer'] = False
             if op == 'answer':
                 label['reply'] = ['You’re welcome.', 'Good morning.', 'Okay.', 'Hello.', 'Bye for now.'][i]
             yield family, i, request, label
@@ -219,6 +229,31 @@ def build():
             family='follow_up_negative:'+wording, request=wording, kind='follow_up',
             plan=plan('answer'), source='handwritten synthetic conversation',
             messages=messages(wording, {'request':''}, last_task='open https://example.org')))
+    # Per-example review for source requests; activating a control is not pointing it out.
+    destinations = {
+        'show me the battery health', 'show me Battery in System Settings',
+        'where can I see the sites I visited? open it',
+    }
+    for row in rows:
+        if row['kind'] != 'intent':
+            continue
+        label = dict(row['plan'])
+        contextual_apps = {
+            'Find the Help link and then click it': 'Teams',
+            'are there any notifications that require my attention': 'Teams',
+            'type hello': 'Safari',
+        }
+        if row['source'].startswith(('tests/', 'scripts/')) and row['request'] in contextual_apps:
+            label['app_name'] = contextual_apps[row['request']]
+        if row['request'] in destinations:
+            label['referent'] = 'destination'
+        if row['request'] == 'what do I have to do today':
+            label['acts_on_computer'] = False
+        # Wrapper forms of that same question also remain questions.
+        if 'what do I have to do today' in row['request']:
+            label['acts_on_computer'] = False
+        row['plan'] = validate_plan(label)
+        row['messages'][-1]['content'] = json.dumps(label, ensure_ascii=False)
     # Deduplicate families across splits conservatively.
     priority = {'train': 0, 'valid': 1, 'test': 2}
     assigned = {}

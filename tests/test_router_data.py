@@ -57,6 +57,8 @@ class EvaluationTests(unittest.TestCase):
         row = {'messages': data.messages('read my second last email', label)}
         report = evaluate([row], data.Capture(label))
         self.assertEqual(report['operation_accuracy'], 1)
+        self.assertEqual(report['outputs'][0]['gold'], label)
+        self.assertEqual(report['outputs'][0]['prediction'], label)
         self.assertEqual(report['field_accuracy']['target']['accuracy'], 1)
         self.assertEqual(report['confusion'], {'read_mail': {'read_mail': 1}})
         report = evaluate([row], data.Capture(data.plan('answer')))
@@ -66,6 +68,40 @@ class EvaluationTests(unittest.TestCase):
         with patch('companion.ollama.OllamaProvider.complete', side_effect=AssertionError('inference forbidden')), patch('subprocess.run', side_effect=AssertionError('apps forbidden')):
             rows = data.build()
         self.assertEqual({r['plan']['operation'] for r in rows if r['split']=='train'}, set(OPERATIONS))
+
+
+
+class AuditedLabelsTests(unittest.TestCase):
+    def test_referents_and_question_labels(self):
+        rows = {r['request']:r for r in data.build() if r['kind']=='intent'}
+        for text in ('find the Bluetooth settings', 'show me Battery in System Settings',
+                     'where can I see the sites I visited? open it', 'open https://example.org/4'):
+            self.assertEqual(rows[text]['plan']['referent'], 'destination')
+        self.assertEqual(rows['click the toolbar']['plan']['referent'], 'other')
+        self.assertEqual(rows['highlight the Preview close button']['plan']['referent'], 'visible_target')
+        self.assertEqual(rows['move yourself beside the Preview window']['plan']['referent'], 'companion')
+        self.assertFalse(rows['what do I have to do today']['plan']['acts_on_computer'])
+        self.assertFalse(rows['what Mac model is this']['plan']['acts_on_computer'])
+        self.assertTrue(rows['list my reminders']['plan']['acts_on_computer'])
+
+    def test_equivalence_preserves_meaning(self):
+        from scripts.router_scoring import equivalent
+        gold = data.plan('browser_search', 'cats')
+        self.assertTrue(equivalent('app_name', gold, dict(gold, app_name='Safari')))
+        self.assertFalse(equivalent('app_name', gold, dict(gold, app_name='A11y')))
+        gold = data.plan('read_mail', '2')
+        self.assertTrue(equivalent('app_name', gold, dict(gold, app_name='Mail')))
+        self.assertFalse(equivalent('app_name', gold, dict(gold, app_name='A11y')))
+        gold = data.plan('highlight', 'Preview close button', 'Preview')
+        self.assertTrue(equivalent('target', gold, dict(gold, target='the close button')))
+        self.assertTrue(equivalent('target', gold, dict(gold, target='Preview close button')))
+        gold = data.plan('type_text', 'hello')
+        self.assertFalse(equivalent('target', gold, dict(gold, target='Hello')))
+        gold = data.plan('browser_open', 'https://www.youtube.com/results?search_query=lo-fi')
+        self.assertFalse(equivalent('target', gold, dict(gold, target='https://www.youtube.com')))
+        gold = data.plan('recent_files', 'downloads')
+        self.assertFalse(equivalent('target', gold, dict(gold, target='recent_files')))
+
 
 if __name__ == '__main__':
     unittest.main()

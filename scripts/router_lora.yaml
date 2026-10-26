@@ -1,4 +1,4 @@
 lora_parameters:
-  rank: 16
-  scale: 32.0
+  rank: 8
+  scale: 16.0
   dropout: 0.05

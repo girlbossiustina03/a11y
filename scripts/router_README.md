@@ -176,3 +176,56 @@ opening. This evaluation has not been run.
 | type_text | 24 | 8 | 9 |
 | weather | 24 | 8 | 8 |
 | **Total** | 953 | 314 | 406 |
+
+## Background-only measured rerun (2026-10-26)
+
+`router_eval.py` now saves every gold/predicted plan, request and latency for mismatch
+review. Scoring is still exact; do not silently treat arbitrary target paraphrases or
+conversational replies as correct. Existing aggregate-only JSON cannot be rescored.
+The MLX base's historical 146 failures include invalid JSON and opening-coverage
+responses; its unconstrained result is not interchangeable with Ollama's grammar score.
+
+Run model jobs with `nice -n 19`. The entry points now verify the effective niceness
+before model access: on some managed sessions `nice` warns but still starts the child
+at normal priority. These scripts fail closed in that situation.
+
+`bash scripts/router_train.sh` now prepares a separate `adapter-local` (old artifacts
+untouched): rank 8, 8 layers, batch 1, assistant-only loss, max 300 iterations,
+full-validation loss every 50, patience 2, 6900-second wall limit including load.
+Validation callback saves the best weights immediately and exposes a loadable
+`adapter-local/best` directory. This runner has offline unit checks but has not been
+executed with Metal in the current managed session. Full validation costs time;
+the wall limit may stop before 300 iterations. Inspect `validation.json` and `run.json`.
+Do not use the test set to choose the router checkpoint.
+
+Restored grounding scorer (stored PNGs only, no capture/app calls):
+
+```bash
+nice -n 19 .venv-train/bin/python scripts/grounding_eval.py --limit 241 --output .data/training/grounding-base.json
+nice -n 19 .venv-train/bin/python scripts/grounding_eval.py --limit 241 --adapter .data/training/adapter --output .data/training/grounding-adapter.json
+```
+
+It saves raw answers, parsed points, per-scene counts, latency, data hash, malformed
+counts, historical ±5 hit rate and strict box hit rate after each row. Rebase stored
+image paths by filename into `.data/training`. The comparison summary at
+`grounding-eval.json` currently records a blocker, not a measured result.
+
+## Reviewed data and end-to-end owner run (2026-10-26)
+
+The latest audit supersedes the earlier blocker-only assessment. See
+[router_AUDIT.md](router_AUDIT.md) for per-field audit counts, labeling policy,
+JSON rendering and limitations; see [grounding_APP_EVAL.md](grounding_APP_EVAL.md)
+for the measured old vision results, app-format mismatch and researched serving steps.
+
+Run the complete new router experiment from an owner terminal with Metal access:
+
+```bash
+bash scripts/router_pipeline.sh
+```
+
+This snapshots regenerated data into a fresh run, selects the rank-8/8-layer
+checkpoint on validation, evaluates MLX, fuses/dequantizes, converts/quantizes to
+Q4_K_M, copies the installed base TEMPLATE/PARAMETERS, creates a11y-router-test and
+evaluates Ollama. Each stage logs and fails closed on errors/background-priority
+failure. Prior manual Modelfile examples above do not copy the full base template;
+prefer this pipeline. No pipeline model job has been run in the managed sandbox.

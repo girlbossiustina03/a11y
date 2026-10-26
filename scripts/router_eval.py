@@ -17,12 +17,17 @@ from companion.provider import AIConfig
 from companion.service import FOLLOW_UP_SCHEMA
 from companion.request_plan import validate_plan
 
+from scripts.router_scoring import equivalent
+
 class MLXPlanner(Planner):
     def __init__(self, model, adapter):
         import mlx.core as mx
         from mlx_lm import load
+        self.completions = []
         mx.random.seed(7)
         self.model, self.tokenizer = load(model, adapter_path=adapter)
+        from scripts.router_chat import install
+        install(self.tokenizer)
     def complete(self, system, messages, *, max_tokens=700, **kwargs):
         from mlx_lm import generate
         from mlx_lm.sample_utils import make_sampler
@@ -30,14 +35,18 @@ class MLXPlanner(Planner):
             [{'role': 'system', 'content': system}]+messages,
             tokenize=False, add_generation_prompt=True, enable_thinking=False)
         # MLX has no Ollama JSON grammar; invalid JSON counts as failure.
-        return json.loads(generate(self.model, self.tokenizer, prompt=prompt,
-                                  max_tokens=max_tokens, sampler=make_sampler(temp=0), verbose=False))
+        text = generate(self.model, self.tokenizer, prompt=prompt,
+                        max_tokens=max_tokens, sampler=make_sampler(temp=0), verbose=False)
+        self.completions.append(dict(raw=text, max_tokens=max_tokens, schema=kwargs.get('response_schema'),
+                                     decoded_token_count=len(self.tokenizer.encode(text, add_special_tokens=False))))
+        return json.loads(text)
 
 
 def evaluate(rows, provider):
     confusion = defaultdict(Counter)
     fields = defaultdict(lambda: [0, 0])
-    timings, failures = [], []
+    exact_fields = defaultdict(lambda: [0, 0])
+    timings, failures, outputs = [], [], []
     correct = total = follow_good = follow_total = 0
     for number, row in enumerate(rows):
         msgs = row['messages']
@@ -45,6 +54,7 @@ def evaluate(rows, provider):
         gold = json.loads(msgs[2]['content'])
         follow = 'request' in gold
         start = time.perf_counter()
+        completion_start = len(getattr(provider, 'completions', []))
         try:
             if follow:
                 got = provider.complete(msgs[0]['content'], [msgs[1]], response_schema=FOLLOW_UP_SCHEMA,
@@ -59,6 +69,7 @@ def evaluate(rows, provider):
             got = {}
             failures.append({'row':number, 'error':str(exc)})
         timings.append(time.perf_counter()-start)
+        outputs.append(dict(row=number, request=payload, gold=gold, prediction=got, seconds=timings[-1], completions=getattr(provider, 'completions', [])[completion_start:]))
         if follow:
             follow_total += 1
             follow_good += got == gold
@@ -68,14 +79,17 @@ def evaluate(rows, provider):
             correct += actual == gold['operation']
             confusion[gold['operation']][actual] += 1
         for field, value in gold.items():
-            fields[field][0] += got.get(field) == value
+            exact_fields[field][0] += got.get(field) == value
+            exact_fields[field][1] += 1
+            fields[field][0] += equivalent(field, gold, got, payload)
             fields[field][1] += 1
     return dict(rows=len(rows), operation_accuracy=correct/max(1,total),
                 follow_up_exact_accuracy=follow_good/max(1,follow_total),
                 field_accuracy={k:dict(correct=v[0], total=v[1], accuracy=v[0]/v[1]) for k,v in fields.items()},
+                exact_field_accuracy={k:dict(correct=v[0], total=v[1], accuracy=v[0]/v[1]) for k,v in exact_fields.items()},
                 confusion={k:dict(v) for k,v in sorted(confusion.items())},
-                mean_latency_seconds=sum(timings)/max(1,len(timings)), failures=failures,
-                note='Planner includes opening-coverage calls. MLX uses greedy decoding without a JSON grammar; reply exact-match is lexical, not semantic.')
+                outputs=outputs, mean_latency_seconds=sum(timings)/max(1,len(timings)), failures=failures,
+                note='Planner includes opening-coverage calls. MLX uses plain ChatML, strict JSON parsing and no JSON grammar. field_accuracy uses conservative audited equivalences; exact_field_accuracy is lexical. Raw MLX completions include coverage calls; decoded_token_count is re-tokenized text, not an authoritative finish reason.')
 
 
 def main():
@@ -88,6 +102,8 @@ def main():
     p.add_argument('--output', type=Path)
     p.add_argument('--limit', type=int)
     args = p.parse_args()
+    from training_priority import require_background
+    require_background()
     provider = MLXPlanner(args.mlx_model, args.adapter) if args.adapter or args.mlx else OllamaProvider(AIConfig(model=args.model, timeout=120))
     rows = [json.loads(line) for line in args.data.read_text().splitlines() if line.strip()]
     if not rows:
