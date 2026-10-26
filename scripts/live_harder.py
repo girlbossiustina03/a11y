@@ -20,13 +20,18 @@ from live_broad import menu_mark
 from live_conversation import clean_items, note_words, test_reminders
 
 
-def exact_note(title, body):
+def exact_note(title, body, state=None):
     """Exact title and complete visible body, including the title Notes prepends."""
     count = osa('tell application "Notes" to return count of (every note whose name is (item 1 of argv))', title)
+    observed = (state if state is not None else {}).setdefault('_observed', {})
+    observed['note_count'] = count
     if count != '1':
+        observed['note_html'] = osa('tell application "Notes" to return body of every note whose name is (item 1 of argv)', title)
         return False
     actual = osa('tell application "Notes" to return body of first note whose name is (item 1 of argv)', title)
-    return note_words(actual).strip() == title+' '+body
+    observed['note_html'] = actual
+    observed['note_text'] = note_words(actual)
+    return ' '.join(note_words(actual).split()) == ' '.join((title+' '+body).split())
 
 
 def at_url(host, path=None):
@@ -100,7 +105,14 @@ def build(window, count=30, seed=0):
             check = lambda s,e,state=state,target=target: target() == str(state['folder']/'Recipes'/'Saturday')
         elif kind == 'sort':
             request = 'Put this Finder folder into list view and arrange its items by name.'
-            check = lambda s,e,state=state,target=target: target() == str(state['folder']) and osa('tell application "Finder" to return current view of front Finder window') == 'list view' and osa('tell application "Finder" to return name of sort column of list view options of front Finder window') == 'Name'
+            def check(s,e,state=state,target=target):
+                values = dict(finder_target=target(), finder_view=osa('tell application "Finder" to return current view of front Finder window'),
+                              finder_column=osa('tell application "Finder" to return name of sort column of list view options of front Finder window'))
+                s.setdefault('_observed', {}).update(values)
+                predicates = dict(target_matches=values['finder_target'] == str(state['folder']),
+                                  list_view=values['finder_view'] == 'list view', name_column=values['finder_column'].casefold() == 'name')
+                s['_observed'].update(predicates)
+                return all(predicates.values())
         elif kind == 'info':
             request = 'Show the information window for this orchard folder in Finder, so I can see its details.'
             check = lambda s,e,folder_name=folder_name: osa('tell application "System Events" to tell process "Finder" to return exists window (item 1 of argv)', folder_name+' Info') == 'true'
@@ -211,9 +223,9 @@ end tell''', str(state['path']))
             return lambda: clean_items(title, kind)
         if kind == 'notes':
             turns = [turn('note_picnic', f'Please make a note called {titles[0]} with exactly this body: Bring the green blanket and two pears.', app,
-                          lambda s,e,title=titles[0]: exact_note(title, 'Bring the green blanket and two pears.')),
+                          lambda s,e,title=titles[0]: exact_note(title, 'Bring the green blanket and two pears.', s)),
                      turn('note_follow', f'Make another note like that, titled {titles[1]}, but with exactly this body: Leave the basket by the door.', app,
-                          lambda s,e,title=titles[1]: exact_note(title, 'Leave the basket by the door.'))]
+                          lambda s,e,title=titles[1]: exact_note(title, 'Leave the basket by the door.', s))]
         else:
             def reminder_check(title, hour):
                 def check(s,e):
@@ -233,8 +245,17 @@ end tell''', str(state['path']))
         subprocess.run(['open', 'dict://orchard'], check=True, timeout=20)
     def dictionary_check(s,e):
         from live_broad import ax_values
-        values = ax_values('Dictionary').casefold()
-        return le.front_app() == 'Dictionary' and 'nocturnal' in values and 'night' in values and 'night' in answer(e).casefold()
+        front = le.front_app()
+        raw = ax_values('Dictionary')
+        fallback = []
+        if front == 'Dictionary' and not all(word in raw.casefold() for word in ('nocturnal', 'night')):
+            # Only OCR inside Dictionary's actual front window can establish its contents.
+            sample = le.desktop_sample()
+            if (sample.get('app') or {}).get('name') == 'Dictionary' and (sample.get('window') or {}).get('bounds'):
+                fallback = le.screen_lines(window_only=True)
+        s.setdefault('_observed', {}).update(dictionary_front=front, dictionary_ax=raw, dictionary_window_ocr=fallback)
+        values = (raw+' '+' '.join(fallback)).casefold()
+        return front == 'Dictionary' and 'nocturnal' in values and 'night' in values and 'night' in answer(e).casefold()
     case('lookup_dictionary', [turn('lookup_dictionary', 'Look up nocturnal in Dictionary and tell me what it means.', 'Dictionary', dictionary_check)],
          dictionary_setup, [dismiss_menu], 'varied Dictionary quixotic (2/3; partial baseline)')
 

@@ -55,6 +55,8 @@ def plan(request, catalog):
     if parsed is None:
         return None
     name, browser, rest = parsed['name'], parsed['browser'], parsed['rest']
+    if browser is None and re.search(r'\s(?:in|within)\s', name, re.I):
+        return None  # A destination inside an app needs semantic interpretation, not web fallback.
     if re.search(r'\b(play|pause|resume|skip|shuffle)\b', rest, re.I):
         return None  # "open Music and play X" uses the dedicated playback path.
     base = {'app_name': browser or '', 'browser_mode': parsed['mode'], 'remaining_request': rest}

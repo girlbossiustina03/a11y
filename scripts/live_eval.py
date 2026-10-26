@@ -472,8 +472,16 @@ class App:
         self.socket = Path(tempfile.mkdtemp(prefix='a11y-eval-'))/'eval.sock'
         self.log = log
         self.process = None
+        from companion.instance import build_id
+        self.build = build_id()
+
+    def check_build(self):
+        from companion.instance import build_id
+        if build_id() != self.build:
+            raise SystemExit('Build ID changed during live run; aborting mixed-build results.')
 
     def call(self, command, timeout=25):
+        self.check_build()
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
             connection.settimeout(timeout)
             connection.connect(str(self.socket))
@@ -486,12 +494,14 @@ class App:
                 data += chunk
         if not data:
             raise RuntimeError('A11y did not answer (exit code %s)' % (self.process.poll() if self.process else '?'))
+        self.check_build()
         reply = json.loads(data)
         if 'error' in reply:
             raise RuntimeError('A11y: '+reply['error'])
         return reply
 
     def launch(self):
+        self.check_build()
         env = {key: value for key, value in os.environ.items()
                if not key.startswith(('ANTHROPIC_', 'OPENAI_')) and key not in ('A11Y_AI_BASE_URL', 'A11Y_AI_KEY')}
         if getattr(self, 'shots', None):
@@ -522,8 +532,9 @@ class App:
                 self.call({'cmd': 'stop'})
                 self.call({'cmd': 'quit'})
                 self.process.wait(15)
-            except (OSError, RuntimeError, subprocess.TimeoutExpired):
+            except (OSError, RuntimeError, subprocess.TimeoutExpired, SystemExit):
                 self.process.terminate()
+        self.check_build()
 
     def run(self, request, timeout):
         """Type the request, wait until the companion is quiet, return what happened."""
@@ -568,7 +579,7 @@ def final_message(events):
 
 
 def failed_reply(message):
-    return bool(re.match(r'^(I couldn’t do that|I stopped:|I could not find a safe next step)', message))
+    return bool(re.search(r"\b(?:I (?:could not|couldn[’']t|cannot|can[’']t) (?:finish|do|find|work out|confirm|see|identify|produce)|I stopped|so I stopped|nothing (?:was done|(?:on the screen )?changed)|not (?:marked complete|on the screen)|same action was proposed|stopped at the .*action limit|result could not be verified)", message, re.I))
 
 
 def task_status(state):

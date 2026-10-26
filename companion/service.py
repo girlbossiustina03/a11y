@@ -468,7 +468,7 @@ class Companion:
         except (ValueError, RuntimeError):
             return None
 
-    def app_plan(self, operation, target, request):
+    def app_plan(self, operation, target, request, *, read_content=False):
         """Calendar/Reminders/Notes/Contacts/Finder/page/Shortcuts: the interpreter chose the operation
         and its details; mac_apps does it exactly. Changes wait for the user's confirmation."""
         from . import mac_apps
@@ -482,7 +482,8 @@ class Companion:
             named = [word for word in FILE_KINDS if re.search(r'\b'+word+r's?\b', request, re.I) and word not in target.casefold()]
             target = (target+' '+' '.join(named[:1])).strip()  # the router dropped "PDF" from "the last PDF I downloaded" (live)
         try:
-            kind, value = mac_apps.prepare(operation, target, bridge=self.desktop_context.bridge, browser=browser)
+            kind, value = mac_apps.prepare(operation, target, bridge=self.desktop_context.bridge, browser=browser,
+                                           **({'read_content': True} if read_content else {}))
         except (PermissionError, mac_apps.AppError) as error:
             kind, value = 'answer', str(error)
         except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as error:
@@ -831,6 +832,8 @@ class Companion:
         if isinstance(interpreted, dict):
             for key in ('computed', 'full_text', 'read_aloud', 'app_write', 'resolved_request'):  # set only by code
                 interpreted.pop(key, None)
+            from .request_plan import semantic_plan
+            interpreted = semantic_plan(interpreted, request)
             searching = interpreted.get('operation') == 'browser_search' or (
                 # The router opened the site for "search Apple's support site for battery" (live, v3).
                 interpreted.get('operation') == 'browser_open' and re.match(r'^\W*(?:please\s+)?search\b', request, re.I))
@@ -859,8 +862,8 @@ class Companion:
                 interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
             acts = interpreted.pop('acts_on_computer', None) is True
             from .request_plan import highlight_only
-            if acts and (interpreted.get('operation') in ('answer', 'inspect_screen', 'move_object', 'read_page')
-                         or interpreted.get('operation') == 'highlight' and not highlight_only(request)):
+            if acts and interpreted.get('referent') != 'companion' and (interpreted.get('operation') in ('answer', 'inspect_screen', 'move_object', 'read_page')
+                         or interpreted.get('operation') == 'highlight' and not highlight_only(request, interpreted)):
                 # The router said the user wants something done ("I want to see my Battery settings",
                 # "show me Pictures in Finder", "look up quixotic in the Dictionary app") but picked a
                 # chat, a description or a highlight (live, varied suite): it is a task.
@@ -872,7 +875,9 @@ class Companion:
                     from .request_plan import with_opening
                     interpreted = with_opening({'operation': 'launch_app', 'app_name': app, 'target': '', 'browser_mode': 'default',
                                                 'remaining_request': ''}, request)
-            if interpreted.get('operation') in ('create_note', 'add_reminder', 'add_event') and self.named_installed_app(request, writes=True):
+            native_owner = {'create_note': 'Notes', 'add_reminder': 'Reminders', 'add_event': 'Calendar'}.get(interpreted.get('operation'))
+            named_owner = self.named_installed_app(request, writes=True)
+            if native_owner and named_owner and named_owner.casefold() != native_owner.casefold():
                 # "Write '…' in a new TextEdit document" became a note in Notes (live).
                 interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
             if interpreted.get('operation') == 'browser_open' and self.guessed_address(request, str(interpreted.get('target', ''))):
@@ -908,7 +913,7 @@ class Companion:
                 # So did "Switch Calendar to the day view" (focus_app, live broad): opening a running app brings it forward.
                 from .request_plan import with_opening
                 interpreted = with_opening(dict(interpreted, operation='launch_app', remaining_request='', browser_mode='default'), request)
-            if interpreted.get('operation') in ('move_object', 'move_geometry') and not MOVING_WORDS.search(request):
+            if interpreted.get('operation') in ('move_object', 'move_geometry') and interpreted.get('referent') != 'companion' and not MOVING_WORDS.search(request):
                 # "Go to my Pictures folder" was routed to moving the companion: going somewhere is a task.
                 interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
             if interpreted.get('operation') in ('answer', 'inspect_screen') and THIS_PAGE.search(request) \
@@ -986,7 +991,8 @@ class Companion:
                     # only "6 PM" and lost the reminder's title (live).
                     title, _, minutes = target.partition('|')
                     target = title.strip()+' | '+when+(' | '+minutes.strip() if interpreted['operation'] == 'add_event' and minutes.strip() else '')
-                return self.app_plan(interpreted['operation'], target, request)
+                return self.app_plan(interpreted['operation'], target, request,
+                                     read_content=interpreted['operation'] == 'open_file' and bool(interpreted.get('remaining_request', '').strip()))
             if interpreted.get('operation') == 'read_mail':
                 # The model understood the wording; code reads the exact message.
                 from . import mail_reader

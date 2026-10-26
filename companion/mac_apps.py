@@ -358,8 +358,23 @@ FILE_KINDS = {'pdf': ('.pdf',), 'image': ('.png', '.jpg', '.jpeg', '.gif', '.hei
               'presentation': ('.pptx', '.key'), 'zip': ('.zip',)}
 
 
-def open_file(target, home=None, opener=subprocess.run):
+def finder_folder(script=None):
+    """Read Finder's front folder without activating or changing any window."""
+    script = script or run_script
+    try:
+        value = script('''tell application "Finder"
+if count of Finder windows is 0 then return ""
+return POSIX path of (target of front Finder window as alias)
+end tell''', app='Finder').strip()
+        path = Path(value)
+        return path if value and path.is_absolute() and path.is_dir() else None
+    except (AppError, PermissionError, OSError, ValueError):
+        return None
+
+
+def open_file(target, home=None, opener=None, *, script=None, read_content=False):
     """Open the named or newest file from Downloads/Desktop/Documents; non-documents are only revealed."""
+    opener = opener or subprocess.run
     wanted = (target or '').strip()
     from pathlib import Path
     named = re.sub(r'^(?:my|the)\s+|\s+folder$', '', wanted, flags=re.I).strip()
@@ -379,10 +394,28 @@ def open_file(target, home=None, opener=subprocess.run):
         wanted = re.sub(r'\b(?:%s)s?\b' % '|'.join(FILE_KINDS), ' ', kind_text, flags=re.I)
     plain = re.sub(r'\b(latest|last|newest|recent|most recent|my|the|a|file|download|downloads|downloaded|desktop|documents?|i|got|saved|added|received|one|in|from)\b', ' ', wanted.casefold()).strip()
     path = candidates[0] if candidates and not plain else best_match(plain, candidates, lambda p: p.name)
+    if path is None and plain:
+        current = finder_folder(script)
+        if current is not None:
+            try:
+                children = [entry for entry in current.iterdir() if not entry.name.startswith('.')]
+                if kinds:
+                    children = [entry for entry in children if entry.suffix.casefold() in kinds[0]]
+                path = best_match(plain, children, lambda p: p.name)
+            except OSError:
+                pass
     if path is None:
         return 'I could not find one file matching “'+wanted+'”.'
     if path.suffix.casefold() in OPENABLE:
         opener(['open', str(path)], capture_output=True, timeout=15)
+        if read_content:
+            if path.suffix.casefold() in ('.txt', '.md', '.csv'):
+                try:
+                    if path.stat().st_size <= 1_000_000:
+                        return path.read_text(encoding='utf-8')
+                except (OSError, UnicodeError):
+                    pass
+            return 'Opened '+path.name+'. I could not read its text directly.'
         return 'Opened '+path.name+'.'
     opener(['open', '-R', str(path)], capture_output=True, timeout=15)
     return 'Showed '+path.name+' in Finder. I only open documents myself; apps and installers you open yourself.'
@@ -454,7 +487,7 @@ def fields(target, count):
     return (parts+['']*count)[:count]
 
 
-def prepare(operation, target, *, bridge, browser=None, script=None, runner=None, now=None):
+def prepare(operation, target, *, bridge, browser=None, script=None, runner=None, now=None, read_content=False):
     """('answer', text) for reads, or ('confirm', action) for changes the user must confirm."""
     now = now or datetime.now()
     script, runner = script or run_script, runner or subprocess.run
@@ -470,7 +503,7 @@ def prepare(operation, target, *, bridge, browser=None, script=None, runner=None
         folder = next((key for key in FOLDERS if key in (target or '').casefold()), '')
         return 'answer', describe_files(recent_files(folder), folder, now)
     if operation == 'open_file':
-        return 'answer', open_file(target)
+        return 'answer', open_file(target, script=script, read_content=read_content)
     if operation == 'system_info':
         return 'answer', system_info(target, runner)
     if operation == 'list_shortcuts':

@@ -14,8 +14,9 @@ INTENT_SCHEMA = {'type': 'object', 'additionalProperties': False,
         'browser_mode': {'enum': ['window', 'tab', 'default']},
         'remaining_request': {'type': 'string'}, 'media_artist': {'type': 'string'},
         'goal_mode': {'enum': ['inspect', 'draft', 'change']}, 'reply': {'type': 'string'}, 'when': {'type': 'string'},
+        'referent': {'enum': ['companion', 'destination', 'visible_target', 'other']},
         'acts_on_computer': {'type': 'boolean'}}}
-INTENT_SCHEMA['required'] += ['goal_mode', 'reply', 'when', 'acts_on_computer']
+INTENT_SCHEMA['required'] += ['goal_mode', 'reply', 'when', 'acts_on_computer', 'referent']
 INTENT_SYSTEM = '''Interpret ONLY the latest user request. Do not execute or answer it.
 Return operation, app_name (the actual requested app, empty if none), target, and
 browser_mode (default for non-browser requests), remaining_request (empty if the
@@ -80,15 +81,22 @@ title of a reminder to delete;
 read_notes target = a note's title, "latest", or empty to list them; create_note target
 "title | text"; find_contact target = a person's name ("what's Ana's number");
 recent_files target downloads|desktop|documents|empty; open_file target = a file name
-or "latest download"; read_page for questions about the web page open in the browser
+or "latest download"; put any requested reading/answer after opening in remaining_request; read_page for questions about the web page open in the browser
 ("summarize this page"); list_shortcuts; run_shortcut target = the shortcut's name;
 system_info for questions about this Mac itself, target one of macos_version, battery, storage,
 memory, appearance, wifi, uptime, model ("what macOS am I on", "how much battery is left").
 when: for add_event and add_reminder the time as YYYY-MM-DDTHH:MM worked out from "now"
 ("at 6" is the next 6 o'clock; "tomorrow at 3" is 15:00 tomorrow), empty if no time is given;
 for weather the day; empty for every other operation.
-"Mark/show me where" and "highlight" request highlight only, even for a close or
-delete button. They never request clicking/closing. "Mark where the left terminal's
+referent identifies what the request concerns: companion for moving A11y herself;
+destination for navigating to a folder, app pane or page; visible_target for pointing
+out an existing control/object without activating it; other otherwise. app_name owns
+the destination; target describes it. Interpret the meaning, not individual verbs.
+A destination uses computer_task, even when phrased "show me where ... lives".
+A companion relocation uses move_geometry for an edge/corner (target e.g. top left),
+move_object for a visible object, regardless of the verb used.
+Highlighting an existing control without activating it uses highlight and visible_target,
+even for a close or delete button. It never requests clicking/closing. "Mark where the left terminal's
 close button is" is highlight, not computer_task or close_window.
 When the target is inside A11y's own settings/menu, use app_name=A11y. These are
 the companion's controls, not Finder, Terminal, or the macOS desktop.
@@ -167,8 +175,10 @@ def with_opening(plan, request):
 
 
 def validate_plan(value):
-    if not isinstance(value, dict) or not {'operation', 'app_name', 'target'} <= set(value) or set(value) - {'operation', 'app_name', 'target', 'browser_mode', 'window_hint', 'remaining_request', 'media_artist', 'goal_mode', 'opening', 'reply', 'when', 'acts_on_computer', 'computed', 'full_text', 'read_aloud', 'app_write', 'confidence', 'resolved_request'}:
+    if not isinstance(value, dict) or not {'operation', 'app_name', 'target'} <= set(value) or set(value) - {'operation', 'app_name', 'target', 'browser_mode', 'window_hint', 'remaining_request', 'media_artist', 'goal_mode', 'opening', 'reply', 'when', 'acts_on_computer', 'computed', 'full_text', 'read_aloud', 'app_write', 'confidence', 'resolved_request', 'referent'}:
         raise ValidationError('The request could not be interpreted reliably. Please name the action and target.')
+    if value.get('referent', 'other') not in ('companion', 'destination', 'visible_target', 'other'):
+        raise ValidationError('Invalid request referent.')
     if value['operation'] not in OPERATIONS or any(not isinstance(value[key], str) or len(value[key]) > (2000 if key == 'target' else 500) for key in ('app_name', 'target')):
         raise ValidationError('The request planner returned an invalid operation.')
     if value.get('browser_mode', 'default') not in ('window', 'tab', 'default', 'current') or len(str(value.get('window_hint', ''))) > 80:
@@ -278,14 +288,41 @@ ACTIVATION_FOLLOWUP = re.compile(r"\b(?:and|then)\s+(?:also\s+)?(?:click|press|t
 ACTIVATING_OPERATIONS = ('click_point', 'press_control', 'computer_task', 'close_window', 'quit_app')
 
 
-def highlight_only(request):
-    """"Mark/show where" requests show a target; they never authorize activating it."""
-    return isinstance(request, str) and bool(HIGHLIGHT_REQUEST.search(request)) and not ACTIVATION_FOLLOWUP.search(request)
+def highlight_only(request, plan=None):
+    """Pointing at a control never authorizes activating it. The model's referent says so; the wording
+    guard stays as a safety net, except where the model saw a place to go ("show me where the
+    appearance settings live") or herself to move. Closing and quitting are never let through."""
+    if plan and plan.get('referent') == 'visible_target':
+        return True
+    if not (isinstance(request, str) and HIGHLIGHT_REQUEST.search(request)) or ACTIVATION_FOLLOWUP.search(request):
+        return False
+    return not plan or plan.get('referent') not in ('destination', 'companion') or plan.get('operation') in ('close_window', 'quit_app')
+
+
+def semantic_plan(plan, request):
+    """Validate operation ownership against the model's interpretation, not phrase matches."""
+    plan = validate_plan(plan)
+    if (str(plan.get('app_name', '')).casefold() in ('system settings', 'system preferences')
+            and not re.search(r'https?://', request, re.I)
+            and (plan['operation'] in ('browser_open', 'browser_search')
+                 or (plan.get('opening') or {}).get('operation') in ('browser_open', 'browser_search'))):
+        plan = dict(plan, operation='computer_task', target=request, remaining_request='')
+        plan.pop('opening', None)
+    if plan.get('referent') == 'destination' and plan['operation'] in ('highlight', 'move_object', 'move_geometry', 'answer', 'inspect_screen'):
+        plan = dict(plan, operation='computer_task', target=request, remaining_request='')
+    if plan.get('referent') == 'companion' and plan['operation'] in ('highlight', 'answer', 'inspect_screen', 'computer_task', 'move_object', 'move_geometry'):
+        from .service import geometric_destination
+        plan = dict(plan, operation='move_geometry' if geometric_destination(plan['target']) else 'move_object')
+    if plan['operation'] in ACTIVATING_OPERATIONS and highlight_only(request, plan):
+        # A model may route "mark where the close button is" to clicking or
+        # closing. Highlighting is the only operation such a request authorizes.
+        return dict(plan, operation='highlight', remaining_request='')
+    return plan
 
 
 def preserve_desktop_goal(plan, request):
     """Preserve follow-up work across app launches, browser and input shortcuts."""
-    plan = validate_plan(plan)
+    plan = semantic_plan(plan, request)
     if plan.get('remaining_request') and (_normalized(plan['remaining_request']) == _normalized(request) or plan['operation'] in
             ('answer', 'inspect_screen', 'inspect_media', 'computer_task', 'highlight', 'move_object', 'move_geometry', 'capture_once')):
         # Small models often echo the request, or put a reply here, for operations that have no
@@ -300,10 +337,6 @@ def preserve_desktop_goal(plan, request):
             and plain_question(request)):
         # "Where is China?" is a question to answer, not a browser search (seen live).
         plan = dict(plan, operation='answer', app_name='', target='')
-    if plan['operation'] in ACTIVATING_OPERATIONS and highlight_only(request):
-        # A model may route "mark where the close button is" to clicking or
-        # closing. Highlighting is the only operation such a request authorizes.
-        return dict(plan, operation='highlight', remaining_request='')
     is_shortcut = plan['operation'] in ('browser_open', 'browser_search', 'new_window',
         'launch_app', 'focus_app', 'type_text', 'press_key', 'scroll', 'click_point', 'press_control')
     if plan['operation'] in ('click_point', 'press_control') or is_shortcut and plan.get('remaining_request', '').strip():

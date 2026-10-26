@@ -80,7 +80,7 @@ class HarderSuite(unittest.TestCase):
     def test_note_requires_exact_body_and_single_title(self):
         for native, valid in [(['1','<div>A11y test 123</div><div>Pack pears.</div>'], True),
                               (['1','<div>A11y test 123</div><div>Pack pears. Extra</div>'], False),
-                              (['0'], False), (['2'], False)]:
+                              (['0', ''], False), (['2', '<div>duplicate notes</div>'], False)]:
             with patch('live_harder.osa', side_effect=native):
                 self.assertEqual(harder.exact_note('A11y test 123', 'Pack pears.'), valid)
 

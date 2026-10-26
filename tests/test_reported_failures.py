@@ -292,7 +292,7 @@ class HighlightOnlyTests(unittest.TestCase):
                                    ('Show me where the Send button is', 'click_point'),
                                    ('where is the Post in channel button?', 'computer_task'),
                                    ('Highlight the Desktop tools section', 'press_control')]:
-            plan = preserve_desktop_goal({'operation': operation, 'app_name': '', 'target': 'x'}, request)
+            plan = preserve_desktop_goal({'operation': operation, 'app_name': '', 'target': 'x', 'referent': 'visible_target'}, request)
             self.assertEqual(plan['operation'], 'highlight', request)
 
     def test_explicit_activation_after_locating_is_not_downgraded(self):
@@ -2163,3 +2163,164 @@ class CheckedDoneTests(Harness):
             {'status': 'done', 'message': 'The timer is running.', 'risk': 'navigation', 'action': None},
             {'evidence': 'Activity', 'missing': '', 'met': True}, {'message': 'Your ten-minute timer is running.'}]
         self.assertEqual(self.propose(task)['status'], 'done')
+
+
+class HarderRoutingRegressions(LiveRoutingTests):
+    def test_settings_destination_is_navigation_not_highlight(self):
+        request = 'Show me where the light and dark appearance choices live in System Settings, without switching either one.'
+        self.route('highlight', 'Appearance', app_name='System Settings', referent='destination', acts_on_computer=True)
+        response = self.app.ask(request)
+        self.assertEqual(response['desktop_action']['type'], 'start_task')
+        self.assertEqual(response['desktop_action']['goal'], request)
+
+    def test_self_move_uses_geometry_without_grounding_call(self):
+        request = 'Please tuck yourself into the upper-left corner of my screen.'
+        self.route('highlight', 'upper-left', referent='companion', acts_on_computer=True)
+        response = self.app.ask(request)
+        self.assertEqual(response['desktop_action']['type'], 'move_companion')
+        self.assertEqual(response['desktop_action']['destination'], 'top_left')
+        self.provider.complete_structured.assert_not_called()
+
+    def test_explicit_reminders_destination_keeps_native_confirmation(self):
+        request = 'Put A11y test 90800 in Reminders for tomorrow at 8 in the morning.'
+        self.route('add_reminder', 'A11y test 90800', app_name='Reminders', when='2026-10-27T08:00', referent='destination')
+        with patch.object(self.app, 'named_installed_app', return_value='Reminders'):
+            response = self.app.ask(request)
+        self.assertEqual(response['desktop_action']['type'], 'app_write')
+        self.assertEqual(response['desktop_action']['kind'], 'add_reminder')
+        self.assertEqual(response['desktop_action']['title'], 'A11y test 90800')
+        self.assertTrue(response['desktop_action']['due'])
+
+    def test_settings_lookup_never_opens_browser_search(self):
+        request = 'Go to About in System Settings and read out the installed memory in GB, without changing anything.'
+        self.route('browser_search', 'About in System Settings', app_name='System Settings', referent='destination',
+                   remaining_request='read out the installed memory in GB')
+        response = self.app.ask(request)
+        self.assertEqual(response['desktop_action']['type'], 'start_task')
+        self.assertNotIn('opening', response['desktop_action'])
+
+    def test_finder_open_keeps_requested_reading(self):
+        import tempfile
+        from pathlib import Path
+        from companion import mac_apps
+        request = 'Open the file called A11y test 314159 packing.txt from this Finder folder and tell me what it says to pack.'
+        with tempfile.TemporaryDirectory() as root:
+            folder = Path(root)/'orchard'
+            folder.mkdir()
+            path = folder/'A11y test 314159 packing.txt'
+            path.write_text('A11y test 314159\nPack the amber lantern.\n')
+            self.route('open_file', path.name, remaining_request='tell me what it says to pack', referent='destination')
+            with patch.object(mac_apps, 'recent_files', return_value=[]), patch.object(mac_apps, 'run_script', return_value=str(folder)) as script, patch.object(mac_apps.subprocess, 'run') as opener:
+                response = self.app.ask(request)
+            self.assertIn('amber lantern', response['message'])
+            self.assertTrue(response['full_text'])
+            self.assertIsNone(response['desktop_action'])
+            self.assertIn(str(path), opener.call_args.args[0])
+            self.assertNotIn(path.name, script.call_args.args[0])
+            self.assertEqual(self.app.conversation[-1]['content'], 'A11y test 314159')
+
+
+class HarderHarnessRegressions(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import sys
+        from pathlib import Path
+        cls.scripts = str(Path(__file__).resolve().parents[1]/'scripts')
+        sys.path.insert(0, cls.scripts)
+        import live_harder, live_eval, live_tasks
+        cls.harder, cls.le, cls.tasks = live_harder, live_eval, live_tasks
+
+    @classmethod
+    def tearDownClass(cls):
+        import sys
+        sys.path.remove(cls.scripts)
+
+    def test_notes_normalize_layout_and_record_raw_content(self):
+        state = {}
+        html = '<div>A11y test 0800</div><div>Bring the green blanket\nand two pears.</div>'
+        with patch.object(self.harder, 'osa', side_effect=['1', html]):
+            self.assertTrue(self.harder.exact_note('A11y test 0800', 'Bring the green blanket and two pears.', state))
+        self.assertEqual(state['_observed']['note_html'], html)
+        self.assertEqual(state['_observed']['note_count'], '1')
+        with patch.object(self.harder, 'osa', side_effect=['1', html.replace('pears', 'apples')]):
+            self.assertFalse(self.harder.exact_note('A11y test 0800', 'Bring the green blanket and two pears.'))
+
+    def test_sort_records_all_predicates_and_accepts_column_case(self):
+        case = next(c for c in self.harder.build(Mock()) if c['name'] == 'finder_sort')
+        # The setup function owns the isolated fixture state; replace native/file setup with a temporary fixture.
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as root:
+            with patch.object(self.harder.tempfile, 'mkdtemp', return_value=root), patch.object(self.harder, 'osa', return_value='7'), patch.object(self.le, 'activate'):
+                case['setup'](Mock())
+            folder = next(Path(root).iterdir())
+            state = {}
+            with patch.object(self.harder, 'osa', side_effect=[str(folder), 'list view', 'name']):
+                self.assertTrue(case['turns'][0].checks[0][1](state, []))
+            self.assertTrue(state['_observed']['name_column'])
+            self.assertEqual(state['_observed']['finder_target'], str(folder))
+
+    def test_dictionary_fallback_is_scoped_and_preserves_raw_values(self):
+        case = next(c for c in self.harder.build(Mock()) if c['name'] == 'lookup_dictionary')
+        state = {}
+        events = [{'kind': 'say', 'data': {'message': 'Active at night.'}}]
+        with patch('live_broad.ax_values', return_value='nocturnal'), patch.object(self.le, 'front_app', return_value='Dictionary'), patch.object(self.le, 'desktop_sample', return_value={'app': {'name': 'Dictionary'}, 'window': {'bounds': {'x': 0}}}), patch.object(self.le, 'screen_lines', return_value=['nocturnal: active at night']) as ocr:
+            self.assertTrue(case['turns'][0].checks[0][1](state, events))
+            ocr.assert_called_once_with(window_only=True)
+        self.assertEqual(state['_observed']['dictionary_ax'], 'nocturnal')
+        with patch('live_broad.ax_values', return_value='nocturnal night'), patch.object(self.le, 'front_app', return_value='Safari'):
+            self.assertFalse(case['turns'][0].checks[0][1]({}, events))
+
+    def test_failure_replies_do_not_pass(self):
+        for message in ('I could not finish: the information window is not on the screen.',
+                        'I couldn’t do that safely.', 'I could not find a safe next step, so nothing was done.',
+                        'I clicked Recipes, but nothing on the screen changed.',
+                        'The same action was proposed on an unchanged screen. I stopped rather than repeat an uncertain action.',
+                        'Stopped at the 12-action limit. The task is not marked complete.'):
+            events = [{'kind': 'say', 'data': {'message': message}}]
+            self.assertTrue(self.le.failed_reply(message), message)
+            self.assertFalse(self.tasks.no_failure({}, events), message)
+        self.assertFalse(self.le.failed_reply('The folder is open.'))
+
+    def test_build_change_aborts_before_next_request(self):
+        from pathlib import Path
+        with patch('companion.instance.build_id', return_value='first'):
+            app = self.le.App(Path('/private/tmp'), Path('/private/tmp/unused.log'))
+        self.addCleanup(app.socket.parent.rmdir)
+        with patch('companion.instance.build_id', return_value='second'):
+            with self.assertRaises(SystemExit):
+                app.call({'cmd': 'ask', 'request': 'test'})
+
+
+class HarderFileLookupRegressions(unittest.TestCase):
+    def test_lookup_uses_common_folder_before_finder_and_never_executes_installer(self):
+        import tempfile
+        from pathlib import Path
+        from companion import mac_apps
+        with tempfile.TemporaryDirectory() as root:
+            home = Path(root)
+            (home/'Downloads').mkdir()
+            path = home/'Downloads'/'packing.txt'
+            path.write_text('Pack the amber lantern.')
+            opener, script = Mock(), Mock(side_effect=AssertionError('No Finder lookup needed'))
+            self.assertEqual(mac_apps.open_file(path.name, home, opener, script=script, read_content=True), 'Pack the amber lantern.')
+            script.assert_not_called()
+            installer = home/'Setup.pkg'
+            installer.write_bytes(b'installer')
+            script = Mock(return_value=str(home))
+            mac_apps.open_file(installer.name, home, opener, script=script, read_content=True)
+            self.assertEqual(opener.call_args.args[0], ['open', '-R', str(installer)])
+
+    def test_missing_finder_window_and_ambiguous_names_do_not_open_anything(self):
+        import tempfile
+        from pathlib import Path
+        from companion import mac_apps
+        with tempfile.TemporaryDirectory() as root:
+            home, opener = Path(root), Mock()
+            reply = mac_apps.open_file('packing.txt', home, opener, script=Mock(return_value=''))
+            self.assertIn('could not find', reply)
+            (home/'one packing.txt').touch()
+            (home/'two packing.txt').touch()
+            reply = mac_apps.open_file('packing.txt', home, opener, script=Mock(return_value=root))
+            self.assertIn('could not find', reply)
+            opener.assert_not_called()
