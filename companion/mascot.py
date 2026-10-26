@@ -690,6 +690,9 @@ class Mascot(QWidget):
     # Conversation
 
     def eventFilter(self, watched, event):
+        if (watched is self.reply_window and self.native and event.type() in self.QT_BUTTON_UPDATES
+                and self.reply_window.property('prepared')):
+            QTimer.singleShot(0, self.reply_window, lambda: mac_window.enable_buttons(self.reply_window, zoom=False))
         if watched is self.reply_window and event.type() == QEvent.Type.Close:
             # Its red button closes the reply only; the conversation and she stay.
             if self.reply_shown:
@@ -888,15 +891,16 @@ class Mascot(QWidget):
             choice = self.choice_layout.itemAt(index).widget()
             choice.setEnabled(not self.busy or choice.property('companion_action') in ('computer:stop', 'settings', 'stop_speech'))
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if self.native and self.titlebar_styled:
-            mac_window.enable_buttons(self)
+    # Qt greys yellow and green out again each time it updates the window's size limits, state or
+    # activation (opening the input changes her size limits without a resize). Re-enable right after.
+    QT_BUTTON_UPDATES = (QEvent.Type.LayoutRequest, QEvent.Type.Resize, QEvent.Type.ActivationChange,
+                         QEvent.Type.WindowStateChange, QEvent.Type.Show)
 
-    def changeEvent(self, event):
-        super().changeEvent(event)
-        if self.native and self.titlebar_styled and event.type() == QEvent.Type.ActivationChange:
-            mac_window.enable_buttons(self)  # Qt re-applies its button states when she is selected
+    def event(self, event):
+        handled = super().event(event)
+        if getattr(self, 'titlebar_styled', False) and self.native and event.type() in self.QT_BUTTON_UPDATES:
+            QTimer.singleShot(0, self, lambda: mac_window.enable_buttons(self))
+        return handled
 
     def moveEvent(self, event):
         self.character.owner_moved(self.pos())
