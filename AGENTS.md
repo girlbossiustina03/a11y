@@ -17,12 +17,11 @@ route differently, clicks miss, and steps stop early. Reduce that variance:
   targets, app adapters, AppleScript and EventKit.
 - Constrain what the model has to decide. Keep prompts small and stable, so Ollama's
   prompt cache holds.
-The Codex provider is an optional extra for demos; nothing may depend on it, and nothing
+The Claude provider is an optional extra for demos; nothing may depend on it, and nothing
 may call the cloud by default.
 
-You may use the Codex CLI (`codex exec "<task>"`) alongside you: for a second opinion on a
-diagnosis, a review of a diff, or a separate investigation. Treat its output like any
-other contributor's: verify it, test it, and keep the ground rules.
+**Start with `docs/ai/HANDOFF.md`:** the owner's rules, recent work, measured results and open
+items. Claude Code works on this repo too (its notes are `CLAUDE.md`, kept in sync with this file).
 
 ## Ground rules (from the owner, always)
 
@@ -98,7 +97,14 @@ instant). Before the model, code takes the steps it can do exactly: Calculator k
 Activity view for notification goals, a click on the one place labelled X ("click on Chat",
 from the accessibility tree or OCR), and the nth row of a list ("click the first email",
 from the bridge's `lists`). `press_control` may only name a control in the current
-observation (the schema's enum). Actions run through `computer_use.py` and the platform bridge:
+observation (the schema's enum). Each step reads the window's clickable targets
+(`DesktopBridge --targets`: buttons, links, tabs, fields, rows, named icons, web pages
+included; names only, never values) and numbers them with the OCR lines no target covers
+(`screen_marks`); the model answers `click_target` with a number and code clicks its center.
+Pixel `click_point` remains for things neither lists. Enter in a search field needs no
+confirmation in a read-only goal; elsewhere it still does. Measured (Ollama 0.34): prompt
+prefixes are reused for text calls but not for calls with an image, so every image step
+re-reads its whole prompt (~3.5 s for ~4k tokens); keep that prompt small. Actions run through `computer_use.py` and the platform bridge:
 `desktop_context.py` + `native/DesktopBridge.swift` on macOS, `windows_desktop.py` /
 `windows_input.py` on Windows. Screenshots come from `vision.py` (ScreenCaptureKit /
 Windows capture) and are never written to disk.
@@ -107,7 +113,7 @@ Windows capture) and are never written to disk.
 
 | Area | Files |
 |---|---|
-| Window, mascot, voice wiring, settings | `desktop.py`, `mascot.py`, `settings_ui.py`, `setup_ui.py`, `readiness_ui.py` |
+| Window, mascot, voice wiring, settings | `desktop.py`, `mascot.py`, `faces.py`, `terminal_theme.py`, `settings_ui.py`, `setup_ui.py`, `readiness_ui.py` |
 | Routing, schemas, validation | `service.py`, `request_plan.py`, `models.py`, `quick_open.py`, `app_names.py`, `web_apps.py` |
 | Models | `ollama.py` (default, local), `claude.py` (opt-in cloud), `provider.py` (shared configuration, errors and redirect protection) |
 | Mac apps in code | `mac_apps.py`, `mail_reader.py`, EventKit in `native/DesktopBridge.swift` |
@@ -117,12 +123,32 @@ Windows capture) and are never written to disk.
 | Consent & storage | `access.py`, `storage.py`, `paths.py` (data dir, saved AI settings) |
 | Packaging | `packaging/a11y.spec`, `build_macos.sh`, `build_windows.ps1`, `entitlements.plist`, `self_test.py` |
 
+## The companion's look
+
+She is a small terminal window titled "a11y" (`mascot.py`): a text face, the last prompt and
+the input, the same width open or collapsed. On macOS it is a real window with a normal title
+bar like Terminal's (`mac_window.py`, AppKit through the Objective-C runtime with ctypes; red
+closes the companion, yellow and green are off) and Terminal’s background blur while active. Replies
+open in a shorter real window under hers (plain title strip; same top edge and the edge of the
+side it opens from, right when there's room, else left), attached with
+`addChildWindow:ordered:NSWindowBelow` so it never comes in front. Terminal stores colours in
+calibrated RGB: convert them (`mac_window.to_srgb`) or her background reads darker than
+Terminal's. On macOS the settings, setup and readiness windows use the native `macos` style
+and menus are real NSMenus (`theme.native_mac`). Elsewhere, and in offscreen tests, both are painted in one frameless window with drawn
+dots (`A11Y_FRAMELESS=1` forces that on macOS). Faces are multi-line text skins in `faces.py`
+(slots `1` eyes, `2` mouth, `3` mark, per state; every line the same width, one cell per
+character). Colours and font come from the default Terminal.app profile (`terminal_theme.py`
+reads the archived NSColor/NSFont in Terminal's plist) or a built-in theme; the choice lives in
+`<data>/appearance.json`. Moving is one stretch toward the spot and a settle
+(`animate_companion_to` with `begin_stretch` / `stretch_to` / `end_stretch`); reduced motion
+jumps and stops typing, blinking and spinners.
+
 ## Models
 
 - **Ollama (default, everything stays local):** qwen3:4b-instruct for text,
   qwen3-vl:4b-instruct for vision (qwen3:1.7b / qwen3-vl:2b-instruct on low-memory machines). The setup window installs Ollama, the models and the
   voices. Choices are saved in `<data>/ai.json`.
-- **Codex Sonnet 5.5 (opt-in):** Settings → Advanced → AI model → paste key → Use Codex.
+- **Claude Sonnet 5.5 (opt-in):** Settings → Advanced → AI model → paste key → Use Claude.
   It uses the official `anthropic` SDK (2.x), streaming, structured outputs
   (`output_config.format`, schema cleaned by `wire_schema`), prompt caching on the system
   prompt, and the server-side refusal fallback beta. Effort is `low` for text and `medium`
@@ -135,7 +161,7 @@ Windows capture) and are never written to disk.
     prompt, remembers what worked, and prints Anthropic's reason to the log.
   - Privacy: requests go to Anthropic after a one-time disclosure (`cloud_ai`). Screen
     images need their own consent (`cloud_screen_vision`), also enforced in
-    `vision.capture`. Local screen consent never counts for Codex. Mail, calendar and
+    `vision.capture`. Local screen consent never counts for Claude. Mail, calendar and
     notes reads stay in code.
   - Never commit, log or print a key.
 
@@ -146,7 +172,9 @@ off) and types each request through `companion/eval_control.py`, an owner-only s
 cannot confirm or execute anything itself. It checks the result against the Mac (Safari's
 page, Mail's selection, Calendar, the mascot's position) and writes `runs.jsonl` and
 `summary.json` under `.data/live_eval/`. `--only TEXT` picks requests, `--compare` an earlier
-summary. Ollama runs greedy with a fixed seed, so repeated runs should match; a request that
+summary. `--suite navigation` runs "take me there" tasks (Settings panes, Finder folders,
+websites) checked by window title, Settings' pane header (OCR) or Safari's address; `--suite all`
+runs both. Ollama runs greedy with a fixed seed, so repeated runs should match; a request that
 passes sometimes is a bug to chase. It needs the terminal's Accessibility, Screen Recording,
 Automation and (for the reminders case) Reminders permissions, and it takes over the screen.
 
@@ -177,7 +205,7 @@ Automation and (for the reminders case) Reminders permissions, and it takes over
   `mail_reader.available` and the Swift helper catalog. Keep it that way.
 - Packaged app: `certifi` provides HTTPS certificates; the spec copies `opentelemetry-api`
   metadata (the Anthropic SDK needs its entry points); onnxruntime and Kokoro are
-  excluded on Windows. The self-test covers HTTPS, Qt, speech, voice and the Codex SDK.
+  excluded on Windows. The self-test covers HTTPS, Qt, speech, voice and the Claude SDK.
   If you add a dependency, make the self-test exercise it.
 - AppleScripts are compiled on macOS CI (`osacompile`). Pass user values as `argv`,
   never by splicing them into script text.
@@ -187,8 +215,8 @@ Automation and (for the reminders case) Reminders permissions, and it takes over
 1. Bump `CFBundleShortVersionString` / `CFBundleVersion` in `packaging/a11y.spec`.
 2. Push to `main`. GitHub Actions "Package apps" tests and builds the macOS and Windows
    apps, and runs each one's self-test.
-3. When it's green: `gh workflow run package.yml -f release=v0.9.12` publishes the release with
+3. When it's green: `gh workflow run package.yml -f release=v0.11.1` publishes the release with
    `A11y-macOS.dmg` and `A11y-Windows.zip`. Optional signing secrets: `MACOS_SIGNING_P12`,
    `MACOS_SIGNING_PASSWORD`.
 
-More history and platform status: `docs/ai/CLAUDE_HANDOFF.md`, `docs/ai/ON_DEVICE_TUNING.md`.
+Current state, results and open items: `docs/ai/HANDOFF.md`. More history and platform status: `docs/ai/CLAUDE_HANDOFF.md`, `docs/ai/ON_DEVICE_TUNING.md`.

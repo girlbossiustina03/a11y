@@ -220,4 +220,4 @@ Automation and (for the reminders case) Reminders permissions, and it takes over
    `A11y-macOS.dmg` and `A11y-Windows.zip`. Optional signing secrets: `MACOS_SIGNING_P12`,
    `MACOS_SIGNING_PASSWORD`.
 
-More history and platform status: `docs/ai/CLAUDE_HANDOFF.md`, `docs/ai/ON_DEVICE_TUNING.md`.
+Current state, results and open items: `docs/ai/HANDOFF.md`. More history and platform status: `docs/ai/CLAUDE_HANDOFF.md`, `docs/ai/ON_DEVICE_TUNING.md`.
