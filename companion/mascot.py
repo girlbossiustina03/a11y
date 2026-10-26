@@ -966,6 +966,8 @@ class Mascot(QWidget):
     def toggle_chat(self):
         if self.user_collapsed or self.card.isHidden():
             self.expand_chat()
+            if self.native:
+                mac_window.make_key(self)
         else:
             self.collapse_chat(animate=True)
 
@@ -1029,13 +1031,32 @@ class Mascot(QWidget):
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self.drag_position = event.globalPosition().toPoint()-self.pos()
+            self.drag_start, self.body_dragged = event.globalPosition().toPoint(), False
 
     def mouseMoveEvent(self, event):
         if self.drag_position is not None and event.buttons() & Qt.MouseButton.LeftButton:
-            self.move(event.globalPosition().toPoint()-self.drag_position)
+            if (event.globalPosition().toPoint()-self.drag_start).manhattanLength() >= QApplication.startDragDistance():
+                self.body_dragged = True
+            if self.body_dragged:
+                self.move(event.globalPosition().toPoint()-self.drag_position)
 
     def mouseReleaseEvent(self, event):
+        # A click anywhere on her opens the chat, not only on the face (reported: clicking her
+        # sometimes did nothing; the margins only started a drag). Moving her needs a real drag.
+        if self.drag_position is not None and not self.body_dragged and event.button() == Qt.MouseButton.LeftButton:
+            self.open_chat_from_user()
         self.drag_position = None
+
+    def open_chat_from_user(self):
+        """The user clicked her: open the chat (never close it) and take typing, which a
+        non-activating panel does not get by itself."""
+        if self.user_collapsed or self.card.isHidden() or self.drawer_open < 1.0:
+            self.expand_chat()
+        self.set_reply_shown(False)
+        if self.native:
+            mac_window.make_key(self)
+        if self.entry_row.isVisible():
+            self.input.setFocus(Qt.FocusReason.MouseFocusReason)
 
 
 class CharacterButton(QAbstractButton):
@@ -1143,7 +1164,7 @@ class CharacterButton(QAbstractButton):
         self.wake()
         self.press_position = event.globalPosition().toPoint()
         self.owner_position = self.owner.pos()
-        self.dragging = False
+        self.dragging = self.double_click = False
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -1156,13 +1177,21 @@ class CharacterButton(QAbstractButton):
                 return
         super().mouseMoveEvent(event)
 
+    def mouseDoubleClickEvent(self, event):
+        self.double_click = True  # its release would toggle the chat shut again
+        event.accept()
+
     def mouseReleaseEvent(self, event):
-        if self.dragging:
+        if self.dragging or getattr(self, 'double_click', False) or event.button() != Qt.MouseButton.LeftButton:
             self.setDown(False)
+        elif self.press_position is not None:
+            # A click that ends a pixel off the face still counts (Qt only clicks inside it).
+            self.setDown(False)
+            self.click()
         else:
             super().mouseReleaseEvent(event)
         self.press_position = None
-        self.dragging = False
+        self.dragging = self.double_click = False
 
     def paintEvent(self, event):
         painter = QPainter(self)

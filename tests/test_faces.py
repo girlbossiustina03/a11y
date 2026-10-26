@@ -115,6 +115,20 @@ class TerminalThemeTests(unittest.TestCase):
         self.assertEqual(mac_window.send(menu, 'numberOfItems', restype=mac_window.ctypes.c_long), 4)
         self.assertEqual(actions, ['talk', 'face:blob', 'face:cat', 'quit'])
 
+    def test_reported_she_stays_on_screen_across_spaces(self):
+        # Reported: switching to another virtual desktop left her behind on the first one.
+        from companion import mac_window
+        calls = []
+
+        def send(receiver, selector, *args, **kwargs):
+            calls.append((selector, args))
+            return 0
+        with patch.object(mac_window, 'ns_window', return_value=1), patch.object(mac_window, 'send', send), \
+                patch.object(mac_window, 'runtime', return_value=type('Runtime', (), {'sel_registerName': lambda self, name: 0})()):
+            self.assertTrue(mac_window.prepare_window(object()))
+        behavior = dict(calls)['setCollectionBehavior:'][0]
+        self.assertTrue(behavior & mac_window.ALL_SPACES and behavior & mac_window.FULL_SCREEN_AUXILIARY)
+
     def test_appearance_is_saved_in_the_data_folder(self):
         with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {'A11Y_DATA_DIR': folder}):
             self.assertEqual(terminal_theme.saved_appearance(), {'theme': 'terminal', 'face': 'blob'})

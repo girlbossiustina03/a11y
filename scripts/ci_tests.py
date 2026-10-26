@@ -14,6 +14,17 @@ def child():
     import faulthandler
     faulthandler.enable(all_threads=True)  # an abort still prints where every thread was
     sys.path.insert(0, str(ROOT))  # as "python -m unittest" from the project root
+    slot_errors = []
+
+    def hook(kind, error, trace):
+        # An exception in a Qt slot aborts the process under the default hook (0xC0000409 on Windows,
+        # with only the last line printed). With a hook, PyQt calls it and carries on: print it whole.
+        import traceback
+        text = ''.join(traceback.format_exception(kind, error, trace))
+        slot_errors.append(text)
+        sys.stderr.write('Exception in a Qt slot:\n'+text)
+        print('::error title=Exception in a Qt slot::%s' % ' | '.join(text.strip().splitlines()[-6:]).replace('%', '%25')[:900], flush=True)
+    sys.excepthook = hook
 
     class Named(unittest.TextTestResult):
         def startTest(self, test):
@@ -27,7 +38,7 @@ def child():
         last = [line for line in trace.strip().splitlines() if line.strip()][-6:]
         message = ' | '.join(last).replace('%', '%25').replace('\r', '').replace('\n', ' ')[:900]
         print('::error title=%s::%s' % (str(test).replace(':', ' ').replace(',', ' ')[:200], message), flush=True)
-    sys.exit(0 if result.wasSuccessful() else 1)
+    sys.exit(0 if result.wasSuccessful() and not slot_errors else 1)
 
 
 def main():

@@ -11,6 +11,9 @@ NONACTIVATING_PANEL = 1 << 7  # takes typing without bringing A11y to the front 
 TITLE_HIDDEN = 1
 CLOSE_BUTTON, MINIATURIZE_BUTTON, ZOOM_BUTTON = 0, 1, 2
 WINDOW_BELOW = -1
+# On every Space (virtual desktop) and beside full-screen apps, out of Mission Control's shuffle.
+ALL_SPACES, MOVE_TO_ACTIVE_SPACE, MANAGED, TRANSIENT, STATIONARY = 1 << 0, 1 << 1, 1 << 2, 1 << 3, 1 << 4
+FULL_SCREEN_PRIMARY, FULL_SCREEN_AUXILIARY, FULL_SCREEN_NONE = 1 << 7, 1 << 8, 1 << 9
 
 _objc = None
 
@@ -58,6 +61,11 @@ def prepare_window(widget, *, buttons=True):
         if send(window, 'respondsToSelector:', runtime().sel_registerName(b'setBecomesKeyOnlyIfNeeded:'),
                 restype=ctypes.c_bool, argtypes=(ctypes.c_void_p,)):
             send(window, 'setBecomesKeyOnlyIfNeeded:', True, restype=None, argtypes=(ctypes.c_bool,))
+        # She stays on screen when the user switches Spaces, instead of staying behind on the first one.
+        behavior = send(window, 'collectionBehavior', restype=ctypes.c_ulong)
+        behavior &= ~(MOVE_TO_ACTIVE_SPACE | MANAGED | TRANSIENT | FULL_SCREEN_PRIMARY | FULL_SCREEN_NONE)  # conflicting policies
+        send(window, 'setCollectionBehavior:', behavior | ALL_SPACES | STATIONARY | FULL_SCREEN_AUXILIARY,
+             restype=None, argtypes=(ctypes.c_ulong,))
         for kind in (CLOSE_BUTTON, MINIATURIZE_BUTTON, ZOOM_BUTTON):
             button = send(window, 'standardWindowButton:', kind, argtypes=(ctypes.c_long,))
             if not button:
@@ -68,6 +76,19 @@ def prepare_window(widget, *, buttons=True):
                 send(button, 'setEnabled:', False, restype=None, argtypes=(ctypes.c_bool,))
         if not buttons:
             send(window, 'setTitleVisibility:', TITLE_HIDDEN, restype=None, argtypes=(ctypes.c_long,))
+        return True
+    except (AttributeError, TypeError, ValueError, OSError, ctypes.ArgumentError):
+        return False
+
+
+def make_key(widget):
+    """Give her window the keyboard after the user clicked her (a non-activating panel
+    otherwise keeps typing in the app behind). Never called for showing her on her own."""
+    try:
+        window = ns_window(widget)
+        if not window:
+            return False
+        send(window, 'makeKeyWindow', restype=None)
         return True
     except (AttributeError, TypeError, ValueError, OSError, ctypes.ArgumentError):
         return False

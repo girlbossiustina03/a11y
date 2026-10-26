@@ -169,7 +169,7 @@ def with_opening(plan, request):
 
 
 def validate_plan(value):
-    if not isinstance(value, dict) or not {'operation', 'app_name', 'target'} <= set(value) or set(value) - {'operation', 'app_name', 'target', 'browser_mode', 'window_hint', 'remaining_request', 'media_artist', 'goal_mode', 'opening', 'reply', 'when', 'acts_on_computer', 'computed', 'full_text', 'read_aloud', 'app_write', 'confidence'}:
+    if not isinstance(value, dict) or not {'operation', 'app_name', 'target'} <= set(value) or set(value) - {'operation', 'app_name', 'target', 'browser_mode', 'window_hint', 'remaining_request', 'media_artist', 'goal_mode', 'opening', 'reply', 'when', 'acts_on_computer', 'computed', 'full_text', 'read_aloud', 'app_write', 'confidence', 'resolved_request'}:
         raise ValidationError('The request could not be interpreted reliably. Please name the action and target.')
     if value['operation'] not in OPERATIONS or any(not isinstance(value[key], str) or len(value[key]) > (2000 if key == 'target' else 500) for key in ('app_name', 'target')):
         raise ValidationError('The request planner returned an invalid operation.')
@@ -183,6 +183,8 @@ def validate_plan(value):
         raise ValidationError('Invalid direct reply.')
     if value.get('goal_mode', 'inspect') not in ('inspect', 'draft', 'change'):
         raise ValidationError('Invalid goal scope.')
+    if not isinstance(value.get('resolved_request', ''), str) or len(value.get('resolved_request', '')) > 2000:
+        raise ValidationError('Invalid resolved request.')
     for field in ('remaining_request', 'media_artist', 'when'):
         if not isinstance(value.get(field, ''), str) or len(value.get(field, '')) > 500:
             raise ValidationError('Invalid remaining request, media artist or time.')

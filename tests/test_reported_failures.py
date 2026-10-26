@@ -2091,3 +2091,42 @@ class DefaultBrowserTests(unittest.TestCase):
                 (folder/'com.apple.launchservices.secure.plist').write_bytes(plistlib.dumps({'LSHandlers': [
                     {'LSHandlerURLScheme': 'https', 'LSHandlerRoleAll': 'com.google.chrome'}]}))
                 self.assertEqual(desktop_context.default_browser_id(), 'com.google.Chrome')  # a real choice wins
+
+
+class FollowUpTests(unittest.TestCase):
+    """A follow-up to a task ("the same with X") is that task again, changed."""
+    setUp, route = LiveRoutingTests.setUp, LiveRoutingTests.route
+
+    def test_reported_the_same_but_different_is_done_not_just_said(self):
+        # Reported: after a task, "now do the same with github.com" got "I'm doing it" and nothing
+        # started; asked why, A11y said it could not use the computer.
+        self.assertEqual(self.app.ask('open safari and go to apple.com')['desktop_action']['type'], 'start_task')
+        self.route('answer', reply="I'm doing it now.")
+        self.provider.complete_structured.side_effect = lambda system, messages, **options: (
+            {'request': 'Open Safari and go to github.com'} if 'last_task' in messages[-1]['content']
+            else {'message': "I'm doing it now."})
+        action = self.app.ask('now do the same with github.com')['desktop_action']
+        self.assertEqual((action['type'], action['goal']), ('start_task', 'Open Safari and go to github.com'))
+        sent = json.loads(self.provider.complete_structured.call_args_list[0].args[1][-1]['content'])
+        self.assertEqual(sent, {'last_task': 'open safari and go to apple.com', 'latest': 'now do the same with github.com'})
+        # The next follow-up builds on the changed task.
+        self.provider.complete_structured.side_effect = lambda system, messages, **options: {'request': 'Open Chrome and go to github.com'}
+        self.app.prepare_request('do that again in Chrome')
+        self.assertIn('github.com', json.loads(self.provider.complete_structured.call_args.args[1][-1]['content'])['last_task'])
+
+    def test_a_reference_that_is_not_the_task_again_is_routed_as_said(self):
+        self.app.ask('open safari and go to apple.com')
+        self.provider.complete_structured.side_effect = lambda system, messages, **options: {'request': ''}
+        self.route('answer', reply='Apple makes the iPhone.')
+        plan = self.app.prepare_request('what does that company make?')
+        self.assertNotIn('resolved_request', plan)
+        self.assertEqual(self.provider.interpret_request.call_args.args[0], 'what does that company make?')
+        self.provider.complete_structured.reset_mock()
+        self.app.prepare_request('what is 2+2?')  # nothing points back: no extra model call
+        self.provider.complete_structured.assert_not_called()
+
+    def test_chat_never_announces_or_denies_computer_use(self):
+        from companion.service import CHAT_SYSTEM
+        text = ' '.join(CHAT_SYSTEM.split())
+        self.assertIn('never say you cannot', text)
+        self.assertIn('never say you are doing, starting or about to do something', text)

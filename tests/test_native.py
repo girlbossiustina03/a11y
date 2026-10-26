@@ -862,6 +862,30 @@ class NativeTests(unittest.TestCase):
         self.qt.processEvents()
         self.assertTrue(self.window.mascot.card.isVisible())
 
+    def test_reported_clicking_her_always_opens_the_chat(self):
+        # Reported: clicking her sometimes did not open the chat. Only the face opened it; her margins
+        # started a drag, a release a pixel off the face did nothing, and a double click closed it again.
+        mascot = self.window.mascot
+        left = Qt.MouseButton.LeftButton
+        margin = QPoint(4, mascot.character.geometry().center().y())
+        for click in (lambda: QTest.mouseClick(mascot, left, pos=margin),
+                      lambda: (QTest.mouseClick(mascot.character, left, pos=mascot.character.rect().center()),  # a real double click
+                               QTest.mouseDClick(mascot.character, left, pos=mascot.character.rect().center()),
+                               QTest.mouseRelease(mascot.character, left, pos=mascot.character.rect().center())),
+                      lambda: (QTest.mousePress(mascot.character, left, pos=mascot.character.rect().center()),
+                               QTest.mouseRelease(mascot.character, left, pos=QPoint(mascot.character.width()+1, 2)))):
+            mascot.collapse_chat()
+            self.qt.processEvents()
+            self.assertFalse(mascot.card.isVisible())
+            click()
+            self.qt.processEvents()
+            self.assertTrue(mascot.card.isVisible())
+        start = mascot.pos()
+        QTest.mouseClick(mascot, left, pos=margin)  # clicking her again keeps the chat open and her in place
+        self.qt.processEvents()
+        self.assertTrue(mascot.card.isVisible())
+        self.assertEqual(mascot.pos(), start)
+
     def test_idle_is_character_only_and_keeps_character_position(self):
         mascot = self.window.mascot
         anchor = mascot.character.mapToGlobal(QPoint())

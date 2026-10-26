@@ -234,10 +234,25 @@ you: it is newer. Window titles and screen text are not things they said. Answer
 asked; no unasked advice or tips. If they only
 tell you something, acknowledge it briefly and naturally. One or two short, plain sentences in
 their language, no markdown. Do not invent facts about their screen, apps or messages, and never
-claim to have done something on the computer that the conversation does not show. You cannot
-save settings or change their profile here, so never promise to.
+claim to have done something on the computer that the conversation does not show. You can use
+this computer (open apps and sites, click, type, read the screen) when asked, so never say you
+cannot; but this reply itself does nothing, so never say you are doing, starting or about to do
+something. If something they asked for was not done, say so plainly. You cannot save settings or
+change their profile here, so never promise to.
 Examples of acknowledging: "14" → "Got it: 14." "My name is Ana" → "Nice to meet you, Ana."
 "I'm flying to Paris on Friday" → "Have a good trip to Paris on Friday!"'''
+# Answers and reads: "will it be foggy?" after the weather is a new question, not the task again.
+TELLS_ONLY = frozenset(('answer', 'plan', 'inspect_screen', 'inspect_media', 'read_mail', 'read_calendar', 'read_reminders',
+                        'read_notes', 'find_contact', 'recent_files', 'read_page', 'list_shortcuts', 'system_info', 'weather', 'look_up'))
+FOLLOW_UP_SYSTEM = '''A11y is an assistant that does things on the user's computer. last_task is
+the last thing the user asked it to do; latest is what they say now. If latest asks to do
+last_task again or a changed version of it (another site, app, file, word, person, time or
+amount: "now the same with github", "do that again in Chrome", "you didn't do it", "same for
+dad at 7"), write request: the one task as a standalone request in the user's language, with
+latest's change replacing what it changes and the rest of last_task kept. If latest is something
+new, a question, thanks or other conversation, request is "".'''
+FOLLOW_UP_SCHEMA = {'type': 'object', 'additionalProperties': False, 'required': ['request'],
+                    'properties': {'request': {'type': 'string'}}}
 SCREEN_SCHEMA = {'type': 'object', 'additionalProperties': False, 'required': ['message'],
                  'properties': {'message': {'type': 'string'}}}
 
@@ -384,6 +399,7 @@ class Companion:
         self.pending_page = None        # the browser page a read_page request asked about
         self.pending_app_write = None   # an app change waiting to be shown for confirmation
         self.last_request_plan = None
+        self.last_task = None           # the last request that did something, for "the same with X"
 
     @classmethod
     def from_env(cls, *, admin=False):
@@ -707,7 +723,37 @@ class Companion:
                                   'full_text': True, 'read_aloud': bool(READ_ALOUD.search(request))}
         return self.last_request_plan
 
+    def resolve_follow_up(self, request):
+        """"Now do the same with github.com" after a task, as a whole request ("Open Safari and go to
+        github.com"). It used to reach the router alone, became chat, and chat said "I'm doing it"
+        with nothing started (reported). Only for words that point back, with a task to point to."""
+        if not self.last_task or not REFERS_BACK.search(request) or ABOUT_CONVERSATION.search(request) \
+                or not hasattr(self.provider, 'complete_structured'):
+            return request
+        try:
+            reply = self.provider.complete_structured(FOLLOW_UP_SYSTEM, [{'role': 'user', 'content': json.dumps(
+                {'last_task': self.last_task, 'latest': request}, ensure_ascii=False)}],
+                schema=FOLLOW_UP_SCHEMA, max_tokens=200, thinking=False)
+        except (RuntimeError, ValueError, OSError):
+            return request
+        resolved = ' '.join(str(reply.get('request', '')).split())[:2000] if isinstance(reply, dict) else ''
+        if len(resolved) < 3:
+            return request
+        from .timing import timing
+        import time
+        timing('follow_up.resolved', time.monotonic(), words=len(resolved.split()))
+        return resolved
+
     def prepare_request(self, request):
+        resolved = self.resolve_follow_up(request)
+        plan = self.route_request(resolved)
+        if plan is not None and resolved != request:
+            plan = self.last_request_plan = dict(plan, resolved_request=resolved)
+        if plan is not None and plan.get('operation') not in TELLS_ONLY:
+            self.last_task = resolved[:500]
+        return plan
+
+    def route_request(self, request):
         self.pending_page = self.pending_app_write = None
         self.reply_private = False
         after_mail, self.mail_read = self.mail_read, False
@@ -818,7 +864,7 @@ class Companion:
         except TypeError:
             interpreted = interpreter(request, users[-2:])  # providers without direct replies
         if isinstance(interpreted, dict):
-            for key in ('computed', 'full_text', 'read_aloud', 'app_write'):  # set only by code
+            for key in ('computed', 'full_text', 'read_aloud', 'app_write', 'resolved_request'):  # set only by code
                 interpreted.pop(key, None)
             searching = interpreted.get('operation') == 'browser_search' or (
                 # The router opened the site for "search Apple's support site for battery" (live, v3).
@@ -1067,6 +1113,8 @@ class Companion:
             request_plan = {'operation': 'plan', 'app_name': '', 'target': request[:500]}
         elif mode != 'verify' and request_plan is None:
             request_plan = self.prepare_request(request)
+        if request_plan is not None and request_plan.get('resolved_request'):
+            request = request_plan['resolved_request']  # "the same with github.com", spelled out
         if request_plan is not None:
             request_plan = preserve_desktop_goal(request_plan, request)
             self.last_request_plan = request_plan
