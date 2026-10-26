@@ -394,6 +394,8 @@ class NativeTests(unittest.TestCase):
             self.assertEqual(capture.call_count, 5)
             self.assertEqual(self.window.computer_task.status, 'done')
             self.assertEqual(len(self.window.computer_task.receipts), 4)
+            while self.window.cursor_flight.parked() and time.monotonic() < deadline+2:
+                QTest.qWait(20)  # she re-forms from her cursor to say it
             self.assertEqual('The requested result is visible.', self.window.mascot.bubble.toPlainText())
             for call in self.service.provider.complete_structured.call_args_list:
                 self.assertIn('Find accessibility help', call.args[1][0]['content'])
@@ -451,6 +453,8 @@ class NativeTests(unittest.TestCase):
                 QTest.qWait(5)
                 if self.window.computer_task.status == 'done' and not self.window.worker.isRunning():
                     break
+            while self.window.cursor_flight.parked() and time.monotonic() < deadline+2:
+                QTest.qWait(20)  # she re-forms from her cursor to say it
         history = self.window.transcript.toPlainText()[start:]
         recorded = [entry.strip() for entry in history.split('A11y: ')[1:]]
         # History keeps the answers; status lines are only shown while they are current.
@@ -559,6 +563,33 @@ class NativeTests(unittest.TestCase):
         QTest.qWait(50)
         self.assertEqual(landed, [True])
         self.assertFalse(flight.flying())
+
+    def test_her_cursor_stays_between_steps_and_she_comes_back_to_speak(self):
+        from PyQt6.QtCore import QPoint, QRect
+        from PyQt6.QtGui import QPixmap
+        from companion.cursor_flight import CURSOR, system_cursor_scale
+        self.assertLessEqual(CURSOR/system_cursor_scale(), 17*1.1)  # about the real pointer's size (owner)
+        flight, mascot = self.window.cursor_flight, self.window.mascot
+        wait = lambda done: [QTest.qWait(30) for _ in range(150) if not done()]
+        clicks = []
+        flight.fly(QRect(0, 0, 1440, 900), QRect(1100, 600, 230, 140), QPixmap(230, 140), QPoint(300, 200),
+                   QRect(330, 130, 230, 140), lambda: clicks.append(1))
+        wait(lambda: clicks)
+        self.assertTrue(flight.parked())
+        self.assertTrue(flight.isVisible())       # it sits where it clicked
+        flight.fly(QRect(0, 0, 1440, 900), QRect(330, 130, 230, 140), None, QPoint(700, 500),
+                   QRect(760, 430, 230, 140), lambda: clicks.append(2))
+        self.assertEqual(flight.phase, 'travel')  # from where it sat: no second melt
+        self.assertLess(abs(flight.first.x()-300)+abs(flight.first.y()-200), 0.01)
+        wait(lambda: len(clicks) == 2)
+        mascot.hide()
+        self.window.say('Step 3 · Looking at the screen…', [('Stop', 'computer:stop')], compact=True)
+        self.assertFalse(mascot.isVisible())      # progress while she is her cursor
+        self.window.say('Done.', compact=True)
+        wait(lambda: mascot.isVisible())
+        self.assertTrue(mascot.isVisible())       # a result: she is back in her window to say it
+        self.assertFalse(flight.parked())
+        self.assertFalse(flight.isVisible())
 
     def test_the_reply_opens_away_from_the_clicked_point(self):
         from PyQt6.QtCore import QPoint

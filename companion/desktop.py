@@ -1288,27 +1288,40 @@ class CompanionWindow(QMainWindow):
         return None
 
     def fly_companion_to(self, point, spot, finished):
-        """Before a click: her window melts into her cursor, the cursor flies to the point on a curve, a
-        ripple marks the click, and she re-forms at `spot` beside it; then `finished` sends the real click
-        (her window is clear of the point by then). Reduced motion keeps the plain move."""
+        """Before a click: her window melts into her cursor, the cursor flies to the point on a curve and
+        a ripple marks the click; then `finished` sends the real click. The cursor stays there between
+        steps (the next click flies from it), and she re-forms at `spot` beside it when she has something
+        to tell (settle_cursor). Reduced motion keeps the plain move."""
         screen = QApplication.screenAt(point)
-        if self.mascot.reduced_motion or not self.mascot.isVisible() or screen is None:
+        parked = self.cursor_flight.parked()
+        if self.mascot.reduced_motion or not (parked or self.mascot.isVisible()) or screen is None:
             self.animate_companion_to(spot, finished=finished)
             return
         self.pointer.dismiss()  # one pointer at a time: the static one stood at the target while this one flew (owner)
         self.mascot.avoid_point = point  # the reply opens on the side away from it
-        self.mascot.set_reply_shown(False)
-        start = self.mascot.geometry()
-        snapshot = self.mascot.grab()
-        self.mascot.hide()
+        start, snapshot = self.mascot.geometry(), None
+        if not parked:
+            self.mascot.set_reply_shown(False)
+            snapshot = self.mascot.grab()
+            self.mascot.hide()
         self.mascot.move(spot)
         self.cursor_flight.set_colors(self.mascot.colors)
         def landed():
             self.pointer.dismiss()  # never a second pointer left at the end (owner)
-            self.mascot.show()
-            self.mascot.raise_()
             finished()
         self.cursor_flight.fly(screen.geometry(), start, snapshot, point, QRect(spot, start.size()), landed)
+
+    def settle_cursor(self, then=None):
+        """She grows back from her parked cursor into her window, beside the last click."""
+        def formed():
+            self.mascot.show()
+            self.mascot.raise_()
+            if then:
+                then()
+        if self.cursor_flight.parked():
+            self.cursor_flight.form_back(self.mascot.geometry(), formed)
+        elif then:
+            then()
 
     def companion_spot(self, target, screen_rect):
         """Where the companion waits beside a target point without covering it. Beside it, her
@@ -1544,6 +1557,8 @@ class CompanionWindow(QMainWindow):
         if self.cursor_flight.flying():
             self.cursor_flight.stop()  # mid-flight: no click is sent, and she comes back
             self.mascot.show()
+        else:
+            self.settle_cursor()
         self.pending_desktop_action = None
         self.clear_guidance()
         if announce:
@@ -1647,8 +1662,9 @@ class CompanionWindow(QMainWindow):
                      [('Stop', 'computer:stop')] if task else (), compact=True)
         def finished():
             self.set_busy(False)
-            self.mascot.show()
-            self.mascot.raise_()
+            if not self.cursor_flight.parked():  # between steps she stays her cursor
+                self.mascot.show()
+                self.mascot.raise_()
             if task is not None:
                 if result:
                     task.stale_retries = 0
@@ -2001,8 +2017,14 @@ class CompanionWindow(QMainWindow):
         self.record_companion_message(message)
         self.latest_response = message
         self.read_btn.setEnabled(self.tts is not None)
-        self.mascot.present(message, choices, **options)
-        self.mascot.set_state(state)
+        def show():
+            self.mascot.present(message, choices, **options)
+            self.mascot.set_state(state)
+        if not self.cursor_flight.parked():
+            show()
+        elif not any(isinstance(choice, (tuple, list)) and choice[-1] == 'computer:stop' for choice in choices):
+            self.settle_cursor(show)  # a result, question or problem: she comes back to say it
+        # A step's progress (it offers Stop) while she is her cursor: spoken, not shown.
         self.voice_say(message, choices)
 
     def mascot_home(self, message=None):
