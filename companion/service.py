@@ -118,7 +118,7 @@ SHOWN_IN_APP = {'read_reminders': 'Reminders', 'read_calendar': 'Calendar', 'rea
 ABOUT_CONVERSATION = re.compile(r'^\W*(?:what|which|who|when|where|how|did|do|was|were)\b.*?(?:\b(?:I|we)\s+(?:just\s+|already\s+|earlier\s+)?'
                                 r'(?:say|said|tell|told|mention|mentioned|ask|asked)\b|\byou\s+(?:just\s+)?(?:said|told me|answered)\b)', re.I)
 LAUNCH_FILLER = frozenset("open launch start run bring up the app application program window in please can could would you "
-                          "for me my a an to now hey ok okay ally".split())
+                          "for me my a an to now hey ok okay ally switch go back focus show over return bring front forward".split())
 # A request about what is on screen now, and one to find something.
 SCREEN_WORDS = re.compile(r'\b(?:screen|this|here|see|seeing|showing|shown|visible|window|page|display|open|front|looking)\b', re.I)
 FINDING_WORDS = re.compile(r'\b(?:find|search|look for|locate|show me|go to|take me|get me|open)\b', re.I)
@@ -727,9 +727,16 @@ class Companion:
         """"Now do the same with github.com" after a task, as a whole request ("Open Safari and go to
         github.com"). It used to reach the router alone, became chat, and chat said "I'm doing it"
         with nothing started (reported). Only for words that point back, with a task to point to."""
-        if not self.last_task or not REFERS_BACK.search(request) or ABOUT_CONVERSATION.search(request) \
+        # Short replies right after a task ("now for Cluj") point back without a pronoun; the model tells a new
+        # request ("open Notes") from a change.
+        short = len(request.split()) <= 5
+        from .arithmetic import answer as arithmetic_answer, clock_answer
+        if not self.last_task or not (REFERS_BACK.search(request) or short) or ABOUT_CONVERSATION.search(request) \
+                or NEVER_MIND.match(request) or arithmetic_answer(request) or clock_answer(request) \
                 or not hasattr(self.provider, 'complete_structured'):
             return request
+        if short and not REFERS_BACK.search(request) and self.routed_in_code(request):
+            return request  # "open Notes" is a whole request on its own
         try:
             reply = self.provider.complete_structured(FOLLOW_UP_SYSTEM, [{'role': 'user', 'content': json.dumps(
                 {'last_task': self.last_task, 'latest': request}, ensure_ascii=False)}],
@@ -744,12 +751,22 @@ class Companion:
         timing('follow_up.resolved', time.monotonic(), words=len(resolved.split()))
         return resolved
 
+    def routed_in_code(self, request):
+        """True for a request code routes by itself: open/close/switch to an app, click something."""
+        if CLICK_REQUEST.match(request) or simple_app_command(request) is not None:
+            return True
+        from .quick_open import plan as quick_plan
+        try:
+            return self.desktop_context is not None and quick_plan(request, self.desktop_context.installed_apps()) is not None
+        except (RuntimeError, ValueError, OSError):
+            return False
+
     def prepare_request(self, request):
         resolved = self.resolve_follow_up(request)
         plan = self.route_request(resolved)
         if plan is not None and resolved != request:
             plan = self.last_request_plan = dict(plan, resolved_request=resolved)
-        if plan is not None and plan.get('operation') not in TELLS_ONLY:
+        if plan is not None and (plan.get('operation') not in TELLS_ONLY or plan.get('app_write')):  # a note or reminder to confirm too
             self.last_task = resolved[:500]
         return plan
 
@@ -887,8 +904,10 @@ class Companion:
                     # open the named site, then search there.
                     from .request_plan import with_opening
                     interpreted = with_opening(dict(interpreted, operation='browser_open', target=site[1], remaining_request=''), request)
-            if interpreted.get('operation') in ('weather', 'look_up') and self.named_installed_app(request, writes=True):
+            if (interpreted.get('operation') in ('weather', 'look_up') or interpreted.get('operation') == 'answer'
+                    and not re.match(r'^\W*(?:how|why)\b', request, re.I)) and self.named_installed_app(request, writes=True):
                 # "Show me the Visibility details in Weather": the app, not an answer from the web (live, held-out).
+                # "Convert 12 inches to centimeters in Calculator" was answered in chat (live, broad): the app was asked for.
                 interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
             acts = interpreted.pop('acts_on_computer', None) is True
             from .request_plan import highlight_only
@@ -935,11 +954,12 @@ class Companion:
                 interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
             from .request_plan import _normalized
             remaining = str(interpreted.get('remaining_request', ''))
-            if interpreted.get('operation') == 'launch_app' and (not remaining.strip() or _normalized(remaining) == _normalized(request)) \
+            if interpreted.get('operation') in ('launch_app', 'focus_app') and (not remaining.strip() or _normalized(remaining) == _normalized(request)) \
                     and self.beyond_app_name(request, str(interpreted.get('app_name', ''))):
                 # "In System Settings, open Displays" only brought Settings forward (live): the rest is work in it.
+                # So did "Switch Calendar to the day view" (focus_app, live broad): opening a running app brings it forward.
                 from .request_plan import with_opening
-                interpreted = with_opening(dict(interpreted, remaining_request=''), request)
+                interpreted = with_opening(dict(interpreted, operation='launch_app', remaining_request='', browser_mode='default'), request)
             if interpreted.get('operation') in ('move_object', 'move_geometry') and not MOVING_WORDS.search(request):
                 # "Go to my Pictures folder" was routed to moving the companion: going somewhere is a task.
                 interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')

@@ -2122,7 +2122,9 @@ class FollowUpTests(unittest.TestCase):
         self.assertNotIn('resolved_request', plan)
         self.assertEqual(self.provider.interpret_request.call_args.args[0], 'what does that company make?')
         self.provider.complete_structured.reset_mock()
-        self.app.prepare_request('what is 2+2?')  # nothing points back: no extra model call
+        self.app.prepare_request('what is 2+2?')  # answered in code: no extra model call
+        self.route('computer_task', 'please open the Downloads folder in Finder for me')
+        self.app.prepare_request('please open the Downloads folder in Finder for me')  # long, nothing points back
         self.provider.complete_structured.assert_not_called()
 
     def test_chat_never_announces_or_denies_computer_use(self):
@@ -2130,3 +2132,40 @@ class FollowUpTests(unittest.TestCase):
         text = ' '.join(CHAT_SYSTEM.split())
         self.assertIn('never say you cannot', text)
         self.assertIn('never say you are doing, starting or about to do something', text)
+
+    def test_reported_short_follow_up_without_a_pronoun(self):
+        # Live (conversation suite): "now for Cluj" after "search Wikipedia for Bucharest" answered from Maps.
+        self.app.ask('open safari and go to apple.com')
+        self.provider.complete_structured.side_effect = lambda system, messages, **options: {'request': 'Open Safari and go to example.org'}
+        self.assertEqual(self.app.prepare_request('now example.org')['resolved_request'], 'Open Safari and go to example.org')
+
+    def test_reported_a_note_to_confirm_is_a_task_to_follow_up(self):
+        # Live: "and another one saying bye" after a note started a screen task instead of a second note.
+        self.route('create_note', 'A11y test 1 | hi')
+        plan = self.app.prepare_request('make a note titled A11y test 1 saying hi')
+        self.assertTrue(plan.get('app_write'))
+        self.assertEqual(self.app.last_task, 'make a note titled A11y test 1 saying hi')
+
+
+class AppNamedTests(unittest.TestCase):
+    """Live (broad suite): naming an app asks for work in it."""
+    setUp, route = LiveRoutingTests.setUp, LiveRoutingTests.route
+
+    def catalog(self, *names):
+        self.app.desktop_context.bridge.catalog.return_value = [{'name': name, 'bundle_id': 'com.apple.'+name} for name in names]
+
+    def test_reported_conversion_in_calculator_is_done_in_calculator(self):
+        self.catalog('Calculator', 'Safari')
+        self.route('answer', reply='12 inches is 30.48 centimeters.')
+        self.assertEqual(self.app.prepare_request('Convert 12 inches to centimeters in Calculator.')['operation'], 'computer_task')
+        self.route('answer', reply='Open View and pick Convert.')
+        self.assertEqual(self.app.prepare_request('How do I convert units in Calculator?')['operation'], 'answer')
+
+    def test_reported_switching_an_apps_view_is_work_in_the_app(self):
+        # "Switch Calendar to the day view" only brought Calendar forward.
+        self.catalog('Calendar', 'Safari')
+        self.route('focus_app', app_name='Calendar')
+        plan = self.app.prepare_request('Switch Calendar to the day view.')
+        self.assertEqual((plan['operation'], plan['opening']['operation'], plan['opening']['app_name']), ('computer_task', 'launch_app', 'Calendar'))
+        self.route('focus_app', app_name='Calendar')
+        self.assertEqual(self.app.prepare_request('go back to Calendar')['operation'], 'focus_app')

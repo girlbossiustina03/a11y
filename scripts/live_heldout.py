@@ -26,7 +26,7 @@ def osa(script, *args):
     result = subprocess.run(['osascript', '-e', 'on run argv\n' + script + '\nend run', *map(str, args)],
                             capture_output=True, text=True, timeout=30)
     if result.returncode:
-        raise RuntimeError('AppleScript ground truth unavailable')
+        raise RuntimeError('AppleScript ground truth unavailable: '+result.stderr.strip())
     return result.stdout.strip()
 
 

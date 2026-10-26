@@ -1087,12 +1087,15 @@ def main():
     parser.add_argument('--only', action='append', help='run only requests containing this text (repeatable)')
     parser.add_argument('--out', default=str(ROOT/'.data'/'live_eval'))
     parser.add_argument('--compare', help='an earlier summary.json to show next to the results')
-    parser.add_argument('--suite', choices=('requests', 'navigation', 'varied', 'v2', 'v3', 'heldout', 'answers', 'all'), default='requests',
+    parser.add_argument('--suite', choices=('requests', 'navigation', 'varied', 'v2', 'v3', 'heldout', 'answers', 'conversation', 'broad', 'all'), default='requests',
                         help='requests: the reported requests; navigation: getting somewhere by clicking; '
                              'varied: new random tasks across many apps every run')
     parser.add_argument('--tasks', type=int, default=14, help='varied suite: how many random tasks')
     parser.add_argument('--seed', type=int, help='varied suite: repeat an earlier run (printed at the start)')
     args = parser.parse_args()
+    # A sleeping display locks the screen: its password field pauses screen vision and every task
+    # failed as "protected" (live, 2026-10-26). Keep the Mac awake for as long as this run lasts.
+    subprocess.Popen(['caffeinate', '-dimsu', '-w', str(os.getpid())])
     ONLY[:] = args.only or []
     out = Path(args.out)/datetime.now().strftime('%Y%m%d-%H%M%S')
     out.mkdir(parents=True, exist_ok=True)
@@ -1100,6 +1103,14 @@ def main():
     print('build', build_id(), '→', out, flush=True)
     app = App(ROOT/'.data', out/'app.log')
     eval_window = EvalWindow()
+    if args.suite in ('conversation', 'broad'):
+        import importlib
+        from live_conversation import run
+        cases = importlib.import_module('live_'+args.suite).build(eval_window)
+        if ONLY:
+            cases = [case for case in cases if any(text.casefold() in turn.request.casefold()
+                     for turn in case['turns'] for text in ONLY)]
+        return run(app, eval_window, out, cases, args.runs)
     if args.suite in ('v2', 'v3', 'heldout'):
         return run_v2(app, eval_window, out, args.tasks, args.seed if args.seed is not None else int(time.time()) % 100000,
                       hard={'v2': False, 'v3': 'live_hard', 'heldout': 'live_heldout'}[args.suite])
