@@ -289,7 +289,7 @@ end tell''', name)
                                 osa('tell application (item 1 of argv) to quit saving no', name)
                         except (RuntimeError, subprocess.TimeoutExpired) as error:  # an app that won't quit must not end the run
                             records.append(dict(case=case['name'], passed=False, cleanup_error=str(error)))
-                    if any(t.wanted_app == 'TextEdit' for t in case['turns']):
+                    if not case.get('scoped_documents') and any(t.wanted_app == 'TextEdit' for t in case['turns']):
                         le.trash_test_documents(started)
                     app.quit()
     finally:
