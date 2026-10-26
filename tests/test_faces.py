@@ -124,7 +124,8 @@ class TerminalThemeTests(unittest.TestCase):
             calls.append((selector, args))
             return 0
         with patch.object(mac_window, 'ns_window', return_value=1), patch.object(mac_window, 'send', send), \
-                patch.object(mac_window, 'runtime', return_value=type('Runtime', (), {'sel_registerName': lambda self, name: 0})()):
+                patch.object(mac_window, 'install_title'), patch.object(mac_window, 'ns_string', return_value=1), \
+                patch.object(mac_window, 'runtime', return_value=type('Runtime', (), {'sel_registerName': lambda self, name: 0, 'objc_getClass': lambda self, name: 1})()):
             self.assertTrue(mac_window.prepare_window(object()))
         behavior = dict(calls)['setCollectionBehavior:'][0]
         self.assertTrue(behavior & mac_window.ALL_SPACES and behavior & mac_window.FULL_SCREEN_AUXILIARY)
@@ -141,7 +142,8 @@ class TerminalThemeTests(unittest.TestCase):
         self.assertEqual(calls[-1], ('activateIgnoringOtherApps:', (True,),
                                     {'restype': None, 'argtypes': (mac_window.ctypes.c_bool,)}))
 
-    def test_proxy_icon_is_a_resource_and_cannot_be_dragged(self):
+    def test_proxy_icon_is_an_app_resource_and_stays_visible_when_inactive(self):
+        # Reported: the icon vanished while she was not selected; Terminal's only greys out.
         from companion import mac_window
         calls = []
         runtime = type('Runtime', (), {'objc_getClass': lambda self, name: 1})()
@@ -149,11 +151,121 @@ class TerminalThemeTests(unittest.TestCase):
             calls.append((selector, args))
             return 2
         with patch.object(mac_window, 'runtime', return_value=runtime), patch.object(mac_window, 'send', send), \
-                patch.object(mac_window, 'ns_window', return_value=1), patch.object(mac_window, 'ns_string', return_value=3):
-            self.assertTrue(mac_window.set_proxy_icon(object(), '/app/packaging/icons/A11y.png', b'png'))
-        self.assertIn(('setEnabled:', (False,)), calls)
-        self.assertIn(('setTitleVisibility:', (0,)), calls)
-        self.assertIn(('setRepresentedURL:', (2,)), calls)
+                patch.object(mac_window, 'ns_window', return_value=1), patch.object(mac_window, 'ns_string', return_value=3), \
+                patch.dict(mac_window._titles, {1: (2, 3, 4)}), patch.object(mac_window, 'refresh_titles'):
+            from types import SimpleNamespace
+            self.assertTrue(mac_window.set_proxy_icon(SimpleNamespace(width=lambda: 230), '/app/packaging/icons/A11y.png', b'png'))
+        self.assertNotIn(('setEnabled:', (False,)), calls)
+        self.assertIn(('setImage:', (2,)), calls)
+        self.assertFalse(any(selector == 'setRepresentedURL:' for selector, args in calls))
+        self.assertFalse(any(selector == 'standardWindowButton:' for selector, args in calls))
+
+
+    def test_native_title_and_buttons_use_appkit(self):
+        from companion import mac_window
+        calls = []
+        def send(receiver, selector, *args, **kwargs):
+            calls.append((selector, args, kwargs))
+            return mac_window.rect(0, 0, 230, 31) if selector == 'bounds' else 2
+        runtime = type('Runtime', (), {'sel_registerName': lambda self, name: 0})()
+        toggle, minimize = object(), object()
+        with patch.object(mac_window, 'ns_window', return_value=1), patch.object(mac_window, 'send', send), \
+                patch.object(mac_window, 'runtime', return_value=runtime), \
+                patch.object(mac_window, 'install_title'), patch.object(mac_window, 'bind_window_button') as bind:
+            self.assertTrue(mac_window.prepare_window(object(), toggle_chat=toggle, minimize_owner=minimize))
+        self.assertEqual([call.args[2] for call in bind.call_args_list], [minimize, toggle])
+        values = {selector: args for selector, args, kwargs in calls}
+        self.assertTrue(values['setStyleMask:'][0] & mac_window.MINIATURIZABLE)
+        self.assertTrue(values['setStyleMask:'][0] & mac_window.NONACTIVATING_PANEL)
+        self.assertEqual(values['setToolbar:'], (None,))
+        self.assertEqual(values['setTitlebarSeparatorStyle:'], (1,))
+        self.assertEqual(values['setTitleVisibility:'], (mac_window.TITLE_HIDDEN,))
+        self.assertNotIn(('setEnabled:', (False,), {}), calls)
+        self.assertEqual(values['setHidden:'], (False,))
+        # The reply (owner's ask): yellow closes it like red, green is greyed out.
+        calls.clear()
+        close = object()
+        with patch.object(mac_window, 'ns_window', return_value=1), patch.object(mac_window, 'send', send), \
+                patch.object(mac_window, 'runtime', return_value=runtime), \
+                patch.object(mac_window, 'install_title'), patch.object(mac_window, 'bind_window_button') as bind:
+            self.assertTrue(mac_window.prepare_window(object(), minimize_owner=close, zoom=False))
+        self.assertEqual([call.args[2] for call in bind.call_args_list], [close])
+        self.assertEqual([args for selector, args, kwargs in calls if selector == 'setEnabled:'], [(True,), (True,), (False,)])
+        frames = [args[0] for selector, args, kwargs in calls if selector == 'setFrame:']
+        self.assertEqual([(f.origin.x, f.origin.y, f.size.width, f.size.height) for f in frames],
+                         [(9, 8, 14, 14), (32, 8, 14, 14), (55, 8, 14, 14)])
+
+    def test_title_accessory_has_terminal_height_and_native_black_hairline(self):
+        from companion import mac_window
+        from unittest.mock import MagicMock
+        calls = []
+        def send(receiver, selector, *args, **kwargs):
+            calls.append((selector, args))
+            if selector == 'bounds':
+                return mac_window.rect(0, 0, 230, 200)
+            if selector == 'backingScaleFactor':
+                return 2.0
+            return 2
+        widget = MagicMock()
+        widget.width.return_value = 230
+        widget.windowTitle.return_value = 'a11y'
+        with patch.object(mac_window, 'runtime', return_value=MagicMock()), \
+                patch.object(mac_window, 'send', send), \
+                patch.object(mac_window, 'ns_string', return_value=1), \
+                patch.object(mac_window.ctypes.cdll, 'LoadLibrary'), \
+                patch.object(mac_window, 'refresh_titles'), \
+                patch.object(mac_window, '_title_target', 1), \
+                patch.dict(mac_window._titles, {}, clear=True):
+            mac_window.install_title(widget, 42)
+            self.assertIn(42, mac_window._titles)
+        frames = [args[0] for selector, args in calls if selector == 'initWithFrame:']
+        self.assertEqual(frames[0].size.height, 30)
+        self.assertEqual(frames[1].size.width, 16)
+        self.assertEqual(frames[-1].size.height, 0.5)
+        self.assertEqual(frames[-1].origin.y, 199.5)
+        self.assertIn(('setLayoutAttribute:', (1,)), calls)
+        self.assertIn(('blackColor', ()), calls)
+        widget.windowTitleChanged.connect.assert_called_once()
+        widget.destroyed.connect.assert_called_once()
+
+    def test_child_is_explicitly_ordered_below_after_attachment(self):
+        from companion import mac_window
+        with patch.object(mac_window, 'ns_window', side_effect=[11, 22]), \
+                patch.object(mac_window, 'send', return_value=99) as send:
+            self.assertTrue(mac_window.keep_below(object(), object()))
+        self.assertEqual([call.args[1] for call in send.call_args_list],
+                         ['addChildWindow:ordered:', 'windowNumber', 'orderWindow:relativeTo:'])
+        self.assertEqual(send.call_args.args[:4], (22, 'orderWindow:relativeTo:', -1, 99))
+
+    def test_inactive_accessory_is_desaturated_and_remains_present(self):
+        from companion import mac_window
+        calls = []
+        def send(receiver, selector, *args, **kwargs):
+            calls.append((selector, args))
+            return False if selector == 'isKeyWindow' else 2
+        runtime = type('Runtime', (), {'objc_getClass': lambda self, name: 1})()
+        with patch.dict(mac_window._titles, {1: (2, 3, 4)}, clear=True), \
+                patch.object(mac_window, 'runtime', return_value=runtime), \
+                patch.object(mac_window, 'ns_string', return_value=3), \
+                patch.object(mac_window, 'send', send):
+            mac_window.refresh_titles()
+        self.assertIn(('setAlphaValue:', (0.45,)), calls)
+        self.assertIn(('setContentFilters:', (2,)), calls)
+        self.assertFalse(any(selector in ('setHidden:', 'setEnabled:') for selector, args in calls))
+
+    def test_window_button_dispatch_and_minimize(self):
+        from companion import mac_window
+        import weakref
+        class Owner:
+            def toggle(self):
+                self.called = True
+        owner = Owner()
+        with patch.dict(mac_window._button_callbacks, {42: weakref.WeakMethod(owner.toggle)}):
+            mac_window._dispatch_window_button(None, None, 42)
+        self.assertTrue(owner.called)
+        with patch.object(mac_window, 'ns_window', return_value=1), patch.object(mac_window, 'send') as send:
+            self.assertTrue(mac_window.miniaturize(owner))
+        send.assert_called_once_with(1, 'miniaturize:', None, restype=None, argtypes=(mac_window.ctypes.c_void_p,))
 
     def test_appearance_is_saved_in_the_data_folder(self):
         with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {'A11Y_DATA_DIR': folder}):

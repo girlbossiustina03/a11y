@@ -5,9 +5,11 @@ it returns False and the window stays an ordinary Qt window.
 import ctypes
 import ctypes.util
 import sys
+import weakref
 
 UTILITY_WINDOW = 1 << 4
 NONACTIVATING_PANEL = 1 << 7  # takes typing without bringing A11y to the front (as Spotlight)
+MINIATURIZABLE, RESIZABLE = 1 << 2, 1 << 3
 TITLE_HIDDEN = 1
 CLOSE_BUTTON, MINIATURIZE_BUTTON, ZOOM_BUTTON = 0, 1, 2
 WINDOW_BELOW = -1
@@ -47,9 +49,8 @@ def ns_window(widget):
     return send(view, 'window') if view else None
 
 
-def prepare_window(widget, *, buttons=True):
-    """A real title bar like Terminal's. With buttons, yellow and green are turned off (she
-    can't be minimised or zoomed); without, the title bar is a plain strip (the reply)."""
+def prepare_window(widget, *, buttons=True, toggle_chat=None, minimize_owner=None, zoom=True):
+    """Compact leading AppKit title and standard traffic lights; green toggles chat."""
     try:
         window = ns_window(widget)
         if not window:
@@ -57,7 +58,7 @@ def prepare_window(widget, *, buttons=True):
         mask = send(window, 'styleMask', restype=ctypes.c_ulong)
         # Non-activating: showing her or a reply never brings A11y in front of the app a task is
         # typing into ("Input is unavailable", "the focus changed", live after she became a real window).
-        send(window, 'setStyleMask:', (mask & ~UTILITY_WINDOW) | NONACTIVATING_PANEL, restype=None, argtypes=(ctypes.c_ulong,))
+        send(window, 'setStyleMask:', (mask & ~UTILITY_WINDOW) | NONACTIVATING_PANEL | MINIATURIZABLE | RESIZABLE, restype=None, argtypes=(ctypes.c_ulong,))
         if send(window, 'respondsToSelector:', runtime().sel_registerName(b'setBecomesKeyOnlyIfNeeded:'),
                 restype=ctypes.c_bool, argtypes=(ctypes.c_void_p,)):
             send(window, 'setBecomesKeyOnlyIfNeeded:', True, restype=None, argtypes=(ctypes.c_bool,))
@@ -66,16 +67,97 @@ def prepare_window(widget, *, buttons=True):
         behavior &= ~(MOVE_TO_ACTIVE_SPACE | MANAGED | TRANSIENT | FULL_SCREEN_PRIMARY | FULL_SCREEN_NONE)  # conflicting policies
         send(window, 'setCollectionBehavior:', behavior | ALL_SPACES | STATIONARY | FULL_SCREEN_AUXILIARY,
              restype=None, argtypes=(ctypes.c_ulong,))
+        # A toolbar adds 9 pt on Tahoe and hides its proxy image while inactive.
+        # A left title accessory keeps the ordinary titlebar and real window buttons.
+        send(window, 'setToolbar:', None, restype=None, argtypes=(ctypes.c_void_p,))
+        send(window, 'setTitleVisibility:', TITLE_HIDDEN, restype=None, argtypes=(ctypes.c_long,))
+        send(window, 'setTitlebarSeparatorStyle:', 1, restype=None, argtypes=(ctypes.c_long,))  # none
+        install_title(widget, window)
         for kind in (CLOSE_BUTTON, MINIATURIZE_BUTTON, ZOOM_BUTTON):
             button = send(window, 'standardWindowButton:', kind, argtypes=(ctypes.c_long,))
             if not button:
                 continue
-            if not buttons:
-                send(button, 'setHidden:', True, restype=None, argtypes=(ctypes.c_bool,))
-            elif kind != CLOSE_BUTTON:
-                send(button, 'setEnabled:', False, restype=None, argtypes=(ctypes.c_bool,))
-        if not buttons:
-            send(window, 'setTitleVisibility:', TITLE_HIDDEN, restype=None, argtypes=(ctypes.c_long,))
+            send(button, 'setHidden:', not buttons, restype=None, argtypes=(ctypes.c_bool,))
+            send(button, 'setEnabled:', zoom or kind != ZOOM_BUTTON, restype=None, argtypes=(ctypes.c_bool,))
+            # Terminal's 14 pt lights: centres 16, 39, 62 pt from the left,
+            # 16 pt below the outer top edge (Tahoe toolbar centres were 20 pt).
+            container = send(button, 'superview')
+            bounds = send(container, 'bounds', restype=Rect)
+            if isinstance(bounds, Rect):
+                send(button, 'setFrame:', rect(9+23*kind, bounds.size.height-23, 14, 14),
+                     restype=None, argtypes=(Rect,))
+            callback = toggle_chat if kind == ZOOM_BUTTON else minimize_owner if kind == MINIATURIZE_BUTTON else None
+            if callback is not None:
+                bind_window_button(widget, button, callback)
+        return True
+    except (AttributeError, TypeError, ValueError, OSError, ctypes.ArgumentError):
+        return False
+
+
+_button_target = None
+_button_imp = None
+_button_callbacks = {}
+
+
+def _dispatch_window_button(this, selector, sender):
+    callback = _button_callbacks.get(sender)
+    callback = callback() if callback else None
+    if callback is not None:
+        # Never unwind a Python exception through an Objective-C IMP.
+        try:
+            callback()
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception('Native window button failed')
+
+
+def bind_window_button(widget, button, callback):
+    """Keep the IMP/target alive; weak bound methods do not retain closed Qt windows."""
+    global _button_target, _button_imp
+    objc = runtime()
+    if _button_target is None:
+        objc.objc_allocateClassPair.restype = ctypes.c_void_p
+        objc.objc_allocateClassPair.argtypes = (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t)
+        objc.class_addMethod.restype = ctypes.c_bool
+        objc.class_addMethod.argtypes = (ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p)
+        objc.objc_registerClassPair.restype = None
+        objc.objc_registerClassPair.argtypes = (ctypes.c_void_p,)
+        cls = objc.objc_getClass(b'A11yWindowButtonTarget')
+        if not cls:
+            cls = objc.objc_allocateClassPair(objc.objc_getClass(b'NSObject'), b'A11yWindowButtonTarget', 0)
+            _button_imp = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(_dispatch_window_button)
+            objc.class_addMethod(cls, objc.sel_registerName(b'perform:'), ctypes.cast(_button_imp, ctypes.c_void_p), b'v@:@')
+            objc.objc_registerClassPair(cls)
+        _button_target = send(send(cls, 'alloc'), 'init')
+    _button_callbacks[button] = weakref.WeakMethod(callback)
+    widget.destroyed.connect(lambda *args, key=button: _button_callbacks.pop(key, None))
+    send(button, 'setTarget:', _button_target, restype=None, argtypes=(ctypes.c_void_p,))
+    send(button, 'setAction:', objc.sel_registerName(b'perform:'), restype=None, argtypes=(ctypes.c_void_p,))
+
+
+def miniaturize(widget):
+    """Minimise the parent; AppKit carries its attached child windows with it."""
+    try:
+        window = ns_window(widget)
+        if not window:
+            return False
+        send(window, 'miniaturize:', None, restype=None, argtypes=(ctypes.c_void_p,))
+        return True
+    except (AttributeError, TypeError, ValueError, OSError, ctypes.ArgumentError):
+        return False
+
+
+def enable_buttons(widget, *, zoom=True):
+    """Qt greys green out again whenever it updates a window it thinks can't be resized (her
+    layout fixes her size); green opens and closes the input here, so it stays live."""
+    try:
+        window = ns_window(widget)
+        if not window:
+            return False
+        for kind in (MINIATURIZE_BUTTON, ZOOM_BUTTON):
+            button = send(window, 'standardWindowButton:', kind, argtypes=(ctypes.c_long,))
+            if button:
+                send(button, 'setEnabled:', zoom or kind != ZOOM_BUTTON, restype=None, argtypes=(ctypes.c_bool,))
         return True
     except (AttributeError, TypeError, ValueError, OSError, ctypes.ArgumentError):
         return False
@@ -103,6 +185,11 @@ def keep_below(parent, child):
             return False
         send(above, 'addChildWindow:ordered:', below, WINDOW_BELOW, restype=None,
              argtypes=(ctypes.c_void_p, ctypes.c_long))
+        # Style-mask changes can order a Qt tool panel out. Explicitly order it back
+        # beneath its owner, without activating either window or stealing task focus.
+        number = send(above, 'windowNumber', restype=ctypes.c_long)
+        send(below, 'orderWindow:relativeTo:', WINDOW_BELOW, number, restype=None,
+             argtypes=(ctypes.c_long, ctypes.c_long))
         return True
     except (AttributeError, TypeError, ValueError, OSError, ctypes.ArgumentError):
         return False
@@ -245,25 +332,150 @@ def activate_app():
         return False
 
 
-def set_proxy_icon(widget, path, png):
-    """A document icon backed by an app resource, with file interactions disabled."""
+# NSRect is returned/passed by value on both supported macOS architectures.
+class Size(ctypes.Structure):
+    _fields_ = [('width', ctypes.c_double), ('height', ctypes.c_double)]
+
+
+class Rect(ctypes.Structure):
+    _fields_ = [('origin', Point), ('size', Size)]
+
+
+def rect(x, y, width, height):
+    return Rect(Point(x, y), Size(width, height))
+
+
+_titles = {}
+_title_target = None
+_title_imp = None
+
+
+def refresh_titles(*unused):
+    # Notifications execute on AppKit's main thread, including for the child panel.
+    for window, (_, label, icon) in list(_titles.items()):
+        active = send(window, 'isKeyWindow', restype=ctypes.c_bool)
+        color = send(runtime().objc_getClass(b'NSColor'),
+                     'labelColor' if active else 'disabledControlTextColor')
+        send(label, 'setTextColor:', color, restype=None, argtypes=(ctypes.c_void_p,))
+        send(icon, 'setAlphaValue:', 1.0 if active else 0.45, restype=None,
+             argtypes=(ctypes.c_double,))
+        # Desaturate the inactive image without making it a template silhouette.
+        filters = send(runtime().objc_getClass(b'NSArray'), 'array')
+        if not active:
+            filter_ = send(runtime().objc_getClass(b'CIFilter'), 'filterWithName:',
+                           ns_string('CIColorControls'), argtypes=(ctypes.c_void_p,))
+            zero = send(runtime().objc_getClass(b'NSNumber'), 'numberWithDouble:', 0.0,
+                        argtypes=(ctypes.c_double,))
+            send(filter_, 'setValue:forKey:', zero, ns_string('inputSaturation'), restype=None,
+                 argtypes=(ctypes.c_void_p, ctypes.c_void_p))
+            filters = send(runtime().objc_getClass(b'NSArray'), 'arrayWithObject:', filter_,
+                           argtypes=(ctypes.c_void_p,))
+        send(icon, 'setContentFilters:', filters, restype=None, argtypes=(ctypes.c_void_p,))
+
+
+def _title_notification(this, selector, notification):
+    try:
+        refresh_titles()
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception('Native title refresh failed')
+
+
+def install_title(widget, window):
+    """Public AppKit accessory: 30 pt title interior plus the 1 pt outer rim.
+
+    NSImageView has no proxy URL, target, action or drag source. The ordinary
+    NSWindow title remains available to accessibility and the Window menu.
+    """
+    global _title_target, _title_imp
+    if window in _titles:
+        return
+    objc = runtime()
+    ctypes.cdll.LoadLibrary('/System/Library/Frameworks/CoreImage.framework/CoreImage')
+    accessory = send(send(objc.objc_getClass(b'NSTitlebarAccessoryViewController'), 'alloc'), 'init')
+    view = send(send(objc.objc_getClass(b'NSView'), 'alloc'), 'initWithFrame:', rect(0, 0, max(1, widget.width()-90), 30), argtypes=(Rect,))
+    icon = send(send(objc.objc_getClass(b'NSImageView'), 'alloc'), 'initWithFrame:', rect(0, 7, 16, 16), argtypes=(Rect,))
+    label = send(objc.objc_getClass(b'NSTextField'), 'labelWithString:', ns_string(widget.windowTitle()), argtypes=(ctypes.c_void_p,))
+    send(label, 'setFrame:', rect(0, 5, max(1, widget.width()-90), 20), restype=None, argtypes=(Rect,))
+    font = send(objc.objc_getClass(b'NSFont'), 'boldSystemFontOfSize:', 13.0, argtypes=(ctypes.c_double,))
+    send(label, 'setAutoresizingMask:', 2, restype=None, argtypes=(ctypes.c_ulong,))
+    send(label, 'setFont:', font, restype=None, argtypes=(ctypes.c_void_p,))
+    send(view, 'addSubview:', icon, restype=None, argtypes=(ctypes.c_void_p,))
+    send(view, 'addSubview:', label, restype=None, argtypes=(ctypes.c_void_p,))
+    send(accessory, 'setView:', view, restype=None, argtypes=(ctypes.c_void_p,))
+    send(accessory, 'setLayoutAttribute:', 1, restype=None, argtypes=(ctypes.c_long,))  # left, after buttons
+    send(window, 'addTitlebarAccessoryViewController:', accessory, restype=None, argtypes=(ctypes.c_void_p,))
+    # Replace the system separator with Terminal's one-device-pixel black rule.
+    # This is a native content subview; no Qt stylesheet or cross-platform paint change.
+    content = send(window, 'contentView')
+    bounds = send(content, 'bounds', restype=Rect)
+    scale = send(window, 'backingScaleFactor', restype=ctypes.c_double) or 1.0
+    rule = send(send(objc.objc_getClass(b'NSBox'), 'alloc'), 'initWithFrame:',
+                rect(0, bounds.size.height-1/scale, bounds.size.width, 1/scale), argtypes=(Rect,))
+    send(rule, 'setBoxType:', 4, restype=None, argtypes=(ctypes.c_long,))
+    send(rule, 'setContentViewMargins:', Size(0, 0), restype=None, argtypes=(Size,))
+    send(rule, 'setBorderType:', 0, restype=None, argtypes=(ctypes.c_long,))
+    black = send(objc.objc_getClass(b'NSColor'), 'blackColor')
+    send(rule, 'setFillColor:', black, restype=None, argtypes=(ctypes.c_void_p,))
+    send(rule, 'setAutoresizingMask:', 10, restype=None, argtypes=(ctypes.c_ulong,))
+    send(content, 'addSubview:', rule, restype=None, argtypes=(ctypes.c_void_p,))
+    send(rule, 'release', restype=None)
+    _titles[window] = (accessory, label, icon)
+    def update(text):
+        send(label, 'setStringValue:', ns_string(text), restype=None, argtypes=(ctypes.c_void_p,))
+    widget.windowTitleChanged.connect(update)
+    def cleanup(*unused):
+        _titles.pop(window, None)
+    widget.destroyed.connect(cleanup)
+    if _title_target is None:
+        objc.objc_allocateClassPair.restype = ctypes.c_void_p
+        objc.objc_allocateClassPair.argtypes = (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t)
+        objc.class_addMethod.restype = ctypes.c_bool
+        objc.class_addMethod.argtypes = (ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_char_p)
+        objc.objc_registerClassPair.argtypes = (ctypes.c_void_p,)
+        cls = objc.objc_allocateClassPair(objc.objc_getClass(b'NSObject'), b'A11yTitleObserver', 0)
+        _title_imp = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)(_title_notification)
+        objc.class_addMethod(cls, objc.sel_registerName(b'changed:'), ctypes.cast(_title_imp, ctypes.c_void_p), b'v@:@')
+        objc.objc_registerClassPair(cls)
+        _title_target = send(send(cls, 'alloc'), 'init')
+        center = send(objc.objc_getClass(b'NSNotificationCenter'), 'defaultCenter')
+        for name in ('NSWindowDidBecomeKeyNotification', 'NSWindowDidResignKeyNotification'):
+            send(center, 'addObserver:selector:name:object:', _title_target, objc.sel_registerName(b'changed:'),
+                 ns_string(name), None, restype=None, argtypes=(ctypes.c_void_p,)*4)
+    for item in (icon, view, accessory):
+        send(item, 'release', restype=None)
+    refresh_titles()
+
+
+def resize_title(widget):
+    """Keep a growing reply accessory within the titlebar's available width."""
     try:
         window = ns_window(widget)
-        if not window:
+        if window not in _titles:
             return False
-        url = send(runtime().objc_getClass(b'NSURL'), 'fileURLWithPath:', ns_string(path), argtypes=(ctypes.c_void_p,))
-        send(window, 'setRepresentedURL:', url, restype=None, argtypes=(ctypes.c_void_p,))
+        view = send(_titles[window][0], 'view')
+        send(view, 'setFrameSize:', Size(max(1, widget.width()-90), 30), restype=None, argtypes=(Size,))
+        return True
+    except (AttributeError, TypeError, ValueError, OSError, ctypes.ArgumentError):
+        return False
+
+
+def set_proxy_icon(widget, path, png):
+    """Permanent image accessory, never a draggable document proxy."""
+    try:
+        window = ns_window(widget)
+        if not window or window not in _titles:
+            return False
         data = send(runtime().objc_getClass(b'NSData'), 'dataWithBytes:length:', png, len(png),
                     argtypes=(ctypes.c_char_p, ctypes.c_ulong))
         image = send(send(runtime().objc_getClass(b'NSImage'), 'alloc'), 'initWithData:', data, argtypes=(ctypes.c_void_p,))
         if not image:
             return False
-        button = send(window, 'standardWindowButton:', 4, argtypes=(ctypes.c_long,))  # document icon
-        send(button, 'setImage:', image, restype=None, argtypes=(ctypes.c_void_p,))
-        send(button, 'setEnabled:', False, restype=None, argtypes=(ctypes.c_bool,))
-        send(button, 'setHidden:', False, restype=None, argtypes=(ctypes.c_bool,))
-        send(window, 'setTitleVisibility:', 0, restype=None, argtypes=(ctypes.c_long,))
+        send(_titles[window][2], 'setImage:', image, restype=None, argtypes=(ctypes.c_void_p,))
+        send(_titles[window][1], 'setFrame:', rect(20, 5, max(1, widget.width()-110), 20),
+             restype=None, argtypes=(Rect,))
         send(image, 'release', restype=None)
+        refresh_titles()
         return True
     except (AttributeError, TypeError, ValueError, OSError, ctypes.ArgumentError):
         return False

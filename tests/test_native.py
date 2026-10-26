@@ -1154,6 +1154,22 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(emitted, ['settings', 'setup:wizard', 'readiness'])
         menu.deleteLater()
 
+    def test_native_reply_title_keeps_emoji_after_right_padding(self):
+        from companion.mascot import Mascot
+        from PyQt6.QtWidgets import QWidget
+        from types import SimpleNamespace
+        # Call the layout method with a stand-in: no native handles are created.
+        reply = QWidget()
+        owner = SimpleNamespace(reply_window=reply, reply_heading='reply', reply_side='right',
+                                frame_width=lambda: 240)
+        Mascot.title_reply(owner)
+        self.assertTrue(reply.windowTitle().startswith('\u2003'))
+        self.assertTrue(reply.windowTitle().endswith('💬 reply'))
+        owner.reply_side = 'left'
+        Mascot.title_reply(owner)
+        self.assertEqual(reply.windowTitle(), '💬 reply')
+        reply.deleteLater()
+
     def test_offscreen_user_clicks_never_call_appkit(self):
         mascot = self.window.mascot
         self.assertFalse(mascot.native)
@@ -1161,6 +1177,8 @@ class NativeTests(unittest.TestCase):
             mascot.open_chat_from_user()
             mascot.toggle_chat()
             mascot.set_proxy_icon(mascot)
+            mascot.minimize_pair()
+            mascot.style_titlebar()
         activate.assert_not_called()
         key.assert_not_called()
 

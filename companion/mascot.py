@@ -214,8 +214,11 @@ class Mascot(QWidget):
         self.titlebar_styled = False
         if self.native:
             # Close only: red collapses her (closeEvent); she can't be minimised or zoomed.
+            # Minimise and maximise too: Qt greys yellow and green out otherwise, and they work like Terminal's
+            # (yellow minimises, green opens and closes the input; mac_window.prepare_window).
             self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.CustomizeWindowHint |
-                                Qt.WindowType.WindowTitleHint | Qt.WindowType.WindowCloseButtonHint)
+                                Qt.WindowType.WindowTitleHint | Qt.WindowType.WindowCloseButtonHint |
+                                Qt.WindowType.WindowMinimizeButtonHint | Qt.WindowType.WindowMaximizeButtonHint)
         else:
             self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint |
                                 Qt.WindowType.Tool | Qt.WindowType.NoDropShadowWindowHint)
@@ -251,7 +254,8 @@ class Mascot(QWidget):
             # the reply. Opened to her right they sit under her; to her left they show.
             self.reply_window = QWidget(None, Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint |
                                         Qt.WindowType.CustomizeWindowHint | Qt.WindowType.WindowTitleHint |
-                                        Qt.WindowType.WindowCloseButtonHint)
+                                        Qt.WindowType.WindowCloseButtonHint | Qt.WindowType.WindowMinimizeButtonHint |
+                                        Qt.WindowType.WindowMaximizeButtonHint)
             self.reply_window.setWindowTitle('reply')
             self.reply_window.installEventFilter(self)
             self.reply_window.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -543,8 +547,12 @@ class Mascot(QWidget):
         mine = self.frameGeometry()
         size = self.reply_panel.size()
         self.reply_window.resize(size)
+        if self.native:
+            mac_window.resize_title(self.reply_window)
         x = mine.x() if self.reply_side == 'right' else mine.x()+mine.width()-size.width()
         self.reply_window.move(x, mine.y())
+        if self.native and self.reply_window.property('prepared'):
+            mac_window.enable_buttons(self.reply_window, zoom=False)
 
     def set_reply_shown(self, shown):
         self.reply_shown = shown
@@ -555,8 +563,9 @@ class Mascot(QWidget):
             self.place_reply_window()
             self.reply_window.show()
             if not self.reply_window.property('prepared'):
-                self.reply_window.setProperty('prepared', mac_window.prepare_window(self.reply_window))
-                self.set_proxy_icon(self.reply_window, reply=True)
+                # The reply's yellow closes it like red; its green is off (the input is hers, not the reply's).
+                self.reply_window.setProperty('prepared', mac_window.prepare_window(
+                    self.reply_window, minimize_owner=self.reply_window.close, zoom=False))
                 self.place_reply_window()
             mac_window.keep_below(self, self.reply_window)
             self.apply_blur()
@@ -600,7 +609,7 @@ class Mascot(QWidget):
         so the title is pushed along (em spaces) to start where the reply shows."""
         if self.reply_window is None:
             return
-        title = getattr(self, 'reply_heading', 'reply')
+        title = '💬 '+getattr(self, 'reply_heading', 'reply')
         if self.reply_side == 'right':
             metrics = QFontMetrics(QFontDatabase.systemFont(QFontDatabase.SystemFont.TitleFont))
             gap = self.frame_width()-62  # from the end of the hidden buttons to her right edge, plus room
@@ -879,6 +888,16 @@ class Mascot(QWidget):
             choice = self.choice_layout.itemAt(index).widget()
             choice.setEnabled(not self.busy or choice.property('companion_action') in ('computer:stop', 'settings', 'stop_speech'))
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.native and self.titlebar_styled:
+            mac_window.enable_buttons(self)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if self.native and self.titlebar_styled and event.type() == QEvent.Type.ActivationChange:
+            mac_window.enable_buttons(self)  # Qt re-applies its button states when she is selected
+
     def moveEvent(self, event):
         self.character.owner_moved(self.pos())
         self.place_reply_window()
@@ -891,12 +910,16 @@ class Mascot(QWidget):
             QTimer.singleShot(0, self.style_titlebar)
 
     def style_titlebar(self):
-        """A real title bar like Terminal's, with only the red button working."""
+        """Native compact title bar and chat/minimise traffic lights."""
         if not self.native:
             return
-        mac_window.prepare_window(self)
+        mac_window.prepare_window(self, toggle_chat=self.toggle_chat, minimize_owner=self.minimize_pair)
         self.set_proxy_icon(self)
         self.apply_blur()
+
+    def minimize_pair(self):
+        if self.native:
+            mac_window.miniaturize(self)
 
     def apply_blur(self):
         """Terminal blurs what's behind its active window and (in this profile) not its
@@ -1043,18 +1066,11 @@ class Mascot(QWidget):
     def app_icon_path():
         return resource_dir()/'packaging'/'icons'/'A11y.png'
 
-    def set_proxy_icon(self, window, *, reply=False):
+    def set_proxy_icon(self, window):
         if not self.native:
             return
         path = self.app_icon_path()
         image = QPixmap(str(path))
-        if reply:
-            image = QPixmap(64, 64)
-            image.fill(Qt.GlobalColor.transparent)
-            painter = QPainter(image)
-            painter.setFont(QFont('Apple Color Emoji', 40))
-            painter.drawText(image.rect(), Qt.AlignmentFlag.AlignCenter, '💬')
-            painter.end()
         from PyQt6.QtCore import QBuffer, QIODevice
         buffer = QBuffer()
         buffer.open(QIODevice.OpenModeFlag.WriteOnly)
