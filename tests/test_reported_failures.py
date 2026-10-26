@@ -2190,3 +2190,28 @@ class AppNamedTests(unittest.TestCase):
         for app in ('Notes', ''):
             self.route('delete_reminder', 'A11y test 12', app_name=app, acts_on_computer=True)
             self.assertEqual(self.app.prepare_request('Delete only the note titled A11y test 12.')['operation'], 'computer_task')
+
+
+class CheckedDoneTests(Harness):
+    """Live (broad suite): the model said done with the goal not reached ("Sorted by kind" in icon view,
+    a timer that never started). Its done is checked against the screen once, then refused."""
+    regions = TEAMS_REGIONS
+
+    def test_reported_a_done_with_something_missing_is_retried_then_refused(self):
+        task = ComputerTask('Start a ten-minute timer in Clock.', automatic=True, goal_mode='inspect')
+        task.record({'type': 'click_point', 'label': 'Timers', 'status': 'submitted'})
+        done = {'status': 'done', 'message': 'The timer is set.', 'risk': 'navigation', 'action': None}
+        missing = {'evidence': 'Timers', 'missing': 'a ten-minute timer running', 'met': False}
+        self.provider.complete_structured.side_effect = [done, missing, done, missing]
+        step = self.propose(task)
+        self.assertEqual(step['status'], 'needs_user')
+        self.assertIn('a ten-minute timer running', step['message'])
+        self.assertIn('Not done yet', self.provider.complete_structured.call_args_list[2].args[1][-1]['content'])
+
+    def test_a_checked_done_ends_the_task(self):
+        task = ComputerTask('Start a ten-minute timer in Clock.', automatic=True, goal_mode='inspect')
+        task.record({'type': 'click_point', 'label': 'Start', 'status': 'submitted'})
+        self.provider.complete_structured.side_effect = [
+            {'status': 'done', 'message': 'The timer is running.', 'risk': 'navigation', 'action': None},
+            {'evidence': 'Activity', 'missing': '', 'met': True}, {'message': 'Your ten-minute timer is running.'}]
+        self.assertEqual(self.propose(task)['status'], 'done')

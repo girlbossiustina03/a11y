@@ -144,6 +144,7 @@ def build(window, count=8, seed=0):
         if len(ids) != 1:
             return False
         body = osa('tell application "Notes" to return body of note id (item 1 of argv)', next(iter(ids)))
+        s['_observed']['new_note_text'] = note_words(body)
         found = bool(re.search(r'\bbye\b', note_words(body)))
         if found:
             note_state['owned'].update(ids)
@@ -161,6 +162,8 @@ def build(window, count=8, seed=0):
         def check(s,e):
             items = test_reminders(reminder)
             tomorrow = (datetime.now()+timedelta(days=1)).date()
+            s.setdefault('_observed', {}).update(reminders=items, expected_day=str(tomorrow),
+                                                expected_hours=[hour] if total == 1 else [9, hour])
             return reminder_times(items, tomorrow, [hour] if total == 1 else [9, hour])
         return check
     case('two_reminders', [turn('nine', f'add a reminder {reminder} for tomorrow at 9am', due(9,1)),
@@ -232,6 +235,9 @@ def run(app, window, out, cases, runs=1):
                                       passed=all(ok for _,ok in checks) and not timeout, seconds=seconds,
                                       reply=answer(events), task_started=task_started(events), checks=checks, timed_out=timeout,
                                       observed=state.get('_observed', {}))
+                        # Keep the executed actions, not just timing events, so a failed
+                        # check can be distinguished from a failed task after cleanup.
+                        record['receipts'] = (state.get('task') or {}).get('receipts', [])
                         records.append(record)
                         completed = index
                         with (out/'runs.jsonl').open('a') as f:

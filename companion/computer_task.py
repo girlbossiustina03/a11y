@@ -146,9 +146,12 @@ pixels as visual evidence together with the metadata. Click the center of a visi
 target with fractional image coordinates when it has no accessibility control_id.'''
 # "Any new notifications?" means opening the app's notification view, not reading whatever
 # feed is on screen. Apps name that view one of these (Teams, Slack: Activity).
-NOTIFICATION_GOAL = re.compile(r'\b(notifications?|activity|alerts?|mentions?|unread)\b', re.I)
+NOTIFICATION_GOAL = re.compile(r'\b(notifications?|activity(?!\s+monitor)|alerts?|mentions?|unread)\b', re.I)  # not the Activity Monitor app
 NOTIFICATION_VIEWS = ('activity', 'notifications')
 
+# Goals answered by reading the screen ("check tasks", "any new mentions?"), not by bringing something about.
+READING_GOAL = re.compile(r'^\W*(?:please\s+)?(?:check|see|look|read|find|tell me|what|which|who|when|where|how|is|are|any|do|did)\b|\?\s*$'
+                          r'|\b(?:and|then)\s+(?:check|see|look at|read|find|tell me)\b', re.I)
 OPENING_ACTIONS = {'launch_app', 'focus_app', 'browse_url', 'new_window', 'wait'}
 SETTLE_AFTER = {'launch_app', 'browse_url'}
 
@@ -931,6 +934,29 @@ class ComputerTask:
         self.pending = action
         return {'status': 'action', 'message': step['message'], 'action': action,
                 'review': not self.automatic or needs_review(action, 'navigation'), 'visual_capture': visual}
+
+    def worked(self):
+        """Something beyond opening ran: a click, key, typing or menu command."""
+        return any(receipt.get('type') not in OPENING_ACTIONS for receipt in self.receipts)
+
+    def still_missing(self, provider, snapshot, regions, cancel_kwargs):
+        """What the goal asks for that the screen does not show yet ('' when nothing). A failed
+        check never blocks the task."""
+        lines = [r['text'] for r in sorted(regions, key=lambda r: (round(r['y'], 2), r['x']))]
+        last = self.receipts[-1] if self.receipts else {}
+        observation = {'goal': self.goal, 'app': (snapshot.get('app') or {}).get('name', ''),
+                       'window': str((snapshot.get('window') or {}).get('title', '')), 'last_click': last.get('label', ''), 'screen_text': lines}
+        try:
+            reply = provider.complete_structured(MET_SYSTEM, [{'role': 'user', 'content': json.dumps(observation, ensure_ascii=False)}],
+                                                 schema=MET_SCHEMA, max_tokens=160, thinking=False, **cancel_kwargs)
+        except Exception:  # noqa: BLE001
+            if self.cancelled.is_set():
+                raise
+            return ''
+        if not isinstance(reply, dict):
+            return ''
+        missing = ' '.join(str(reply.get('missing', '')).split())
+        return missing if missing or reply.get('met') is True else 'what the goal asks for'
 
     def goal_met(self, provider, snapshot, regions, cancel_kwargs):
         """After a click that changed the window, in a look/navigate goal: does the screen now show what
@@ -2082,6 +2108,19 @@ class ComputerTask:
                     'relevant view), return status=action with the next step. Only report done with concrete current evidence.')
                 timing('task.reconsider.start', inference_at, step=len(self.receipts)+1, reason='opening_only_done')
                 continue
+            if step['status'] == 'done' and self.worked() and regions and not READING_GOAL.search(self.goal) \
+                    and not (self.goal_mode == 'inspect' and ASKS_FOR_FACT.search(self.goal)):
+                # The model's own "done" is checked like goal_met's: "Sorted by kind" without the list view, "World
+                # Clock" with another tab selected, an answer saying no timer runs (live, broad suite).
+                missing = self.still_missing(provider, snapshot, regions, cancel_kwargs)
+                check_active()
+                if missing and not attempt:
+                    correction = ('Not done yet: the screen does not show '+missing+'. Take the next step toward it (the app\'s '
+                                  'menus and keyboard shortcuts do most things), or report needs_user if it cannot be done.')
+                    timing('task.reconsider.start', inference_at, step=len(self.receipts)+1, reason='missing')
+                    continue
+                if missing:
+                    step = {'status': 'needs_user', 'action': None, 'message': 'I could not finish: '+missing[:200]+' is not on the screen.'}
             break
         stages['total_ms'] = round((time.monotonic()-step_started)*1000)
         self.timings.append(stages)
