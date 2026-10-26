@@ -937,7 +937,13 @@ let app = AXUIElementCreateApplication(front.processIdentifier)
 AXUIElementSetMessagingTimeout(app, 0.25)
 let window = element(attr(app, "AXFocusedWindow"))
 if let window {
-    output["window"] = ["title": string(window, "AXTitle"), "bounds": bounds(window) ?? [:]]
+    var info: [String: Any] = ["title": string(window, "AXTitle"), "bounds": bounds(window) ?? [:]]
+    for key in ["AXDocument", "AXURL"] {
+        let value = attr(window, key)
+        let text = (value as? URL)?.absoluteString ?? (value as? String ?? "")
+        if !text.isEmpty { info[key == "AXDocument" ? "document" : "url"] = String(text.prefix(1024)) }
+    }
+    output["window"] = info
 }
 let actionable: Set<String> = ["AXButton", "AXCheckBox", "AXRadioButton", "AXPopUpButton", "AXMenuButton", "AXTab", "AXLink", "AXDisclosureTriangle", "AXMenuItem"]
 func descriptor(_ node: AXUIElement, index: Int) -> [String: Any]? {
@@ -952,10 +958,28 @@ func descriptor(_ node: AXUIElement, index: Int) -> [String: Any]? {
             "enabled": (attr(node, "AXEnabled") as? Bool) ?? true]
 }
 if let focused = element(attr(app, "AXFocusedUIElement")) {
-    // Text-field role is useful; its content and label are intentionally omitted.
+    // Read only the focused element and its selected children; never secure input.
     let role = string(focused, "AXRole")
-    output["focused_role"] = string(focused, "AXSubrole") == "AXSecureTextField" ? "secure_input" : role
-    if string(focused, "AXSubrole") != "AXSecureTextField" { output["focused_bounds"] = bounds(focused) ?? [:] }
+    output["focused_role"] = (string(focused, "AXSubrole") == "AXSecureTextField" || role == "AXSecureTextField") ? "secure_input" : role
+    if string(focused, "AXSubrole") != "AXSecureTextField" && role != "AXSecureTextField" {
+        output["focused_bounds"] = bounds(focused) ?? [:]
+        func readable(_ node: AXUIElement) -> [String: String]? {
+            if string(node, "AXSubrole") == "AXSecureTextField" || string(node, "AXRole") == "AXSecureTextField" { return nil }
+            var result = ["role": string(node, "AXRole")]
+            for (key, attribute) in [("name", "AXTitle"), ("value", "AXValue"), ("text", "AXSelectedText")] {
+                let value = string(node, attribute)
+                if !value.isEmpty { result[key] = String(value.prefix(512)) }
+            }
+            if result["name"] == nil {
+                let label = string(node, "AXDescription")
+                if !label.isEmpty { result["name"] = String(label.prefix(512)) }
+            }
+            return result.count > 1 ? result : nil
+        }
+        if let value = readable(focused) { output["focused"] = value }
+        let selected = (attr(focused, "AXSelectedChildren") as? [AXUIElement] ?? []).prefix(3).compactMap { readable($0) }
+        if !selected.isEmpty { output["selected"] = selected }
+    }
 }
 var queue: [(AXUIElement, Int)] = window.map { [($0, 0)] } ?? []
 var controls: [[String: Any]] = []

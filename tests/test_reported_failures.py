@@ -692,6 +692,7 @@ class InspectionAnswerTests(Harness):
         change = {'status': 'action', 'message': 'Press it.', 'risk': 'change', 'action': {'type': 'press_control', 'control_id': 'control-0'}}
         self.provider.complete_structured.side_effect = [change, change,
             {'status': 'done', 'message': 'Ana mentioned you in General.', 'risk': 'navigation', 'action': None},
+            {'met': True, 'missing': '', 'evidence': 'Assignments'},
             {'message': 'Ana mentioned you in General.'}]
         step = self.propose(task)
         self.assertEqual(step, {'status': 'done', 'message': 'Ana mentioned you in General.', 'action': None})
@@ -731,7 +732,8 @@ class ScreenAnswerTests(Harness):
         task = ComputerTask('check whether Ana wrote to me', automatic=True, goal_mode='inspect')
         task.record({'type': 'click_point', 'label': 'Chat', 'status': 'submitted'})
         self.provider.complete_structured.side_effect = [
-            {'status': 'done', 'message': 'Two mentions from Ana.', 'risk': 'navigation', 'action': None}, ProviderError('down')]
+            {'status': 'done', 'message': 'Two mentions from Ana.', 'risk': 'navigation', 'action': None},
+ProviderError('down')]
         self.assertEqual(self.propose(task)['message'], 'Two mentions from Ana.')
 
 
@@ -2324,3 +2326,79 @@ class HarderFileLookupRegressions(unittest.TestCase):
             reply = mac_apps.open_file('packing.txt', home, opener, script=Mock(return_value=root))
             self.assertIn('could not find', reply)
             opener.assert_not_called()
+
+
+class StructuredCompletionTests(Harness):
+    def test_finder_nested_selection_is_not_an_open_folder(self):
+        from companion.computer_task import compact_desktop
+        task = ComputerTask('In this Finder folder, go into Recipes and then Saturday.', goal_mode='inspect')
+        snapshot = dict(self.snapshot, finder={'target': '/tmp/orchard', 'view': 'list view', 'sort': 'name'},
+                        selected=[{'role': 'AXRow', 'name': 'Saturday'}])
+        self.desktop.bridge.value = snapshot
+        with patch('companion.desktop_context.finder_facts', return_value=snapshot['finder']):
+            self.desktop.collect_once(targets=True)
+        self.assertEqual(compact_desktop(self.desktop.context())['facts']['finder']['target'], '/tmp/orchard')
+        self.provider.complete_structured.return_value = {'met': False, 'evidence': 'Saturday', 'missing': 'Finder target is still /tmp/orchard'}
+        self.assertIn('target', task.still_missing(self.provider, snapshot, [], {}))
+        payload = json.loads(self.provider.complete_structured.call_args.args[1][0]['content'])
+        self.assertEqual(payload['facts']['selected'][0]['name'], 'Saturday')
+
+    def test_finder_info_done_requires_observed_evidence(self):
+        task = ComputerTask('Show the information window for this orchard folder in Finder, so I can see its details.', goal_mode='inspect')
+        self.provider.complete_structured.return_value = {'met': True, 'missing': '', 'evidence': 'orchard Info'}
+        self.assertTrue(task.still_missing(self.provider, self.snapshot, [], {}))
+        snapshot = dict(self.snapshot, window={'title': 'orchard Info'})
+        self.assertEqual(task.still_missing(self.provider, snapshot, [], {}), '')
+        self.provider.complete_structured.side_effect = RuntimeError('offline')
+        self.assertTrue(task.still_missing(self.provider, snapshot, [], {}))
+
+    def test_preview_sidebar_2_exact_document_and_focused_text(self):
+        task = ComputerTask('Keep those thumbnails showing and tell me the filename of this PDF.', goal_mode='inspect')
+        snapshot = dict(self.snapshot, window={'title': 'marker', 'document': 'file:///tmp/marker%20atlas.pdf'},
+                        focused={'role': 'AXStaticText', 'value': 'Page 1'})
+        self.provider.complete_structured.return_value = {'message': 'marker atlas.pdf'}
+        self.assertEqual(task.screen_answer(self.provider, snapshot, [], 'marker', {}), 'marker atlas.pdf')
+        payload = json.loads(self.provider.complete_structured.call_args.args[1][0]['content'])
+        self.assertEqual(payload['facts']['document_name'], 'marker atlas.pdf')
+        self.assertEqual(payload['facts']['focused']['value'], 'Page 1')
+
+    def test_web_screen_answer_has_url_heading_and_ocr(self):
+        task = ComputerTask('Visit example.org in Safari and read me the heading on that page.', goal_mode='inspect')
+        snapshot = dict(self.snapshot, window={'title': 'Example Domain', 'url': 'https://example.org/'},
+                        focused={'role': 'AXHeading', 'value': 'Example Domain'})
+        self.provider.complete_structured.return_value = {'message': 'Example Domain'}
+        task.screen_answer(self.provider, snapshot, [region('This domain is for use in documentation examples.', .2, .4)], '', {})
+        payload = json.loads(self.provider.complete_structured.call_args.args[1][0]['content'])
+        self.assertEqual(payload['facts']['url'], 'https://example.org/')
+        self.assertEqual(payload['facts']['focused']['value'], 'Example Domain')
+        self.assertIn('documentation', payload['screen_text'][0])
+
+    def test_secure_values_are_never_in_model_facts(self):
+        from companion.computer_task import structured_facts
+        snapshot = {'focused_role': 'secure_input', 'focused': {'value': 'secret'}, 'selected': [{'value': 'secret'}]}
+        self.assertEqual(structured_facts(snapshot), {})
+        self.assertEqual(structured_facts({'focused': {'role': 'AXSecureTextField', 'value': 'secret'}}), {})
+
+    def test_report_only_cannot_bypass_completion_check(self):
+        task = ComputerTask('In this Finder folder, go into Recipes and then Saturday.', goal_mode='inspect')
+        task.receipts = [{'type': 'press_control'}]
+        self.provider.complete_structured.side_effect = [
+            {'status': 'done', 'action': None, 'message': 'I can see Saturday.'},
+            {'met': False, 'evidence': 'Saturday', 'missing': 'Saturday is selected, not open'}]
+        result = task.report_only(self.provider, [], None, {}, lambda: None, self.snapshot, [])
+        self.assertEqual(result['status'], 'needs_user')
+
+    def test_finder_facts_are_frontmost_only_and_pass_bundle_as_argv(self):
+        from companion.desktop_context import finder_facts, FINDER_FACTS_SCRIPT
+        with patch('companion.desktop_context.sys.platform', 'darwin'), patch('companion.desktop_context.subprocess.run') as run:
+            self.assertEqual(finder_facts({'app': {'bundle_id': 'com.apple.Preview'}}), {})
+            run.assert_not_called()
+            run.return_value = Mock(returncode=0, stdout='/tmp/orchard/\nlist view\nname\n')
+            facts = finder_facts({'app': {'bundle_id': 'com.apple.finder'}})
+            self.assertEqual(facts, {'target': '/tmp/orchard/', 'view': 'list view', 'sort': 'name'})
+            self.assertEqual(run.call_args.args[0], ['osascript', '-e', FINDER_FACTS_SCRIPT, 'com.apple.finder'])
+            self.assertIn('if not frontmost', FINDER_FACTS_SCRIPT)
+
+    def test_missing_facts_add_no_step_observation_tokens(self):
+        from companion.computer_task import compact_desktop
+        self.assertNotIn('facts', compact_desktop(self.snapshot))

@@ -52,6 +52,38 @@ def default_browser_id():
 EVENTKIT_FLAGS = ('--calendar-events', '--reminders', '--add-event', '--add-reminder', '--complete-reminder', '--delete-reminder')
 
 
+FINDER_FACTS_SCRIPT = """on run argv
+if (item 1 of argv) is not "com.apple.finder" then return ""
+tell application "Finder"
+    if not frontmost or (count of Finder windows) is 0 then return ""
+    set w to front Finder window
+    set folderPath to POSIX path of (target of w as alias)
+    set viewName to current view of w as text
+    set columnName to ""
+    try
+        set columnName to name of sort column of list view options of w as text
+    end try
+    return folderPath & linefeed & viewName & linefeed & columnName
+end tell
+end run"""
+
+
+def finder_facts(snapshot):
+    """Finder only, with a second frontmost check inside the script; no activation."""
+    bundle = (snapshot.get('app') or {}).get('bundle_id')
+    if sys.platform != 'darwin' or bundle != 'com.apple.finder':
+        return {}
+    try:
+        result = subprocess.run(['osascript', '-e', FINDER_FACTS_SCRIPT, bundle],
+                                capture_output=True, text=True, timeout=1)
+        lines = result.stdout.strip().splitlines()
+        if result.returncode == 0 and len(lines) >= 2:
+            return dict(zip(('target', 'view', 'sort'), (line[:1024] for line in lines)))
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return {}
+
+
 class MacDesktopBridge:
     def __init__(self, directory):
         from .paths import bundled_helper
@@ -100,7 +132,11 @@ class MacDesktopBridge:
 
     def sample_targets(self, bundle_id=None):
         """A sample plus every clickable target in the window (computer-task steps only)."""
-        return self.call('--targets', *(('--observe-app', bundle_id) if bundle_id else ()))
+        value = self.call('--targets', *(('--observe-app', bundle_id) if bundle_id else ()))
+        facts = finder_facts(value)
+        if facts:
+            value['finder'] = facts
+        return value
 
     def request_access(self):
         return self.call('--request-access')
