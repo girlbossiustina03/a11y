@@ -280,8 +280,8 @@ class OcrTests(unittest.TestCase):
 class PlatformToolTests(unittest.TestCase):
     def test_windows_task_grammar_omits_unimplemented_new_window(self):
         from companion.computer_task import schema_for
-        windows = schema_for('Windows', False)['anyOf'][0]['properties']['action']['anyOf']
-        mac = schema_for('macOS', False)['anyOf'][0]['properties']['action']['anyOf']
+        windows = schema_for('Windows')['anyOf'][0]['properties']['action']['anyOf']
+        mac = schema_for('macOS')['anyOf'][0]['properties']['action']['anyOf']
         kinds = lambda variants: {kind for v in variants for kind in v['properties']['type']['enum']}
         self.assertNotIn('new_window', kinds(windows))
         self.assertIn('new_window', kinds(mac))

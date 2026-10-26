@@ -109,8 +109,7 @@ class NativeTests(unittest.TestCase):
     def test_opening_actions_execute_without_an_extra_confirmation_button(self):
         for kind in ('launch_app', 'browse_url', 'focus_app', 'new_window'):
             action = {'type': kind, 'bundle_id': 'com.apple.Safari', 'label': 'Open Safari'}
-            response = {'message': 'Open Safari…', 'sources': [], 'workflow': None,
-                        'target': None, 'desktop_action': action}
+            response = {'message': 'Open Safari…', 'target': None, 'desktop_action': action}
             with patch.object(self.window, 'execute_desktop_action') as execute:
                 self.window.received(response)
                 self.qt.processEvents()
@@ -121,14 +120,12 @@ class NativeTests(unittest.TestCase):
         # The user asked for app open/close/quit without a confirmation step.
         action = {'type': 'close_window', 'window_id': 'test:0', 'label': 'Close window'}
         with patch.object(self.window, 'execute_desktop_action') as execute:
-            self.window.received({'message': 'Close window…', 'sources': [], 'workflow': None,
-                                  'target': None, 'desktop_action': action})
+            self.window.received({'message': 'Close window…', 'target': None, 'desktop_action': action})
             self.qt.processEvents()
             execute.assert_called_once_with(action)
         press = {'type': 'press_control', 'control_id': 'control-0', 'label': 'Delete'}
         with patch.object(self.window, 'execute_desktop_action') as execute:
-            self.window.received({'message': 'Ready to press Delete. Confirm below.', 'sources': [], 'workflow': None,
-                                  'target': None, 'desktop_action': press})
+            self.window.received({'message': 'Ready to press Delete. Confirm below.', 'target': None, 'desktop_action': press})
             self.qt.processEvents()
             execute.assert_not_called()
         self.assertEqual(self.window.pending_desktop_action, press)
@@ -137,7 +134,7 @@ class NativeTests(unittest.TestCase):
         area = self.window.mascot.screen().geometry()
         frame = {'screen': {'x': area.x(), 'y': area.y(), 'width': area.width(), 'height': area.height()},
                  'captured_monotonic': time.monotonic()}
-        response = {'message': 'Click Battery.', 'sources': [], 'workflow': None, 'target': None,
+        response = {'message': 'Click Battery.', 'target': None,
                     'visual_capture': frame, 'task_step': True,
                     'desktop_action': {'type': 'click_point', 'x': .4, 'y': .5, 'label': 'Battery',
                                        'capture_guard': {'synthetic': True}}}
@@ -238,6 +235,7 @@ class NativeTests(unittest.TestCase):
     def test_local_screen_consent_never_covers_claude(self):
         from companion.claude import ClaudeProvider
         from companion.provider import AIConfig
+        from companion.ollama import OllamaProvider
         self.window.access_preferences.approve('screen_vision')
         self.window.access_preferences.approve('cloud_ai')
         self.window.vision.set_enabled(True)
@@ -336,7 +334,6 @@ class NativeTests(unittest.TestCase):
         self.assertIn('Opened https://youtube.com', self.window.mascot.bubble.toPlainText())
         self.assertTrue(self.window.mascot.isVisible())
 
-    @patch.dict('os.environ', {'A11Y_TEXT_PASS': '1'})  # the text pass is opt-in
     def test_fast_task_reobserves_after_each_action_and_pauses_before_enter(self):
         import base64
         from copy import deepcopy
@@ -400,7 +397,7 @@ class NativeTests(unittest.TestCase):
             self.assertEqual('The requested result is visible.', self.window.mascot.bubble.toPlainText())
             for call in self.service.provider.complete_structured.call_args_list:
                 self.assertIn('Find accessibility help', call.args[1][0]['content'])
-                self.assertIsNone(call.kwargs['image_data'])
+                self.assertTrue(call.kwargs['image_data'].startswith('data:image/png;base64,'))
         self.assertIsNone(self.window.pending_desktop_action)
 
     def test_cloud_messages_and_history_record_the_same_task_text(self):
@@ -639,7 +636,7 @@ class NativeTests(unittest.TestCase):
         self.assertIsNone(character.hop_started)
         self.assertFalse(character.anim_timer.isActive())
         self.assertEqual(character.current_face(), faces.face(self.window.mascot.skin, 'idle', 0))
-        with patch.object(self.service.adaptation, 'effective', return_value={'reduced_motion': True}):
+        with patch.object(self.service.preferences, 'effective', return_value={'reduced_motion': True}):
             done = []
             self.window.animate_companion_to(self.window.mascot.pos()+QPoint(300, 0), finished=lambda: done.append(1))
             self.qt.processEvents()
@@ -803,51 +800,6 @@ class NativeTests(unittest.TestCase):
         self.assertFalse(self.window.isVisible())
         self.assertTrue(self.window.mascot.isVisible())
         self.assertIn('Hey!', self.window.mascot.bubble.toPlainText())
-        self.window.mascot_action('setup:restart')
-        self.qt.processEvents()
-        self.window.mascot.input.setText('Sam')
-        QTest.keyClick(self.window.mascot.input, Qt.Key.Key_Return)
-        self.qt.processEvents()
-        self.assertIn('Nice to meet you, Sam', self.window.mascot.bubble.toPlainText())
-        self.assertFalse(self.window.isVisible())
-
-    def test_complete_intro_through_actual_mascot_controls(self):
-        self.window.mascot_action('setup:restart')
-        self.qt.processEvents()
-        for value in ['Sam', 'Engineer']:
-            self.window.mascot.input.setText(value)
-            QTest.keyClick(self.window.mascot.input, Qt.Key.Key_Return)
-            self.qt.processEvents()
-        for action in ['setup:choice:"concise"', 'setup:choice:"one_step"',
-                       'setup:choice:"keyboard"', 'setup:choice:true', 'setup:choice:false']:
-            self.choose(action)
-        self.assertIn('Save these settings?', self.window.mascot.bubble.toPlainText())
-        self.choose('setup:save')
-        self.assertIn('We’re all set, Sam', self.window.mascot.bubble.toPlainText())
-        self.assertEqual(self.service.adaptation.effective(self.service.identity)['detail'], 'concise')
-        self.assertFalse(self.window.mascot.character.anim_timer.isActive())
-        self.assertFalse(self.window.isVisible())
-        self.assertEqual(self.provider.calls, [])
-
-    def test_mascot_plan_uses_worker_then_confirms_task_without_opening_panel(self):
-        self.window.mascot_action('setup:later')
-        self.qt.processEvents()
-        self.window.mascot.input.setText('Help me set up my development environment')
-        self.window.mascot_action('plan')
-        self.qt.processEvents()
-        deadline = time.monotonic()+3
-        while self.window.worker.isRunning() and time.monotonic() < deadline:
-            self.qt.processEvents()
-            QTest.qWait(5)
-        self.qt.processEvents()
-        self.assertEqual(len(self.service.state()['workflows']), 1)
-        self.assertTrue(self.window.mascot.compact)
-        self.assertFalse(self.window.isVisible())
-        self.window.mascot_action('confirm')
-        self.qt.processEvents()
-        self.assertEqual(self.service.state()['workflows'][0]['current_step'], 1)
-        self.assertTrue(self.window.mascot.compact)
-
     def test_settings_close_leaves_companion_available(self):
         self.window.reveal()
         self.qt.processEvents()
@@ -933,7 +885,6 @@ class NativeTests(unittest.TestCase):
         self.assertFalse(self.window.isVisible())
 
     def test_multiline_composer_enter_submits_shift_enter_adds_line(self):
-        self.window.mascot_action('setup:later')
         self.qt.processEvents()
         composer = self.window.mascot.input
         composer.setText('First line')
@@ -960,6 +911,7 @@ class NativeTests(unittest.TestCase):
     def test_enabled_vision_sends_fresh_pixels_from_worker(self):
         from companion.ollama import OllamaProvider
         from companion.provider import AIConfig
+        from companion.ollama import OllamaProvider
         provider = OllamaProvider(AIConfig(base_url='http://127.0.0.1:11434', model='local-vision'))
         # Hermetic: never ask a real Ollama (CI images may run one) about this made-up model.
         provider.metadata['local-vision'] = {'capabilities': ['completion', 'vision']}
@@ -1012,7 +964,7 @@ class NativeTests(unittest.TestCase):
         self.assertIn('permission denied', self.window.mascot.bubble.toPlainText())
 
     def test_confirmed_move_action_repositions_only_the_companion(self):
-        self.service.adaptation.set_explicit(self.service.identity, {'reduced_motion': True}, True)
+        self.service.preferences.set_explicit(self.service.identity, {'reduced_motion': True})
         self.window.pending_desktop_action = {'type': 'move_companion', 'destination': 'left_edge', 'label': 'Move left'}
         self.window.desktop_action('desktop:apply')
         self.qt.processEvents()
@@ -1144,7 +1096,7 @@ class NativeTests(unittest.TestCase):
         mascot = self.window.mascot
         mascot.collapse_chat()
         self.qt.processEvents()
-        with patch.object(self.service.adaptation, 'effective', return_value={'reduced_motion': False}):
+        with patch.object(self.service.preferences, 'effective', return_value={'reduced_motion': False}):
             start = QRect(mascot.geometry())
             target = mascot.pos()-QPoint(300, 0)
             done, widest = [], [0]
@@ -1169,7 +1121,7 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(set(grouped), {'A11y', 'Chat', 'View'})
         self.assertCountEqual(leaves(mascot.menu_entries()), leaves([entry for group in grouped.values() for entry in group]))
         actions = [entry[1] for entry in leaves(mascot.menu_entries())]
-        self.assertEqual(set(actions), {'talk', 'reply', 'computer:prompt', 'computer:stop', 'confirm', 'tasks',
+        self.assertEqual(set(actions), {'talk', 'reply', 'computer:prompt', 'computer:stop',
                                       'settings', 'setup:wizard', 'readiness', 'quit', 'vision:toggle', 'voice:toggle'} |
                          {'face:'+key for key in faces.SKIN_NAMES})
         menu = QMenu()
@@ -1292,9 +1244,9 @@ class NativeTests(unittest.TestCase):
         self.assertNotIn(character.current_face(), faces.SKINS[self.window.mascot.skin]['sleeping'])
 
     def test_unconfigured_ai_error_is_shown_inside_mascot(self):
-        from companion.provider import AIConfig, ChatProvider
-        self.service.provider = ChatProvider(AIConfig())
-        self.window.mascot_action('setup:later')
+        from companion.provider import AIConfig
+        from companion.ollama import OllamaProvider
+        self.service.provider = OllamaProvider(AIConfig())
         self.qt.processEvents()
         self.window.mascot.input.setText('Hello')
         QTest.keyClick(self.window.mascot.input, Qt.Key.Key_Return)
@@ -1303,7 +1255,7 @@ class NativeTests(unittest.TestCase):
             self.qt.processEvents()
             QTest.qWait(5)
         self.qt.processEvents()
-        self.assertIn('AI is not configured', self.window.mascot.bubble.toPlainText())
+        self.assertIn('Select a local model in Settings', self.window.mascot.bubble.toPlainText())
         self.assertFalse(self.window.mascot.busy)
         self.assertFalse(self.window.isVisible())
 
@@ -1319,7 +1271,7 @@ class NativeTests(unittest.TestCase):
         wizard.fields['detail'].setCurrentIndex(wizard.fields['detail'].findData('concise'))
         wizard.advance()
         self.assertEqual(self.window.introduction.user_details()['display_name'], 'Sam')
-        self.assertEqual(self.service.adaptation.effective(self.service.identity)['detail'], 'concise')
+        self.assertEqual(self.service.preferences.effective(self.service.identity)['detail'], 'concise')
         wizard.advance()
         wizard.advance()
         self.assertFalse(wizard.isVisible())
@@ -1405,7 +1357,6 @@ class NativeTests(unittest.TestCase):
         self.assertFalse(self.window.desktop_diagnostics.content.isHidden())
         self.assertEqual(toggle.accessibleDescription(), 'Expanded')
         self.assertTrue(self.window.history_tools.content.isHidden())
-        self.assertTrue(self.window.document_tools.content.isHidden())
 
     def test_model_picker_applies_without_opening_technical_fields(self):
         self.window.connection_details.toggle.setChecked(False)
@@ -1458,13 +1409,12 @@ class NativeTests(unittest.TestCase):
         self.assertIsNone(self.window.pending_desktop_action)
 
     def test_left_then_right_requests_move_without_reusing_old_target(self):
-        self.service.adaptation.set_explicit(self.service.identity, {'reduced_motion': True}, False)
+        self.service.preferences.set_explicit(self.service.identity, {'reduced_motion': True})
         self.service.desktop_session.append({'role': 'assistant',
-            'content': 'The left Terminal close button is red.', 'source_documents': []})
+            'content': 'The left Terminal close button is red.'})
         for request, destination in [('move to the left of the screen', 'left_edge'),
                                      ('move to the right of the screen', 'right_edge')]:
-            self.provider.invalid = {'message': 'I’ll move to that edge.', 'source_ids': [],
-                'workflow': None, 'target': None,
+            self.provider.invalid = {'message': 'I’ll move to that edge.', 'target': None,
                 'desktop_action': {'type': 'move_companion', 'destination': destination}}
             self.window.mascot_submit(request, 'chat')
             deadline = time.monotonic()+3
@@ -1481,7 +1431,7 @@ class NativeTests(unittest.TestCase):
 
 
     def test_upper_left_changes_both_axes_and_precise_point_centers_character(self):
-        self.service.adaptation.set_explicit(self.service.identity, {'reduced_motion': True}, False)
+        self.service.preferences.set_explicit(self.service.identity, {'reduced_motion': True})
         mascot = self.window.mascot
         self.window.move_companion('bottom_right')
         self.window.move_companion('top_left')
@@ -1493,11 +1443,10 @@ class NativeTests(unittest.TestCase):
         self.assertAlmostEqual(mascot.y()+mascot.height()/2, full.center().y(), delta=2)
 
     def test_visual_point_response_uses_its_capture_and_rejects_expired_capture(self):
-        self.service.adaptation.set_explicit(self.service.identity, {'reduced_motion': True}, False)
+        self.service.preferences.set_explicit(self.service.identity, {'reduced_motion': True})
         screen = self.window.mascot.screen()
         area = screen.geometry()
-        response = {'message': 'Moving toward the drawing.', 'sources': [], 'workflow': None,
-            'target': None, 'desktop_action': {'type': 'move_to_point', 'basis': 'image',
+        response = {'message': 'Moving toward the drawing.', 'target': None, 'desktop_action': {'type': 'move_to_point', 'basis': 'image',
                 'x': .5, 'y': .5, 'label': 'Apple drawing'},
             'visual_capture': {'screen': {'x': area.x(), 'y': area.y(), 'width': area.width(), 'height': area.height()},
                                'captured_monotonic': time.monotonic()}}
@@ -1517,7 +1466,7 @@ class NativeTests(unittest.TestCase):
         self.window.last_user_request = ('Press New Folder', 'assist', True)
         result = {'type': 'press_control', 'label': 'New Folder', 'status': 'submitted', 'task_completed': False}
         self.provider.invalid = {'request_kind': 'answer', 'message': 'The app changed; please check the folder.',
-            'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
+            'target': None, 'desktop_action': None}
         with patch('companion.desktop.ComputerUse.execute_confirmed', return_value=result) as execute:
             self.window.pending_desktop_action = {'type': 'press_control', 'control_id': 'control-0', 'label': 'New Folder'}
             self.window.desktop_action('desktop:apply')
@@ -1540,7 +1489,7 @@ class NativeTests(unittest.TestCase):
         self.window.vision.set_enabled(True)
         self.service.last_action_result = {'type': 'focus_app', 'status': 'submitted', 'task_completed': False}
         self.provider.invalid = {'request_kind': 'answer', 'message': 'I can inspect app metadata, but screen capture is unavailable.',
-            'source_ids': [], 'workflow': None, 'target': None, 'desktop_action': None}
+            'target': None, 'desktop_action': None}
         with patch.object(self.window.vision, 'capture', side_effect=RuntimeError('Companion exclusion unavailable')):
             self.window.input.setPlainText('Open Terminal')
             self.window.ask(mode='verify', from_mascot=True)

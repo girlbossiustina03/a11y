@@ -1,13 +1,12 @@
-"""Launch the native companion. Use server.py for the dependency-free web fallback."""
+"""Launch the native desktop companion."""
 import argparse
 import os
 import sys
 
 
 def main():
-    parser = argparse.ArgumentParser(description='A11y adaptive workplace companion')
+    parser = argparse.ArgumentParser(description='A11y desktop accessibility companion')
     parser.add_argument('--panel', action='store_true', help='Also open the settings panel at launch')
-    parser.add_argument('--admin', action='store_true', help='Enable local company document management')
     parser.add_argument('--self-test', metavar='RESULT_JSON', help='Check the packaged app (HTTPS, voice, Qt, helpers) and exit')
     args = parser.parse_args()
     from companion.paths import data_dir, frozen, use_bundled_certificates
@@ -35,10 +34,10 @@ def main():
         from companion.desktop import CompanionWindow
     except ImportError as e:
         raise SystemExit('Install native dependencies with: python3 -m pip install -r requirements.txt\n'
-                         'Or launch the browser fallback: python3 server.py\n'+str(e))
+                         +str(e))
     from companion.service import Companion
     from companion.instance import DesktopInstance, build_id
-    service = Companion.from_env(admin=args.admin)
+    service = Companion.from_env()
     try:
         instance = DesktopInstance(service.store.directory)
     except RuntimeError as error:

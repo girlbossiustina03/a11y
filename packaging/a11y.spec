@@ -6,8 +6,7 @@ from PyInstaller.utils.hooks import collect_all, copy_metadata
 
 ROOT = Path(SPECPATH).parent
 ICONS = ROOT/'packaging'/'icons'
-datas = [(str(ROOT/'native'/'DesktopBridge.swift'), 'native'), (str(ROOT/'native'/'ScreenBridge.swift'), 'native'),
-         (str(ROOT/'examples'), 'examples'), (str(ROOT/'index.html'), '.'), (str(ROOT/'app.js'), '.'), (str(ROOT/'style.css'), '.')]
+datas = [(str(ROOT/'native'/'DesktopBridge.swift'), 'native'), (str(ROOT/'native'/'ScreenBridge.swift'), 'native')]
 datas.append((str(ICONS/'A11y.png'), 'packaging/icons'))
 binaries = []
 # Stamp the commit so a running packaged app reports which version it is (see instance.build_id).

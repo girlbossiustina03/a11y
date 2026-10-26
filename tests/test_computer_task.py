@@ -118,39 +118,15 @@ class TaskTests(unittest.TestCase):
                           {'text': 'Wi-Fi', 'x': .2, 'y': .45, 'width': .2, 'height': .1},
                           {'text': 'Bluetooth', 'x': .2, 'y': .6, 'width': .2, 'height': .1}])
 
-    @patch.dict('os.environ', {'A11Y_TEXT_PASS': '1'})  # the text pass is opt-in
-    def test_ocr_step_uses_text_only_inference_but_keeps_a_screenshot_click_guard(self):
+
+    def test_image_inference_keeps_ocr_and_screenshot_click_guard(self):
         self.enable_ocr()
         result = self.respond({'type': 'click_point', 'x': .25, 'y': .35, 'label': 'Battery'})
-        self.assertIsNone(self.provider.complete_structured.call_args.kwargs['image_data'])
-        self.assertIn('Battery', self.provider.complete_structured.call_args.args[1][1]['content'])
+        call = self.provider.complete_structured.call_args
+        self.assertEqual(call.kwargs['image_data'], 'data:image/png;base64,synthetic')
+        self.assertIn('Battery', call.args[1][1]['content'])
         self.assertIn('capture_guard', result['action'])
-        self.assertTrue(self.vision.capture.call_args.kwargs['fast_text'])
         self.vision.click_guard.assert_called_once()
-
-    @patch.dict('os.environ', {'A11Y_TEXT_PASS': '1'})  # the text pass is opt-in
-    def test_ocr_missing_icon_falls_back_to_full_image_once(self):
-        self.enable_ocr()
-        self.provider.complete_structured.side_effect = [
-            {'status': 'needs_vision', 'message': 'Need to inspect the icon.', 'risk': 'navigation', 'action': None},
-            {'status': 'action', 'message': 'Click icon.', 'risk': 'navigation',
-             'action': {'type': 'click_point', 'x': .8, 'y': .8, 'label': 'Icon'}}]
-        result = self.task.propose(self.desktop, self.vision, self.provider, {'x': 0, 'y': 0})
-        calls = self.provider.complete_structured.call_args_list
-        self.assertIsNone(calls[0].kwargs['image_data'])
-        self.assertEqual(calls[1].kwargs['image_data'], 'data:image/png;base64,synthetic')
-        self.assertEqual(result['action']['x'], .8)
-        self.assertEqual(self.vision.capture.call_count, 1)
-
-    @patch.dict('os.environ', {'A11Y_TEXT_PASS': '1'})  # the text pass is opt-in
-    def test_ocr_cannot_execute_an_ungrounded_point(self):
-        self.enable_ocr()
-        self.desktop.bridge.value['controls'] = []
-        self.provider.complete_structured.return_value = {'status': 'action', 'message': 'Click icon.', 'risk': 'navigation',
-            'action': {'type': 'click_point', 'x': .8, 'y': .8, 'label': 'Icon'}}
-        self.task.propose(self.desktop, self.vision, self.provider, {'x': 0, 'y': 0})
-        self.assertEqual(self.provider.complete_structured.call_count, 2)
-        self.assertIsNotNone(self.provider.complete_structured.call_args.kwargs['image_data'])
 
     def test_inspection_rejects_post_control_then_replans_to_activity(self):
         self.task.goal_mode = 'inspect'

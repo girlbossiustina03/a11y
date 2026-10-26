@@ -18,8 +18,7 @@ from test_desktop_context import FakeBridge, SAMPLE
 
 
 def response(**values):
-    return dict({'request_kind': 'move', 'message': 'I’ll move there.', 'source_ids': [],
-                 'workflow': None, 'target': None, 'desktop_action': None}, **values)
+    return dict({'request_kind': 'move', 'message': 'I’ll move there.', 'target': None, 'desktop_action': None}, **values)
 
 
 class MovementContracts(unittest.TestCase):
@@ -31,7 +30,7 @@ class MovementContracts(unittest.TestCase):
         ]:
             with self.subTest(destination=name):
                 raw = response(target=dict(zip(('x', 'y', 'width', 'height'), box), label=name))
-                result = validate_response(raw, set(), has_screen=True, desktop=object())
+                result = validate_response(raw, has_screen=True, desktop=object())
                 self.assertIsNone(result['target'])
                 action = result['desktop_action']
                 self.assertEqual(action['type'], 'move_to_point')
@@ -42,7 +41,7 @@ class MovementContracts(unittest.TestCase):
     def test_highlight_request_remains_a_highlight(self):
         result = validate_response(response(request_kind='highlight',
             target={'label': 'Clock', 'x': .95, 'y': 0, 'width': .08, 'height': .04}),
-            set(), has_screen=True)
+             has_screen=True)
         self.assertIsNone(result.get('desktop_action'))
         self.assertAlmostEqual(result['target']['width'], .05)
 
@@ -57,18 +56,18 @@ class MovementContracts(unittest.TestCase):
 
     def test_named_object_without_pixels_cannot_become_a_pretend_corner_search(self):
         with self.assertRaisesRegex(ValidationError, 'corner is not a search action'):
-            validate_response(response(request_kind='move_object', desktop_action={'type': 'move_companion', 'destination': 'top_left'}), set(), desktop=object())
-        result = validate_response(response(request_kind='move_object', desktop_action={'type': 'request_screen'}), set(), desktop=object())
+            validate_response(response(request_kind='move_object', desktop_action={'type': 'move_companion', 'destination': 'top_left'}), desktop=object())
+        result = validate_response(response(request_kind='move_object', desktop_action={'type': 'request_screen'}), desktop=object())
         self.assertEqual(result['desktop_action']['type'], 'request_screen')
 
     def test_movement_without_action_cannot_claim_to_execute(self):
         with self.assertRaisesRegex(ValidationError, 'Movement needs'):
-            validate_response(response(), set(), desktop=object())
+            validate_response(response(), desktop=object())
 
     def test_visual_movement_without_pixels_is_rejected(self):
         with self.assertRaises(ValidationError):
             validate_response(response(target={'label': 'Logo', 'x': .5, 'y': .5, 'width': .1, 'height': .1}),
-                              set(), desktop=object())
+                               desktop=object())
 
 
 class ComputerServiceTests(CompanionFixture, unittest.TestCase):
@@ -99,7 +98,6 @@ class ComputerServiceTests(CompanionFixture, unittest.TestCase):
         self.assertIsNone(result['target'])
         self.assertEqual(model.call_count, 2)
         self.assertEqual(list(self.app.desktop_session), [])
-        self.assertEqual(self.store.workflows(self.employee), [])
 
     def test_press_proposal_has_exact_control_and_app_for_confirmation(self):
         raw = response(request_kind='act', desktop_action={'type': 'press_control', 'control_id': 'control-0'})
@@ -181,7 +179,7 @@ class AppActionTests(unittest.TestCase):
     def test_model_cannot_substitute_focus_for_open_new_window_or_quit(self):
         for requested in ('launch_app', 'new_window', 'quit_app', 'close_window'):
             with self.subTest(requested=requested), self.assertRaisesRegex(ValidationError, 'not an equivalent operation'):
-                validate_response(response(request_kind=requested, desktop_action={'type': 'focus_app', 'bundle_id': 'com.apple.Terminal'}), set(), desktop=self.monitor)
+                validate_response(response(request_kind=requested, desktop_action={'type': 'focus_app', 'bundle_id': 'com.apple.Terminal'}), desktop=self.monitor)
 
     def test_installed_app_launch_is_distinct_from_running_app_focus(self):
         action = self.monitor.authorize_action({'type': 'launch_app', 'bundle_id': 'com.stremio.test'})

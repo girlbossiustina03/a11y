@@ -295,7 +295,7 @@ class Mascot(QWidget):
         self.choice_area.setWidget(self.choice_box)
         self.choice_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         reply.addWidget(self.choice_area)
-        # The fuller conversation (setup questions and plans) adds these controls.
+        # Expanded replies add these controls.
         self.header_widget = QWidget()
         header = QHBoxLayout(self.header_widget)
         header.setContentsMargins(0, 0, 0, 0)
@@ -1003,7 +1003,7 @@ class Mascot(QWidget):
             'A11y': [('Settings…', 'settings'), ('Personalize and set up access…', 'setup:wizard'),
                      ('Set up AI and voice…', 'readiness'), ('Quit companion', 'quit')],
             'Chat': [('Talk to me', 'talk'), ('Show last reply', 'reply'), ('Computer task…', 'computer:prompt'),
-                     ('Stop computer task', 'computer:stop'), ('Mark current step done', 'confirm'), ('My saved tasks', 'tasks')],
+                     ('Stop computer task', 'computer:stop')],
             'View': [('Face', [(name, 'face:'+key, key == self.skin) for key, name in faces.SKIN_NAMES.items()]),
                      ('Pause screen vision' if self.vision_button.text() == 'Screen on' else 'Enable screen vision…', 'vision:toggle'),
                      ('Turn off voice' if getattr(self, 'voice_on', False) else 'Turn on voice (“Hey Ally”)…', 'voice:toggle')],
@@ -1014,7 +1014,7 @@ class Mascot(QWidget):
         groups = self.grouped_menu_entries()
         entries = {entry[1] if isinstance(entry[1], str) else 'Face': entry
                    for group in groups.values() for entry in group}
-        order = ('talk', 'computer:prompt', 'computer:stop', 'reply', 'tasks', 'confirm', None,
+        order = ('talk', 'computer:prompt', 'computer:stop', 'reply', None,
                  'vision:toggle', 'voice:toggle', 'setup:wizard', 'readiness', None,
                  'Face', 'settings', None, 'quit')
         return [entries[key] if key else None for key in order]

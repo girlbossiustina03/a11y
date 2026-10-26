@@ -16,7 +16,7 @@ class OllamaTests(unittest.TestCase):
             request.side_effect = [
                 {'capabilities': ['completion']},
                 {'done': True, 'done_reason': 'stop', 'message': {'content': json.dumps({
-                    'message': 'A model-generated answer', 'source_ids': [], 'workflow': None, 'target': None})}}]
+                    'message': 'A model-generated answer', 'target': None})}}]
             result = provider.complete('system', [{'role': 'user', 'content': 'Earlier question'},
                 {'role': 'assistant', 'content': 'Earlier reply'}, {'role': 'user', 'content': 'Follow up'}])
             args = request.call_args.args

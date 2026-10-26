@@ -12,7 +12,7 @@ import json
 import time
 import unittest
 from unittest.mock import Mock, patch
-from companion.computer_task import ComputerTask, SYSTEM, TEXT_PASS, IMAGE_PASS
+from companion.computer_task import ComputerTask, SYSTEM, IMAGE_PASS
 from companion.desktop_context import DesktopContext
 from companion.request_plan import preserve_desktop_goal, highlight_only
 from test_desktop_context import FakeBridge, SAMPLE
@@ -134,22 +134,6 @@ class TeamsInspectionTests(Harness):
         self.propose(task)
         self.assertIn('inspection-only', self.provider.complete_structured.call_args.args[1][-1]['content'])
 
-    @patch.dict('os.environ', {'A11Y_TEXT_PASS': '1'})  # the text pass is opt-in
-    def test_text_and_image_passes_share_the_cacheable_prefix(self):
-        task = ComputerTask('Open Teams and check whether I have tasks', automatic=True, goal_mode='inspect')
-        self.provider.complete_structured.side_effect = [
-            {'status': 'needs_vision', 'message': 'Need the icon.', 'risk': 'navigation', 'action': None},
-            {'status': 'action', 'message': 'Open Activity.', 'risk': 'navigation',
-             'action': {'type': 'click_point', 'x': .05, 'y': .21, 'label': 'Activity'}}]
-        self.propose(task)
-        text, image = self.provider.complete_structured.call_args_list
-        self.assertEqual(text.args[0], SYSTEM)
-        self.assertEqual(image.args[0], SYSTEM)
-        self.assertEqual(text.args[1][:-1], image.args[1][:-1])
-        self.assertIn(TEXT_PASS, text.args[1][-1]['content'])
-        self.assertIn(IMAGE_PASS, image.args[1][-1]['content'])
-        self.assertIsNone(text.kwargs['image_data'])
-        self.assertIs(text.kwargs['cancel'], task.cancelled)
 
     def test_scope_from_the_intent_call_avoids_a_classifier_call(self):
         class Provider:
@@ -168,7 +152,7 @@ class TeamsInspectionTests(Harness):
         legacy.propose(self.desktop, self.vision, Provider(), {'x': 0, 'y': 0})
         self.assertEqual(Provider.classified, 1)
 
-    @patch.dict('os.environ', {'A11Y_TEXT_PASS': '1'})  # the text pass is opt-in
+
     def test_step_timing_is_recorded_without_screen_content(self):
         task = ComputerTask('check tasks', goal_mode='inspect')
         task.receipts.append({'type': 'press_control'})
@@ -176,7 +160,7 @@ class TeamsInspectionTests(Harness):
         self.propose(task)
         stage = task.timings[-1]
         self.assertEqual(stage['text_regions'], 5)
-        self.assertEqual([call['mode'] for call in stage['model']], ['text'])
+        self.assertEqual([call['mode'] for call in stage['model']], ['image'])
         self.assertNotIn('Private', repr(stage))
 
 
@@ -220,16 +204,6 @@ class LiveTeamsLogTests(Harness):
         super().setUp()
         self.desktop.bridge.value['controls'] = []
 
-    @patch.dict('os.environ', {'A11Y_TEXT_PASS': '1'})  # the text pass is opt-in
-    def test_text_pass_is_skipped_for_an_app_after_it_failed_once(self):
-        task = ComputerTask('Open Teams and check tasks', automatic=True, goal_mode='inspect')
-        need = {'status': 'needs_vision', 'message': 'Need pixels.', 'risk': 'navigation', 'action': None}
-        self.provider.complete_structured.side_effect = [need, self.activity, self.activity]
-        self.propose(task)
-        task.record({'type': 'click_point', 'label': 'Something else', 'status': 'submitted'})
-        self.propose(task)
-        modes = [call.kwargs['image_data'] is not None for call in self.provider.complete_structured.call_args_list]
-        self.assertEqual(modes, [False, True, True])
 
     def test_third_identical_click_is_corrected_and_then_stopped(self):
         task = ComputerTask('Open Teams and check tasks', automatic=True, goal_mode='inspect')
@@ -494,7 +468,7 @@ class LiveRoutingTests(unittest.TestCase):
     def test_earlier_requests_are_sent_only_to_resolve_a_reference(self):
         # After two calendar questions the same model read the calendar for a Teams question.
         for request in ('read my second last email', "what's on my calendar tomorrow"):
-            self.app.desktop_session.append({'role': 'user', 'content': request, 'source_documents': []})
+            self.app.desktop_session.append({'role': 'user', 'content': request})
         self.route('computer_task', 'check if I have new notifications on Teams')
         self.app.prepare_request('check if I have new notifications on Teams')
         self.assertEqual(self.provider.interpret_request.call_args.args[1], [])
@@ -646,7 +620,7 @@ class ReviewFindingTests(LiveRoutingTests):
         self.assertEqual(upcoming('2026-10-22T18:59', 'call mom at 18:59', now), '2026-10-22T18:59')  # no crash at one day
 
     def test_follow_ups_without_a_pronoun_still_get_the_earlier_request(self):
-        self.app.desktop_session.append({'role': 'user', 'content': "what's on my calendar today", 'source_documents': []})
+        self.app.desktop_session.append({'role': 'user', 'content': "what's on my calendar today"})
         self.route('read_calendar', 'tomorrow')
         self.app.prepare_request('what about tomorrow?')
         self.assertEqual(self.provider.interpret_request.call_args.args[1], ["what's on my calendar today"])
@@ -702,11 +676,6 @@ class ScreenDescriptionTests(LiveRoutingTests):
         self.assertEqual(self.provider.complete_structured.call_args.kwargs['schema'], SCREEN_SCHEMA)
         self.assertEqual(self.provider.complete_structured.call_args.kwargs['image_data'], 'data:image/png;base64,FRAME')
         observation = json.loads(messages[-2]['content'])
-        # A follow-up gets the earlier turn, never one built from company documents no longer allowed.
-        self.app.desktop_session.extend([{'role': 'user', 'content': 'what is in the handbook', 'source_documents': ['revoked-doc']},
-                                         {'role': 'assistant', 'content': 'Secret policy text.', 'source_documents': ['revoked-doc']}])
-        self.app.ask('what does that say on my screen', mode='assist', image_data='data:image/png;base64,FRAME', visual_context={})
-        self.assertNotIn('Secret policy text.', json.dumps(self.provider.complete_structured.call_args.args[1]))
         self.assertEqual(observation['visible_windows'], ['Mail — Inbox'])
         self.assertNotIn('installed_apps', messages[-2]['content'])
         self.assertLess(len(system)+len(messages[-2]['content']), 3000)
@@ -806,16 +775,13 @@ class ConversationTests(LiveRoutingTests):
         self.route('read_mail', '1')
         self.assertEqual(self.app.prepare_request('are there any notifications that require my attention')['operation'], 'computer_task')
 
-    def test_memory_keeps_no_email_text_and_no_revoked_company_answers(self):
-        self.app.remember('user', 'what is in the handbook', ['revoked-doc'])
-        self.app.remember('assistant', 'Secret policy text.', ['revoked-doc'])
+    def test_memory_keeps_no_email_text(self):
         with patch('companion.mail_reader.newest', return_value=('Ana <a@x>', 'Demo', 'Friday', 'The secret body.')):
             self.app.ask('read my last email')
         self.assertNotIn('secret body', json.dumps(list(self.app.conversation)))
         self.assertIn('Demo', self.app.conversation[-1]['content'])
         self.route('answer', reply='Okay.')
         self.app.ask('ok')
-        self.assertNotIn('Secret policy text.', json.dumps(self.provider.complete_structured.call_args.args[1]))
 
 
 class ConversationPrivacyTests(ConversationTests):
@@ -831,14 +797,6 @@ class ConversationPrivacyTests(ConversationTests):
         self.app.forget_desktop()
         self.assertNotIn('Ana mentioned', json.dumps(list(self.app.conversation)))
         self.assertIn('check my notifications', json.dumps(list(self.app.conversation)))
-
-    def test_company_answers_are_never_replayed_from_memory(self):
-        self.app.remember('user', 'what does the handbook say about leave', ['doc-1'])
-        self.app.remember('assistant', 'Leave needs two weeks notice.', ['doc-1'])
-        self.route('answer', reply='Okay.')
-        with patch.object(self.app, 'allowed_documents', return_value={'doc-1'}):
-            self.app.ask('ok')
-        self.assertNotIn('two weeks', json.dumps(self.provider.complete_structured.call_args.args[1]))
 
     def test_a_request_that_mentions_the_conversation_still_acts(self):
         self.app.remember('user', 'my mom is visiting Friday')
@@ -1461,7 +1419,6 @@ class CalendarFallbackTests(unittest.TestCase):
                 bridge.calendar_events(1000, 2000)
 
 
-
 class BackLoopTests(unittest.TestCase):
     def test_reported_going_back_over_and_over_is_a_loop(self):
         # Live (v3 suite): "Go back" was clicked 13 times in a row; each page differed, so the
@@ -1476,7 +1433,6 @@ class BackLoopTests(unittest.TestCase):
         self.assertEqual(ComputerTask('go back two pages', automatic=True).repeats(back), 0)
         self.assertTrue(task.is_history({'type': 'press_key', 'key': 'cmd_['}))
         self.assertFalse(task.is_history({'type': 'click_point', 'label': 'Back to school sale'}))
-
 
 
 class QuestionsDoNotOpenTests(LiveRoutingTests):
@@ -1516,7 +1472,6 @@ class GoBackTests(unittest.TestCase):
         self.assertIsNone(HISTORY_GOAL.match('go back to the Teams tab and check my chat'))
 
 
-
 class RememberedRouteTests(unittest.TestCase):
     def test_a_finished_route_is_offered_for_a_similar_goal_only(self):
         import tempfile
@@ -1546,7 +1501,6 @@ class RememberedRouteTests(unittest.TestCase):
         self.assertEqual(task.worked_before['steps'][-1], 'click_point Sound')
 
 
-
 class V3RoundTwoTests(LiveRoutingTests):
     def test_reported_unread_count_comes_from_mail(self):
         # Live (v3): "how many unread emails do I have?" was a guessed number.
@@ -1565,7 +1519,6 @@ class V3RoundTwoTests(LiveRoutingTests):
     def test_reported_take_me_back_one_page_is_one_press(self):
         from companion.computer_task import HISTORY_GOAL
         self.assertEqual(HISTORY_GOAL.match('take me back one page').group('count'), 'one')
-
 
 
 class OwnAppTests(unittest.TestCase):
@@ -1616,7 +1569,6 @@ class V3RoundThreeTests(LiveRoutingTests):
         self.assertTrue(FINDER_SORT.search('show Downloads in Finder, newest added first'))
 
 
-
 class GoBackCountTests(unittest.TestCase):
     def test_reported_executed_presses_are_counted(self):
         # Live (v3): "go back in Safari" pressed ⌘[ 24 times; executed receipts carry only the label.
@@ -1624,7 +1576,6 @@ class GoBackCountTests(unittest.TestCase):
         task.record({'type': 'press_key', 'label': 'Press ⌘+[ in Safari', 'status': 'executed'})
         step = task.history_step(None, {'app': {'bundle_id': 'com.apple.Safari'}})
         self.assertEqual(step['status'], 'done')
-
 
 
 class SiteNotAppTests(unittest.TestCase):
@@ -1750,7 +1701,6 @@ class AppClickTests(unittest.TestCase):
         self.assertEqual(result['action']['type'], 'click_point')
 
 
-
 class ClickEffectTests(unittest.TestCase):
     def test_a_click_that_changed_nothing_is_reported_and_its_target_dropped(self):
         task = ComputerTask('turn on dark mode', automatic=True)
@@ -1794,7 +1744,6 @@ class RouteHygieneTests(unittest.TestCase):
             self.assertFalse(routes.remember('open the sound settings', [{'type': 'click_point', 'label': 'Sound', 'status': 'executed'}]))
 
 
-
 class LookUpOnSiteTests(LiveRoutingTests):
     def test_reported_weather_in_the_weather_app_opens_the_app(self):
         # Live (held-out): "Show me the Visibility details in Weather …" was answered with a forecast.
@@ -1811,7 +1760,6 @@ class LookUpOnSiteTests(LiveRoutingTests):
         self.assertEqual((plan['operation'], plan['target']), ('browser_open', 'https://en.wikipedia.org/w/index.php?search=Photosynthesis'))
         self.route('look_up', 'Ada Lovelace birth')
         self.assertEqual(self.app.prepare_request('when was Ada Lovelace born? check Wikipedia')['operation'], 'look_up')  # a question
-
 
 
 class WindowlessAppTests(unittest.TestCase):
@@ -2062,7 +2010,7 @@ class WindowlessAppTests(unittest.TestCase):
         self.assertFalse(needs_review(dict(drag, selects_text=True), 'navigation'))
         self.assertTrue(needs_review(dict(drag, selects_text=False), 'navigation'))   # could move a file to the Trash
         self.assertTrue(needs_review({'type': 'press_key', 'key': 'cmd_s'}, 'navigation'))  # saving: the user's OK
-        kinds = [v['properties']['type']['enum'][0] for v in schema_for('Darwin', False, target_ids=['t1', 't2'])['anyOf'][0]['properties']['action']['anyOf']]
+        kinds = [v['properties']['type']['enum'][0] for v in schema_for('Darwin', target_ids=['t1', 't2'])['anyOf'][0]['properties']['action']['anyOf']]
         self.assertIn('drag_target', kinds)
 
     def test_live_an_animated_target_is_still_the_same_named_element(self):

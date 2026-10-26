@@ -2,7 +2,7 @@
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import (QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                             QLineEdit, QComboBox, QPushButton, QCheckBox, QFormLayout, QStackedWidget)
-from .onboarding import QUESTIONS
+from .onboarding import FIELDS
 from .theme import panel_style
 
 
@@ -46,11 +46,11 @@ class SetupDialog(QDialog):
         page = self.add_page('How should I help?', 'Choose what feels comfortable. '
                              'You can change any of this later. I won’t infer a disability or diagnosis.')
         form = QFormLayout()
-        effective = owner.service.adaptation.effective(owner.service.identity)
-        defaults = dict(effective, learning_enabled=owner.service.adaptation.get(owner.service.identity)['learning_enabled'])
+        effective = owner.service.preferences.effective(owner.service.identity)
+        defaults = effective
         names = {'detail': 'Explanations', 'pacing': 'Task guidance', 'input': 'Navigation',
-                 'reduced_motion': 'Movement', 'learning_enabled': 'Learn from feedback'}
-        for key, _, options in QUESTIONS[2:]:
+                 'reduced_motion': 'Movement'}
+        for key, _, options in FIELDS[2:]:
             field = QComboBox()
             for title, value in options:
                 field.addItem(title, value)
@@ -134,19 +134,13 @@ class SetupDialog(QDialog):
     def advance(self):
         index = self.pages.currentIndex()
         if index == 1:
-            intro = self.owner.introduction
-            intro.start(restart=True)
-            for key in ('display_name', 'work_role'):
-                value = self.fields[key].text().strip()
-                intro.answer(value, skip=not value)
+            answers = dict(self.owner.introduction.get()['answers'])
+            answers.update({key: self.fields[key].text().strip() for key in ('display_name', 'work_role')})
+            self.owner.introduction.draft(answers)
         if index == 2:
-            intro = self.owner.introduction
-            intro.start(restart=True)
-            for key, _, options in QUESTIONS:
-                field = self.fields[key]
-                value = field.currentData() if options else field.text().strip()
-                intro.answer(value, skip=not options and not value)
-            intro.save()
+            answers = {key: self.fields[key].currentData() if options else self.fields[key].text().strip()
+                       for key, _, options in FIELDS}
+            self.owner.introduction.save(answers)
             self.owner.refresh()
         if index == 4:
             data = self.owner.introduction.get()

@@ -188,7 +188,7 @@ class VoiceConversationTests(unittest.TestCase):
         self.window.voice_heard('How do I start onboarding?')
         self.wait_for_worker()
         self.assertEqual(self.provider.contexts[-1]['request'], 'How do I start onboarding?')
-        self.assertIn('Follow the company onboarding instructions.', self.tts.spoken[-1])
+        self.assertIn('Here is some help.', self.tts.spoken[-1])
         self.assertIn('pause', self.voice.calls)
         self.settle()
         self.assertEqual(self.voice.calls[-1], 'listen')

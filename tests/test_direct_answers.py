@@ -49,14 +49,6 @@ class DirectAnswerServiceTests(CompanionFixture, unittest.TestCase):
         self.assertIsNone(result['desktop_action'])
         self.assertEqual(result['message'], 'China is in East Asia, bordering 14 countries.')
 
-    def test_company_questions_keep_the_cited_document_path(self):
-        provider = self.app.provider = StagedProvider('answer')
-        provider.interpret_request.return_value = {'operation': 'answer', 'app_name': '', 'target': '', 'reply': 'guess'}
-        provider.complete_structured.return_value = {'request_kind': 'answer', 'message': 'From the docs.', 'source_ids': [],
-                                                     'workflow': None, 'target': None, 'desktop_action': None}
-        with patch.object(self.app.knowledge, 'retrieve', return_value=[{'id': 'c1', 'document_id': 'd', 'title': 'VPN', 'ordinal': 1, 'content': 'x'}]):
-            result = self.app.ask('how do I set up the VPN?')
-        self.assertEqual(result['message'], 'From the docs.')
 
     def test_weather_is_answered_in_code_without_opening_anything(self):
         with patch.dict('os.environ', {'A11Y_WEB_ANSWERS': '1'}), \
@@ -87,8 +79,7 @@ class DirectAnswerServiceTests(CompanionFixture, unittest.TestCase):
     def test_reported_a_lookup_then_carries_on_with_the_rest(self):
         # Live (v3): the population was found, "write it in a new TextEdit document" was dropped.
         found = ('5.6 million', {'title': 'Norway', 'extract': '', 'url': ''})
-        with patch.dict('os.environ', {'A11Y_WEB_ANSWERS': '1'}), patch('companion.web_lookup.answer', return_value=found), \
-                patch.object(self.app.knowledge, 'retrieve', return_value=[]):  # the sample company docs mention documents
+        with patch.dict('os.environ', {'A11Y_WEB_ANSWERS': '1'}), patch('companion.web_lookup.answer', return_value=found):
             result = self.ask('look up the population of Norway and write it in a new TextEdit document',
                               {'operation': 'look_up', 'app_name': '', 'target': 'population of Norway',
                                'remaining_request': 'write it in a new TextEdit document'})
@@ -111,8 +102,7 @@ class DirectAnswerServiceTests(CompanionFixture, unittest.TestCase):
         self.assertIn('search for', result['message'])
         # Reported: "the speed of light in km per second" got "I couldn't find that online": the model's own answer.
         with patch.dict('os.environ', {'A11Y_WEB_ANSWERS': '1'}), patch('companion.web_lookup.answer', return_value=None), \
-                patch.object(self.app, 'converse', return_value='About 299,792 km per second.'), \
-                patch.object(self.app.knowledge, 'retrieve', return_value=[]):
+                patch.object(self.app, 'converse', return_value='About 299,792 km per second.'):
             result = self.ask('find out the speed of light in km per second', {'operation': 'look_up', 'app_name': '', 'target': 'speed of light'})
         self.assertEqual(result['message'], 'About 299,792 km per second.')
         with patch.dict('os.environ', {'A11Y_WEB_ANSWERS': '0'}), patch('companion.web_lookup.answer') as lookup:
@@ -150,15 +140,6 @@ class ReplyQualityTests(unittest.TestCase):
         self.assertEqual(plain_text('## First day\n\n1. **Arrive on time** -- greet your team.\n- Ask `questions`'),
                          'First day\n\n1. Arrive on time – greet your team.\n• Ask questions')
 
-    def test_invented_citations_are_dropped_not_fatal(self):
-        from companion.service import drop_unknown_citations
-        raw = {'message': 'x', 'source_ids': ['real', 'invented'], 'workflow': {'title': 't', 'steps': [
-            {'instruction': 'i', 'application': '', 'keyboard_hint': '', 'source_ids': ['invented']}]}}
-        cleaned = drop_unknown_citations(raw, {'real'})
-        self.assertEqual(cleaned['source_ids'], ['real'])
-        self.assertEqual(cleaned['workflow']['steps'][0]['source_ids'], [])
-        self.assertEqual(raw['source_ids'], ['real', 'invented'])  # input untouched
-
 
 class InspectionChangeTests(unittest.TestCase):
     def test_turning_on_notifications_is_a_change_not_inspection(self):
@@ -166,18 +147,6 @@ class InspectionChangeTests(unittest.TestCase):
         from companion.computer_task import needs_review
         self.assertTrue(needs_review({'type': 'click_point', 'label': 'Turn on desktop notifications'}, 'navigation'))
         self.assertFalse(needs_review({'type': 'click_point', 'label': 'Activity'}, 'navigation'))
-
-
-class CitationPolicyServiceTests(CompanionFixture, unittest.TestCase):
-    def test_invented_citation_on_a_general_question_does_not_fail_the_answer(self):
-        # Live: "tell me where china is directly" failed with "cited a source outside the retrieved documents".
-        self.app.provider = Mock()
-        self.app.provider.complete_structured.return_value = {'request_kind': 'answer', 'message': 'China is in East Asia.',
-            'source_ids': ['made-up'], 'workflow': None, 'target': None, 'desktop_action': None}
-        with patch.object(self.app.knowledge, 'retrieve', return_value=[]):
-            result = self.app.ask('tell me where china is directly')
-        self.assertEqual(result['message'], 'China is in East Asia.')
-        self.assertEqual(result['sources'], [])
 
 
 if __name__ == '__main__':

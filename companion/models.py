@@ -19,19 +19,11 @@ def keys(value, allowed, required=()):
         raise ValidationError('Unexpected or missing fields in structured response.')
 
 
-def source_ids(value, allowed):
-    if not isinstance(value, list) or len(value) > 12 or any(
-        not isinstance(s, str) or s not in allowed for s in value
-    ):
-        raise ValidationError('The model cited a source outside the retrieved documents.')
-    return list(dict.fromkeys(value))
-
-
 @dataclass(frozen=True)
 class Identity:
+    # Keep the original storage key pair so existing settings and history remain accessible.
     company_id: str
     user_id: str
-    roles: tuple[str, ...] = ('employee',)
 
 
 @dataclass(frozen=True)
@@ -55,37 +47,11 @@ class Target:
         return cls(text(value['label'], 'target label', 240), x, y, min(w, 1-x), min(h, 1-y))
 
 
-def validate_response(value, allowed_sources, *, planning=False, has_screen=False, desktop=None, desktop_snapshot=None):
-    keys(value, ('request_kind', 'message', 'source_ids', 'workflow', 'target', 'desktop_action'), ('message', 'source_ids', 'workflow', 'target'))
-    result = {'message': text(value['message'], 'message', 12000),
-              'source_ids': source_ids(value['source_ids'], allowed_sources),
-              'workflow': None, 'target': None}
-    if value['workflow'] is not None:
-        if not planning:
-            raise ValidationError('Workflow creation requires an explicit planning request.')
-        w = value['workflow']
-        keys(w, ('title', 'steps'), ('title', 'steps'))
-        if not isinstance(w['steps'], list) or not 1 <= len(w['steps']) <= 20:
-            raise ValidationError('A workflow must contain 1 to 20 steps.')
-        steps = []
-        for step in w['steps']:
-            keys(step, ('instruction', 'application', 'keyboard_hint', 'source_ids'),
-                 ('instruction', 'application', 'keyboard_hint', 'source_ids'))
-            parsed = {'instruction': text(step['instruction'], 'instruction', 3000),
-                      'source_ids': source_ids(step['source_ids'], allowed_sources)}
-            for k in ('application', 'keyboard_hint'):
-                if not isinstance(step[k], str) or len(step[k]) > 600:
-                    raise ValidationError(f'Invalid {k}.')
-                parsed[k] = step[k].strip()
-            if allowed_sources and not parsed['source_ids']:
-                raise ValidationError('Each company workflow step must cite a retrieved source.')
-            steps.append(parsed)
-        result['workflow'] = {'title': text(w['title'], 'workflow title', 200), 'steps': steps}
-    elif planning:
-        # A provider can ask a clarification rather than invent a plan.
-        pass
+def validate_response(value, *, has_screen=False, desktop=None, desktop_snapshot=None):
+    keys(value, ('request_kind', 'message', 'target', 'desktop_action'), ('message', 'target'))
+    result = {'message': text(value['message'], 'message', 12000), 'target': None}
     request_kind = value.get('request_kind')
-    if request_kind is not None and request_kind not in ('move', 'move_object', 'move_geometry', 'highlight', 'answer', 'plan', 'act', 'press_control', 'launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'click_point', 'browser_search', 'browser_open', 'computer_task', 'inspect_media', 'play_media', 'type_text', 'press_key', 'scroll'):
+    if request_kind is not None and request_kind not in ('move', 'move_object', 'move_geometry', 'highlight', 'answer', 'act', 'press_control', 'launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'click_point', 'browser_search', 'browser_open', 'computer_task', 'inspect_media', 'play_media', 'type_text', 'press_key', 'scroll'):
         raise ValidationError('Invalid request kind.')
     if request_kind in ('move', 'move_object', 'move_geometry') and value['target'] is not None and value.get('desktop_action') is None:
         if not has_screen or desktop is None:
@@ -172,8 +138,8 @@ def validate_response(value, allowed_sources, *, planning=False, has_screen=Fals
             destination = action['destination']
             if not isinstance(destination, str) or destination not in destinations:
                 raise ValidationError('Invalid companion destination.')
-            if result['target'] is not None or result['workflow'] is not None:
-                raise ValidationError('Companion movement cannot include a screen target or workflow.')
+            if result['target'] is not None:
+                raise ValidationError('Companion movement cannot include a screen target.')
             result['desktop_action'] = {'type': 'move_companion', 'destination': destination,
                                         'label': 'Move to '+destinations[destination]}
         elif isinstance(action, dict) and action.get('type') == 'move_to_point':
@@ -186,8 +152,8 @@ def validate_response(value, allowed_sources, *, planning=False, has_screen=Fals
                 raise ValidationError('Invalid movement coordinate basis.')
             if action['basis'] == 'image' and not has_screen:
                 raise ValidationError('Moving to a visual object requires a fresh screen image.')
-            if result['target'] is not None or result['workflow'] is not None:
-                raise ValidationError('Companion movement cannot include a screen target or workflow.')
+            if result['target'] is not None:
+                raise ValidationError('Companion movement cannot include a screen target.')
             result['desktop_action'] = dict(action, label=text(action['label'], 'movement label', 240))
         else:
             try:
@@ -206,21 +172,14 @@ def validate_response(value, allowed_sources, *, planning=False, has_screen=Fals
 
 
 # Ollama constrains generation to this shape; runtime validation still checks access,
-# citations, coordinate bounds and the actual native desktop observation.
+# coordinate bounds and the actual native desktop observation.
 _TEXT = {'type': 'string'}
-_IDS = {'type': 'array', 'items': _TEXT, 'maxItems': 12}
-_STEP = {'type': 'object', 'additionalProperties': False,
-         'properties': {'instruction': _TEXT, 'application': _TEXT, 'keyboard_hint': _TEXT, 'source_ids': _IDS},
-         'required': ['instruction', 'application', 'keyboard_hint', 'source_ids']}
 RESPONSE_SCHEMA = {
     'type': 'object', 'additionalProperties': False,
-    'required': ['request_kind', 'desktop_action', 'message', 'source_ids', 'workflow', 'target'],
+    'required': ['request_kind', 'desktop_action', 'message', 'target'],
     'properties': {
-        'request_kind': {'enum': ['move_object', 'move_geometry', 'highlight', 'answer', 'plan', 'press_control', 'launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'click_point', 'browser_search', 'browser_open', 'computer_task', 'inspect_media', 'play_media', 'type_text', 'press_key', 'scroll']},
-        'message': _TEXT, 'source_ids': _IDS,
-        'workflow': {'anyOf': [{'type': 'null'}, {'type': 'object', 'additionalProperties': False,
-            'required': ['title', 'steps'], 'properties': {'title': _TEXT,
-            'steps': {'type': 'array', 'minItems': 1, 'maxItems': 20, 'items': _STEP}}}]},
+        'request_kind': {'enum': ['move_object', 'move_geometry', 'highlight', 'answer', 'press_control', 'launch_app', 'new_window', 'close_window', 'quit_app', 'focus_app', 'click_point', 'browser_search', 'browser_open', 'computer_task', 'inspect_media', 'play_media', 'type_text', 'press_key', 'scroll']},
+        'message': _TEXT,
         'target': {'anyOf': [{'type': 'null'}, {'type': 'object', 'additionalProperties': False,
             'required': ['label', 'x', 'y', 'width', 'height'], 'properties': {'label': _TEXT,
             **{k: {'type': 'number', 'minimum': 0, 'maximum': 1} for k in ('x', 'y', 'width', 'height')}}}]},
@@ -268,25 +227,5 @@ RESPONSE_SCHEMA = {
 # Decode the intent and action before prose, so an answer cannot anchor an obsolete task.
 RESPONSE_SCHEMA['properties'] = {
     key: RESPONSE_SCHEMA['properties'][key]
-    for key in ('request_kind', 'desktop_action', 'target', 'message', 'source_ids', 'workflow')
+    for key in ('request_kind', 'desktop_action', 'target', 'message')
 }
-
-
-def cite_only(schema, allowed_sources):
-    """Copy of a response schema whose source_ids can only name the retrieved documents.
-
-    Constrained decoding then cannot invent a citation; validation still rejects any."""
-    allowed = sorted(allowed_sources)
-    ids = ({'type': 'array', 'items': {'enum': allowed}, 'maxItems': 12} if allowed
-           else {'type': 'array', 'maxItems': 0})
-
-    def visit(node):
-        if isinstance(node, list):
-            return [visit(item) for item in node]
-        if not isinstance(node, dict):
-            return node
-        result = {key: visit(value) for key, value in node.items()}
-        if isinstance(result.get('properties'), dict) and 'source_ids' in result['properties']:
-            result['properties'] = dict(result['properties'], source_ids=ids)
-        return result
-    return visit(schema)

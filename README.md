@@ -4,7 +4,7 @@
 
 # A11y
 
-**An adaptive workplace AI companion with floating desktop presence, computer use, and strict local privacy**
+**An desktop accessibility companion with floating desktop presence, computer use, and strict local privacy**
 
    ![macOS](https://img.shields.io/badge/macOS-000000?style=flat-sqircle&logo=apple&logoColor=white)
     ![Ollama](https://img.shields.io/badge/Ollama-000000?style=flat-sqircle&logo=ollama&logoColor=white)
@@ -15,14 +15,11 @@
 
 ## Overview
 
-No mock scripts, no fake demo responses — A11y is an adaptive, privacy-first desktop workplace companion built for the accessibility hackathon. At its core sits a floating, frameless vector mascot that lives unobtrusively on your desktop, paired with a unified Python application service and a real, schema-validated LLM transport (via local Ollama or compatible OpenAI endpoints).
+No mock scripts, no fake demo responses — A11y is a privacy-first desktop accessibility companion built for the accessibility hackathon. At its core sits a floating, frameless vector mascot that lives unobtrusively on your desktop, paired with a unified Python application service and a real, schema-validated LLM transport (via local Ollama or opt-in Claude).
 
-Instead of unbounded autonomous execution or rigid scripted workflows, A11y operates on a strict human-in-the-loop paradigm:
+A11y validates proposed actions locally and asks for confirmation before sensitive changes:
 - **Desktop awareness & computer use** — inspects window hierarchies and UI controls via native OS bridges (macOS Accessibility APIs and Windows Win32), executing bounded navigation actions and pausing for review of sensitive changes.
 - **Visual grounding** — takes transient, on-demand screenshots through ScreenCaptureKit to resolve spatial targets, verifying pixel geometry and window hashes before any click is dispatched.
-- **Enterprise onboarding & retrieval** — indexes local company manuals with bounded, role-filtered lexical retrieval where every generated instruction must cite an exact source chunk.
-- **Adaptive learning** — dynamically learns individual pacing, explanation length, and motor preferences over time, suggesting non-intrusive accommodations that only take effect upon user confirmation.
-- **Zero-dependency browser fallback** — a pure Python standard library HTTP server and semantic HTML/JS companion provides chat, workflows, preferences and document management without native desktop control.
 
 ---
 
@@ -30,42 +27,39 @@ Instead of unbounded autonomous execution or rigid scripted workflows, A11y oper
 
 | Subsystem | Platform | Implementation Details |
 |---|---|---|
-| **Mascot Companion** | Cross-platform (PyQt6) | Frameless, transparent floating widget (`Mascot`) with speech balloon, multiline composer (`Enter` to submit, `Shift+Enter` for newline), collapse-to-mascot state, and custom image overrides (`A11Y_MASCOT_IMAGE`). |
+| **Mascot Companion** | Cross-platform (PyQt6) | Frameless, transparent floating widget (`Mascot`) with speech balloon, multiline composer (`Enter` to submit, `Shift+Enter` for newline), collapse-to-mascot state. |
 | **macOS Desktop Bridge** | macOS 14+ (Swift) | `DesktopBridge.swift` compiled dynamically via `xcrun swiftc`. Inspects active applications, focused window titles, and accessible UI element trees using `AXUIElement`. Supports window focusing, quitting, and Terminal `⌘N`. |
 | **Windows Desktop Bridge** | Windows 10/11 (Win32) | `companion/windows_desktop.py` interacts directly with Win32 APIs via `ctypes`. Queries top-level windows, enumerates Start Menu applications, resolves system utilities (Settings, Notepad, Calculator), and manages window states. |
 | **Visual Perception & Clicks** | macOS 14+ | `ScreenVision` captures display buffers via ScreenCaptureKit. Computes normalized coordinates, highlights targets with expiring desktop rings, and enforces click guards (sampling pixels around targets to abort on screen shifts). |
 | **Computer Task Engine** | Cross-platform / Native | Multi-step perception-action loop (`ComputerTask`) capped at 24 actions. Observes application context, proposes atomic operations (clicks, text input, navigation keys, scrolling), and automatically pauses before destructive actions. |
-| **Lexical Retrieval Engine** | Cross-platform (SQLite) | Chunks imported `.txt` and `.md` documents, extracts heading paths, and performs role-bounded keyword search (`Knowledge` and `Store`). Enforces citation verification against source chunks to prevent hallucination. |
-| **Preferences & Adaptation** | Cross-platform (SQLite) | Dual-tier profile engine (`Adaptation`). Tracks interaction counters (e.g., repeated requests for shorter replies) to propose explicit adaptations, while respecting direct overrides and reduced motion. |
 | **Instance Locking** | Win32 / POSIX | Single-instance process lock (`DesktopInstance`) preventing split-brain database corruption using `msvcrt.locking` on Windows and `fcntl.flock` on UNIX. Rejects duplicate launches with active PID diagnostics. |
-| **Web Companion Fallback** | Universal (`server.py`) | Zero-dependency HTTP daemon (`SimpleHTTPRequestHandler`) with loopback-only binding, per-launch session token auth, semantic accessibility controls, and Web Speech API synthesis/recognition. |
 
 ---
 
 ## Platform Support
 
-| Capability | macOS (Sonoma+) | Windows (10/11) | Linux / WSL2 | Browser Fallback |
-|---|---|---|---|---|
-| **Floating Mascot Companion** | Native transparent window | Native transparent window | Wayland / X11 | Embedded SVG in DOM |
-| **Active App & Window Awareness** | Swift Accessibility Bridge | Win32 ctypes bridge | — | — |
-| **Window Actions (Focus / Close / Quit)** | Full (`AXUIElement`) | Full (Win32 messages) | — | — |
-| **Start-Menu / App Launching** | LaunchServices | Windows Start Catalog / Run | — | — |
-| **Screen Vision & Coordinate Clicks** | ScreenCaptureKit + guarded clicks, Vision OCR | GDI capture, Windows OCR, guarded SendInput clicks (not yet verified on hardware) | — | — |
-| **Autonomous Computer Tasks** | Screenshot/action loop | Screenshot/action loop with UI Automation, typing and keys (not yet verified on hardware) | — | Workflow guidance |
-| **Text-to-Speech (TTS)** | Qt `QTextToSpeech` | Qt `QTextToSpeech` / SAPI | Speech Dispatcher | Web Speech API |
-| **Voice Input (STT)** | "Hey Ally" (local faster-whisper) | "Hey Ally" (local faster-whisper) | — | Web Speech Recognition |
-| **Built-in apps in code** | Mail, Calendar, Reminders, Notes, Contacts, Finder, browser page, Shortcuts | — | — | — |
+| Capability | macOS (Sonoma+) | Windows (10/11) | Linux / WSL2 |
+|---|---|---|---|
+| **Floating Mascot Companion** | Native transparent window | Native transparent window | Wayland / X11 |
+| **Active App & Window Awareness** | Swift Accessibility Bridge | Win32 ctypes bridge | — |
+| **Window Actions (Focus / Close / Quit)** | Full (`AXUIElement`) | Full (Win32 messages) | — |
+| **Start-Menu / App Launching** | LaunchServices | Windows Start Catalog / Run | — |
+| **Screen Vision & Coordinate Clicks** | ScreenCaptureKit + guarded clicks, Vision OCR | GDI capture, Windows OCR, guarded SendInput clicks (not yet verified on hardware) | — |
+| **Autonomous Computer Tasks** | Screenshot/action loop | Screenshot/action loop with UI Automation, typing and keys (not yet verified on hardware) | — |
+| **Text-to-Speech (TTS)** | Qt `QTextToSpeech` | Qt `QTextToSpeech` / SAPI | Speech Dispatcher |
+| **Voice Input (STT)** | "Hey Ally" (local faster-whisper) | "Hey Ally" (local faster-whisper) | — |
+| **Built-in apps in code** | Mail, Calendar, Reminders, Notes, Contacts, Finder, browser page, Shortcuts | — | — |
 
 ---
 
 ## Features
 
+Settings → Preferences offers explicit explanation length, pacing, keyboard navigation and reduced motion choices.
+
 - **Mascot-first interaction** — The app launches into a compact, floating desktop mascot that stays anchored in the corner of your workspace. Left-click toggles the pill-shaped prompt composer; drag anywhere to reposition.
 - **Autonomous computer tasks** — Right-click the companion → **Computer task…** to delegate multi-step goals. The assistant captures the display, selects a structured action (clicking, typing, scrolling, launching apps), executes it, and re-evaluates progress—capped at 24 actions with a hard interrupt shortcut (`⌘.` / **Stop task**).
 - **Action review** — Ordinary navigation clicks and requested local drafting can run in the task loop. Sending, submitting, deleting, closing, and other sensitive changes pause for review. Fresh visual targets or native control IDs bind execution to the observed interface.
 - **Screen vision with click guards** — Request-time display analysis captures a fresh frame via ScreenCaptureKit. Before clicking, A11y re-samples a bounding box around the target; if the underlying window shifted or changed, the click is refused.
-- **Enterprise onboarding & cited retrieval** — Import internal Markdown or text handbooks (e.g. `examples/onboarding.md`). Generated onboarding steps must cite an exact chunk from the imported material; uncited claims are rejected by the validation pipeline.
-- **Adaptive accessibility profiling** — A11y adapts to how you work. Repeatedly asking for shorter answers triggers a suggestion in **Settings → Preferences** to permanently adopt a concise style. Explicit preferences always take precedence over learned ones.
 - **Prompt-only bar & speech balloon** — Normal conversation takes place in a minimalist 240px wide input bar. Replies appear in an auto-sizing speech balloon overhead with text-to-speech support and accessible contrast.
 - **Hands-free voice ("Hey Ally")** — Right-click the companion → **Turn on voice**. Say "Hey Ally" (or "Hey Ally, open Teams"), then talk naturally: every spoken request takes exactly the same path as typed text, replies are read aloud in a natural local voice (Kokoro “Heart”, open weights, downloaded once when voice is turned on; `A11Y_VOICE` selects another Kokoro voice) or the system voice when it is unavailable, and confirmations accept "yes" / "no". After a reply A11y listens again for 8 s; "goodbye", silence or a finished task returns to waiting for "Hey Ally". `Ctrl+Shift+Space` starts a conversation from the keyboard. Speech is recognized locally with faster-whisper (`tiny.en` for the wake phrase, `small.en` for requests); audio is never saved or sent anywhere (only the recognized text, like typed text, goes to the AI you chose), and the microphone pauses while A11y speaks or works and for a moment after it stops talking.
 - **Built-in Mac apps, done in code** — Ask in your own words: “read out my last email”, “what's on my calendar tomorrow”, “what do I have to do today”, “read my trip note”, “what's Ana's number”, “what did I download last”, “summarize this page”, “run my morning shortcut”. The local model only works out what you want; A11y then reads the exact data from Mail, Calendar and Reminders (EventKit, recurring events included), Notes, Contacts, your Downloads/Desktop/Documents folders, the browser's current tab and Shortcuts. Nothing is screenshotted, and emails are not sent to a model or saved in History. Changes (adding an event, reminder or note, ticking off a reminder, running a shortcut) are shown as a button and happen only when you press it or say “yes”.
@@ -125,7 +119,7 @@ Run natively with Windows Python (WSLg cannot composite frameless transparent wi
    ```
 2. Double-click `run_windows.bat` or run from Command Prompt / PowerShell:
    ```cmd
-   run_windows.bat --panel --admin
+   run_windows.bat --panel
    ```
    *On first launch, the batch script detects Python, initializes a dedicated virtual environment in `%USERPROFILE%\.venvs\a11y`, and installs `requirements.txt` plus the optional voice packages (`requirements-voice.txt`). Data is kept locally in `%LOCALAPPDATA%\A11y`. The first time voice is turned on, the speech models (about 550 MB) are downloaded once. Windows must allow desktop apps to use the microphone (Settings → Privacy & security → Microphone).*
 
@@ -155,7 +149,7 @@ startup, so the first request is warm.
    ```
 3. Launch the desktop companion:
    ```bash
-   .venv/bin/python a11y_desktop.py --admin
+   .venv/bin/python a11y_desktop.py
    ```
    *Grant macOS Accessibility and Screen Recording permissions when prompted, and Microphone access when voice is turned on.*
 
@@ -164,24 +158,12 @@ startup, so the first request is warm.
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python a11y_desktop.py --panel --admin
+.venv/bin/python a11y_desktop.py --panel
 ```
-
-### Browser Fallback (Zero Dependencies)
-
-If native GUI dependencies or Qt are unavailable, launch the pure standard-library web companion:
-
-```bash
-python3 server.py --admin --port 8765
-```
-
-Navigate to `http://127.0.0.1:8765`. Includes full document management, conversational planning, and Web Speech API support without third-party Python packages.
-
----
 
 ## AI Configuration
 
-A11y supports local Ollama inference out of the box with zero cloud leakage, Claude Sonnet through the Anthropic API as an opt-in, and OpenAI-compatible API providers.
+A11y supports local Ollama inference out of the box with zero cloud leakage, Claude Sonnet through the Anthropic API as an opt-in.
 
 ### Local Ollama (Default)
 
@@ -205,8 +187,7 @@ For sharper routing and more reliable on-screen tasks, use Claude Sonnet 5.5
 (`claude-sonnet-5-5`) instead of the local model: **Settings → Advanced → AI model**, paste an
 Anthropic API key, and choose **Use Claude**. **Forget Claude key** switches back to the local model.
 
-- **What is sent to Anthropic:** your requests, recent conversation, app and window names, and the
-  company excerpts a question uses. A11y asks once before the first switch.
+- **What is sent to Anthropic:** your requests, recent conversation, app and window names. A11y asks once before the first switch.
 - **Screen images** are sent only after you allow screen vision *for Claude*; allowing it for the
   local model does not count. Password fields and protected apps are never captured.
 - **Stays on your computer:** Mail, Calendar, Reminders, Notes and Contacts are read in code and
@@ -221,21 +202,6 @@ Anthropic API key, and choose **Use Claude**. **Forget Claude key** switches bac
   `A11Y_CLAUDE_EFFORT=low|medium|high`. Refusals in some categories retry on another Claude model
   inside the same request (Anthropic's server-side fallback).
 
-### OpenAI-Compatible API
-
-To route inference through an API or remote gateway:
-
-```bash
-export A11Y_AI_PROVIDER="compatible"
-export A11Y_AI_BASE_URL="https://api.together.xyz/v1"
-export A11Y_AI_MODEL="meta-llama/Llama-3.3-70B-Instruct-Turbo"
-export A11Y_AI_KEY="your-api-key"
-```
-
-*API keys for OpenAI-compatible providers entered via the settings UI remain strictly in memory and are never persisted to disk. The Claude key is the exception, saved locally as described above.*
-
----
-
 ## Controls & Keybindings
 
 | Shortcut / Gesture | Target | Action |
@@ -248,7 +214,7 @@ export A11Y_AI_KEY="your-api-key"
 | `Escape` | Prompt / Balloon | Collapse back to idle companion icon |
 | **Right Click** / `Shift` + `F10` | Mascot | Open context menu (Screen vision, Computer task, Settings, Quit) |
 | `⌘.` / **Stop Task** | Desktop | Instantly interrupt active autonomous computer task |
-| `F5` / **Settings → Panel** | Desktop | Open full settings and document management panel |
+| `F5` / **Settings → Panel** | Desktop | Open full settings panel |
 
 ---
 
@@ -256,8 +222,7 @@ export A11Y_AI_KEY="your-api-key"
 
 ```
 .data/   (default; run_windows.bat selects %LOCALAPPDATA%\A11y)
-├── company.sqlite3            # Imported company knowledge, chunk index, document metadata
-├── employee.sqlite3           # User profile, adaptive preferences, saved workflow tasks
+├── employee.sqlite3           # Reviewed profile, explicit preferences, access consent and history
 ├── desktop-instance.lock      # Process lock holding active PID and build hash
 ├── ai.json                    # Chosen provider and local models
 ├── anthropic-key              # Only if you use Claude (owner read/write only)
@@ -277,14 +242,11 @@ A11y includes an automated test suite exercising core service state machines, sc
 # Run full Python test suite
 .venv/bin/python -m unittest discover -s tests -v
 
-# Run JavaScript web companion tests
-node --test tests/web.test.cjs
-
 # Verify Python syntax and compilation
-python3 -m compileall -q a11y_desktop.py companion server.py
+python3 -m compileall -q a11y_desktop.py companion scripts
 ```
 
-Tests cover the shared service, adaptation, request routing, native bridge contracts,
+Tests cover the shared service, explicit preferences, request routing, native bridge contracts,
 Ollama transport, guarded clicks, task cancellation and Qt controls. Platform calls
 and model responses are doubled in automated tests; they do not establish live
 Windows compatibility or local-model targeting accuracy.

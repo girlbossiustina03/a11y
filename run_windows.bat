@@ -1,6 +1,6 @@
 @echo off
 rem Launch the A11y desktop companion natively on Windows.
-rem Double-click this file, or run: run_windows.bat [--panel] [--admin]
+rem Double-click this file, or run: run_windows.bat [--panel]
 setlocal EnableExtensions EnableDelayedExpansion
 
 rem Windows-side virtual environment, kept on the local disk (faster than the WSL share).

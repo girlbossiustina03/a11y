@@ -164,18 +164,6 @@ class WindowsDesktopBridgeTest(unittest.TestCase):
 
 
 
-class CitationSchemaTest(unittest.TestCase):
-    def test_schema_allows_only_retrieved_sources(self):
-        from companion.models import RESPONSE_SCHEMA, cite_only
-        schema = cite_only(RESPONSE_SCHEMA, {'doc-1'})
-        self.assertEqual(schema['properties']['source_ids']['items'], {'enum': ['doc-1']})
-        steps = schema['properties']['workflow']['anyOf'][1]['properties']['steps']['items']
-        self.assertEqual(steps['properties']['source_ids']['items'], {'enum': ['doc-1']})
-        self.assertEqual(cite_only(RESPONSE_SCHEMA, set())['properties']['source_ids'], {'type': 'array', 'maxItems': 0})
-        self.assertEqual(RESPONSE_SCHEMA['properties']['source_ids']['items'], {'type': 'string'})
-
-
-
 class WindowsScreenTest(unittest.TestCase):
     def test_permission_checks_do_not_capture_any_screen(self):
         from companion.windows_screen import WindowsScreenBridge

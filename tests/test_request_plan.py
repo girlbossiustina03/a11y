@@ -34,7 +34,7 @@ class RequestPlanningTests(CompanionFixture, unittest.TestCase):
 
     def test_open_stremio_with_awareness_off_does_not_focus_or_launch_terminal(self):
         provider = self.app.provider = StagedProvider('launch_app', 'Stremio')
-        self.app.desktop_session.append({'role': 'assistant', 'content': 'Move toward Terminal to open another app.', 'source_documents': []})
+        self.app.desktop_session.append({'role': 'assistant', 'content': 'Move toward Terminal to open another app.'})
         self.bridge.sample = Mock(side_effect=AssertionError('Launch must not read the desktop.'))
         result = self.app.ask('open up stremio please')
         self.assertEqual(result['desktop_action']['type'], 'launch_app')
@@ -101,7 +101,7 @@ class RequestPlanningTests(CompanionFixture, unittest.TestCase):
              'title': 'logs', 'can_close': True, 'bounds': {'x': 0, 'y': 0, 'width': 500, 'height': 300}}]
         self.monitor.enabled = True
         self.monitor.collect_once()
-        base = {'message': 'Proposed operation.', 'source_ids': [], 'workflow': None, 'target': None}
+        base = {'message': 'Proposed operation.', 'target': None}
         provider.complete_structured.side_effect = [
             dict(base, request_kind='move_geometry', desktop_action={'type': 'move_companion', 'destination': 'bottom_right'}),
             dict(base, request_kind='close_window', desktop_action={'type': 'close_window', 'window_id': 'com.apple.Terminal:1'})]

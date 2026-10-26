@@ -3,9 +3,10 @@ os.environ.setdefault('A11Y_WEB_ANSWERS', '0')  # tests never look things up onl
 os.environ.setdefault('A11Y_ROUTES', '0')  # nor read routes a live run remembered
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 from companion.vision import ScreenVision
 from companion.ollama import OllamaProvider
-from companion.provider import AIConfig, ChatProvider
+from companion.provider import AIConfig
 from companion.models import validate_response, ValidationError
 from test_core import CompanionFixture
 
@@ -33,7 +34,9 @@ class VisionTests(unittest.TestCase):
     def test_paused_remote_and_text_only_modes_do_not_capture(self):
         with patch.object(self.vision, 'call') as call:
             with self.assertRaises(RuntimeError):
-                self.vision.capture(ChatProvider(AIConfig(model='remote')))
+                self.vision.capture(object())
+            with self.assertRaises(RuntimeError):
+                self.vision.capture(SimpleNamespace(cloud=True))
             self.provider.metadata['local-vision'] = {'capabilities': ['completion']}
             with self.assertRaises(RuntimeError):
                 self.vision.capture(self.provider)
@@ -63,16 +66,16 @@ class VisionTests(unittest.TestCase):
                 self.vision.capture(self.provider)
 
     def test_perception_and_own_movement_tools_are_bounded(self):
-        base = {'message': 'I need a fresh view', 'source_ids': [], 'workflow': None, 'target': None}
+        base = {'message': 'I need a fresh view', 'target': None}
         native = object()
-        response = validate_response(dict(base, desktop_action={'type': 'request_screen'}), set(), desktop=native)
+        response = validate_response(dict(base, desktop_action={'type': 'request_screen'}), desktop=native)
         self.assertEqual(response['desktop_action']['type'], 'request_screen')
-        response = validate_response(dict(base, desktop_action={'type': 'move_companion', 'destination': 'left_edge'}), set(), desktop=native)
+        response = validate_response(dict(base, desktop_action={'type': 'move_companion', 'destination': 'left_edge'}), desktop=native)
         self.assertEqual(response['desktop_action']['destination'], 'left_edge')
         with self.assertRaises(ValidationError):
-            validate_response(dict(base, desktop_action={'type': 'move_companion', 'destination': 'arbitrary shell'}), set(), desktop=native)
+            validate_response(dict(base, desktop_action={'type': 'move_companion', 'destination': 'arbitrary shell'}), desktop=native)
         with self.assertRaises(ValidationError):
-            validate_response(dict(base, desktop_action={'type': 'request_screen'}), set())
+            validate_response(dict(base, desktop_action={'type': 'request_screen'}))
 
 
 class VisualServiceTests(CompanionFixture, unittest.TestCase):

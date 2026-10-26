@@ -104,38 +104,36 @@ class DesktopContextTests(unittest.TestCase):
     def test_coordinate_movement_is_bounded_and_visual_objects_need_pixels(self):
         action = {'type': 'move_to_point', 'basis': 'image', 'x': .8, 'y': .7,
                   'label': 'Apple drawing in the lower-right Terminal'}
-        value = {'message': 'Moving toward that drawing.', 'source_ids': [], 'workflow': None,
-                 'target': None, 'desktop_action': action}
+        value = {'message': 'Moving toward that drawing.', 'target': None, 'desktop_action': action}
         with self.assertRaisesRegex(ValidationError, 'fresh screen image'):
-            validate_response(value, set(), desktop=self.monitor)
-        result = validate_response(value, set(), desktop=self.monitor, has_screen=True)
+            validate_response(value, desktop=self.monitor)
+        result = validate_response(value, desktop=self.monitor, has_screen=True)
         self.assertEqual(result['desktop_action'], action)
         for number in [float('nan'), float('inf'), -.01, 1.01, True, '0.8']:
             value['desktop_action'] = dict(action, x=number)
             with self.assertRaises(ValidationError):
-                validate_response(value, set(), desktop=self.monitor, has_screen=True)
+                validate_response(value, desktop=self.monitor, has_screen=True)
         value['desktop_action'] = dict(action, basis='screen', x=0, y=0)
-        self.assertEqual(validate_response(value, set(), desktop=self.monitor)['desktop_action']['y'], 0)
+        self.assertEqual(validate_response(value, desktop=self.monitor)['desktop_action']['y'], 0)
 
     def test_movement_cannot_carry_a_stale_highlight(self):
-        value = {'message': 'Move right', 'source_ids': [], 'workflow': None,
-            'target': {'label': 'Old Terminal close button', 'x': .1, 'y': .1, 'width': .1, 'height': .1},
+        value = {'message': 'Move right', 'target': {'label': 'Old Terminal close button', 'x': .1, 'y': .1, 'width': .1, 'height': .1},
             'desktop_action': {'type': 'move_companion', 'destination': 'right_edge'}}
         with self.assertRaisesRegex(ValidationError, 'cannot include a screen target'):
-            validate_response(value, set(), desktop=self.monitor, has_screen=True)
+            validate_response(value, desktop=self.monitor, has_screen=True)
 
     def test_ai_action_contract_rejects_unobserved_or_executable_actions(self):
-        value = {'message': 'Try New Folder', 'source_ids': [], 'workflow': None, 'target': None,
+        value = {'message': 'Try New Folder', 'target': None,
                  'desktop_action': {'type': 'highlight_control', 'control_id': 'control-0'}}
-        result = validate_response(value, set(), desktop=self.monitor)
+        result = validate_response(value, desktop=self.monitor)
         self.assertEqual(result['desktop_action']['label'], 'New Folder')
         with self.assertRaises(ValidationError):
-            validate_response(value, set())
+            validate_response(value)
         for action in [{'type': 'shell', 'command': 'anything'}, {'type': 'click', 'control_id': 'control-0'},
                        {'type': 'focus_app', 'bundle_id': 'com.unknown.app'}]:
             with self.subTest(action=action):
                 with self.assertRaises(ValueError):
-                    validate_response(dict(value, desktop_action=action), set(), desktop=self.monitor)
+                    validate_response(dict(value, desktop_action=action), desktop=self.monitor)
 
 
 class DesktopServiceTests(CompanionFixture, unittest.TestCase):
@@ -162,7 +160,7 @@ class DesktopServiceTests(CompanionFixture, unittest.TestCase):
         self.app.desktop_context.enabled = True
         self.app.desktop_context.collect_once()
         self.provider.invalid = {'message': 'Enable screen vision so I can locate that close button.',
-            'source_ids': [], 'workflow': None, 'target': None,
+            'target': None,
             'desktop_action': {'type': 'request_screen'}}
         result = self.app.ask('Move to the close button of the left terminal please')
         context = self.provider.contexts[-1]

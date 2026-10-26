@@ -2,7 +2,6 @@
 import base64
 import json
 import re
-from pathlib import Path
 import sys
 import time
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer, QByteArray, QBuffer, QIODevice, QPoint, QUrl, QRect, QSize, QPropertyAnimation, QVariantAnimation, QEasingCurve
@@ -10,17 +9,17 @@ from PyQt6.QtGui import QKeySequence, QShortcut, QDesktopServices
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
     QPlainTextEdit, QPushButton, QLabel, QLineEdit, QComboBox, QCheckBox,
-    QFileDialog, QMessageBox, QDialog, QDialogButtonBox, QFormLayout, QFrame, QListWidget)
-from .adaptation import CHOICES
+    QMessageBox, QDialog, QDialogButtonBox, QFormLayout, QFrame, QListWidget)
+from .preferences import CHOICES
 from .mascot import Mascot, REPLY_WIDTH
 from .faces import SKIN_NAMES
 from .terminal_theme import THEME_NAMES, saved_appearance, save_appearance
 from .overlay import GuidanceOverlay, CompanionPointer
 from .cursor_flight import CursorFlight
-from .onboarding import Introduction, QUESTIONS
+from .onboarding import Introduction
 from .setup_ui import SetupDialog, AccessSheet
 from .settings_ui import Disclosure, scroll_page
-from .provider import AIConfig, ChatProvider, ProviderError
+from .provider import AIConfig, ProviderError
 from .ollama import OllamaProvider, local_url
 from .theme import panel_style, apply_theme
 from .vision import ScreenVision
@@ -46,8 +45,7 @@ class RequestWorker(QThread):
     def run(self):
         try:
             visual = None
-            plan = ({'operation': 'plan', 'app_name': '', 'target': self.request[:500]} if self.options.get('mode') == 'plan'
-                    else self.service.prepare_request(self.request) if self.options.get('mode') != 'verify' else None)
+            plan = self.service.prepare_request(self.request) if self.options.get('mode') != 'verify' else None
             if plan is not None:
                 self.options['request_plan'] = plan
             if (plan and plan['operation'] == 'highlight' and plan['app_name'].strip().casefold() in ('a11y', 'ally', 'companion')
@@ -64,11 +62,10 @@ class RequestWorker(QThread):
                 if not isinstance(choice, dict) or set(choice) != {'control_id'} or choice['control_id'] not in ids+[None]:
                     raise ValueError('Could not identify that A11y setting.')
                 if choice['control_id'] is not None:
-                    self.result.emit({'message': 'Here is that A11y setting.', 'sources': [], 'workflow': None,
-                                      'target': None, 'desktop_action': None, 'companion_control': choice['control_id']})
+                    self.result.emit({'message': 'Here is that A11y setting.', 'target': None, 'desktop_action': None, 'companion_control': choice['control_id']})
                     return
-                self.result.emit({'message': 'Which A11y section should I highlight: Settings, Preferences, Saved tasks, History, Documents, AI model, or Desktop tools?',
-                                  'sources': [], 'workflow': None, 'target': None, 'desktop_action': None})
+                self.result.emit({'message': 'Which A11y section should I highlight: Settings, Preferences, History, AI model, or Desktop tools?',
+                                  'target': None, 'desktop_action': None})
                 return
             launch_verification = self.options.get('mode') == 'verify' and (self.service.last_action_result or {}).get('type') in ('launch_app', 'browse_url', 'play_media')
             needs_pixels = not launch_verification and (plan is None or plan['operation'] in ('move_object', 'highlight', 'inspect_screen', 'click_point'))
@@ -265,7 +262,6 @@ class CompanionWindow(QMainWindow):
         self.capture_context = None
         self.pending_target = None
         self.introduction = Introduction(service.store, service.identity)
-        self.setup_active = False
         self.request_from_mascot = False
         self.quitting = False
         self.setWindowTitle('A11y · Your workplace, at your pace')
@@ -280,9 +276,7 @@ class CompanionWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.setCentralWidget(self.tabs)
         self.build_chat()
-        self.build_workflow()
         self.build_preferences()
-        self.build_knowledge()
         self.build_connection()
         self.build_desktop_context()
         self.build_essentials()
@@ -492,10 +486,8 @@ class CompanionWindow(QMainWindow):
         layout.addWidget(self.input)
         row = QHBoxLayout()
         self.ask_btn = button('Send · Ctrl+Enter', self.ask)
-        self.plan_btn = button('Create workflow', lambda: self.ask(mode='plan'))
         self.read_btn = button('Read latest response', self.read_response)
         row.addWidget(self.ask_btn)
-        row.addWidget(self.plan_btn)
         row.addWidget(self.read_btn)
         layout.addLayout(row)
         row = QHBoxLayout()
@@ -527,25 +519,6 @@ class CompanionWindow(QMainWindow):
         self.latest_response = ''
         self.tabs.addTab(scroll_page(page), 'History')
 
-    def build_workflow(self):
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        self.workflow_select = QComboBox()
-        self.workflow_select.setAccessibleName('Saved workflow')
-        self.workflow_select.currentIndexChanged.connect(self.render_workflow)
-        layout.addWidget(self.workflow_select)
-        self.workflow_text = QPlainTextEdit()
-        self.workflow_text.setReadOnly(True)
-        self.workflow_text.setAccessibleName('Workflow progress and instructions')
-        layout.addWidget(self.workflow_text)
-        self.confirm_btn = button('I completed this step', self.confirm_step)
-        layout.addWidget(self.confirm_btn)
-        self.resume_btn = button('Resume in conversation', self.resume)
-        layout.addWidget(self.resume_btn)
-        layout.addWidget(label('Progress is saved after every confirmation. Only you can mark a step complete. '
-                               'App controls can be pressed only after you approve an observed control. Task completion still requires your confirmation.'))
-        self.tabs.addTab(scroll_page(page), 'Saved tasks')
-
     def build_preferences(self):
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -557,7 +530,7 @@ class CompanionWindow(QMainWindow):
         form = QFormLayout()
         for key, values in CHOICES.items():
             control = QComboBox()
-            control.addItem('Automatic', None)
+            control.addItem('Use default', None)
             for value in values:
                 names = {'concise': 'Keep it short', 'balanced': 'A little context', 'detailed': 'Explain in detail',
                          'one_step': 'One step at a time', 'all_steps': 'Show the whole plan',
@@ -599,94 +572,19 @@ class CompanionWindow(QMainWindow):
         self.home_place.setAccessibleName('Where the weather is for when you name no place')
         self.home_place.editingFinished.connect(self.save_lookup_settings)
         looks.addRow('Weather for', self.home_place)
-        self.learning = QCheckBox('Suggest ways to adapt to me')
-        self.learning.setToolTip('Learn interaction preferences and suggest changes. Nothing is adopted without your approval.')
-        layout.addWidget(self.learning)
         layout.addWidget(button('Save preferences', self.save_preferences))
         self.preferences_status = label('')
-        self.preferences_status.setObjectName('settingsSubtitle')
         layout.addWidget(self.preferences_status)
-        self.profile_view = QPlainTextEdit()
-        self.profile_view.setReadOnly(True)
-        self.profile_view.setAccessibleName('Explicit preferences, observations and approved adaptations')
-        self.inspect_profile = inspect_profile = button('Inspect learned preferences', lambda: self.profile_view.setVisible(not self.profile_view.isVisible()))
-        layout.addWidget(inspect_profile)
-        self.profile_view.hide()
-        layout.addWidget(self.profile_view)
-        self.suggestions = QComboBox()
-        self.suggestions.setAccessibleName('Pending behavior suggestion')
-        layout.addWidget(self.suggestions)
-        row = QHBoxLayout()
-        self.approve_btn = button('Approve suggestion', lambda: self.decide_preference(True))
-        self.dismiss_btn = button('Dismiss suggestion', lambda: self.decide_preference(False))
-        row.addWidget(self.approve_btn)
-        row.addWidget(self.dismiss_btn)
-        layout.addLayout(row)
-        self.reset_learning_button = button('Reset learned preferences (keep explicit settings)', self.reset_preferences)
-        layout.addWidget(self.reset_learning_button)
         layout.addStretch()
         self.tabs.addTab(scroll_page(page), 'Preferences')
 
-    def build_knowledge(self):
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        heading = label('Documents')
-        heading.setObjectName('settingsPageTitle')
-        layout.addWidget(heading)
-        layout.addWidget(label('Company instructions A11y can reference in its answers.'))
-        self.documents = QPlainTextEdit()
-        self.documents.setReadOnly(True)
-        self.documents.setAccessibleName('Accessible company documents')
-        layout.addWidget(self.documents)
-        layout.addWidget(button('Refresh documents', self.refresh))
-        self.document_tools = Disclosure('Import documents')
-        layout.addWidget(self.document_tools)
-        layout = self.document_tools.body
-        self.doc_roles = QLineEdit('engineering')
-        self.doc_roles.setAccessibleName('Allowed document roles, separated by commas')
-        layout.addWidget(label('Who can read these? Role names separated by commas; employee means everyone.'))
-        layout.addWidget(self.doc_roles)
-        self.import_btn = button('Import .txt or .md document…', self.import_document)
-        layout.addWidget(self.import_btn)
-        layout.addWidget(label('Document import requires administrator mode (--admin).'))
-        self.tabs.addTab(scroll_page(page), 'Documents')
-
-    def selected_workflow(self):
-        workflow_id = self.workflow_select.currentData()
-        return next((w for w in self.saved_workflows if w['id'] == workflow_id), None)
-
-    def refresh(self, workflow_id=None):
+    def refresh(self):
         state = self.service.state()
-        self.saved_workflows = state['workflows']
-        self.unavailable_tasks = state['unavailable_tasks']
-        previous = workflow_id or self.workflow_select.currentData()
-        self.workflow_select.blockSignals(True)
-        self.workflow_select.clear()
-        for workflow in self.saved_workflows:
-            self.workflow_select.addItem(workflow['title']+' · '+workflow['status'], workflow['id'])
-        index = self.workflow_select.findData(previous)
-        if index >= 0:
-            self.workflow_select.setCurrentIndex(index)
-        self.workflow_select.blockSignals(False)
-        self.render_workflow()
         self.provider_status.setText(f'AI: {state["ai"]["model"] or "not configured"} · {state["ai"]["endpoint"]}\n'
-                                     + (state['ai']['message'] or 'Requests include your conversation, preferences and relevant company excerpts.'))
-        self.documents.setPlainText('\n\n'.join(f'{d["title"]}\nRoles: {", ".join(d["roles"])}' for d in state['documents']) or 'No accessible documents. Ask an administrator to import onboarding instructions.')
-        self.import_btn.setEnabled(state['admin'])
+                                     + (state['ai']['message'] or 'Requests include your conversation and explicit preferences.'))
         for key, control in self.pref_controls.items():
-            value = state['profile']['explicit'].get(key)
+            value = state['preferences'].get(key)
             control.setCurrentIndex(control.findData(value))
-        self.learning.setChecked(state['profile']['learning_enabled'])
-        self.profile_view.setPlainText(json.dumps({'effective': state['effective'], **state['profile']}, indent=2))
-        self.suggestions.clear()
-        for signal, suggestion in state['profile']['suggestions'].items():
-            self.suggestions.addItem(f'{suggestion["key"]}: {suggestion["value"]} — {suggestion["reason"]}', signal)
-        pending = bool(state['profile']['suggestions'])
-        self.approve_btn.setEnabled(pending)
-        self.dismiss_btn.setEnabled(pending)
-        self.suggestions.setVisible(pending)
-        self.approve_btn.setVisible(pending)
-        self.dismiss_btn.setVisible(pending)
         self.mascot.set_reduced_motion(state['effective']['reduced_motion'])
         if hasattr(self, 'essentials_identity'):
             details = self.introduction.user_details()
@@ -698,31 +596,6 @@ class CompanionWindow(QMainWindow):
     @staticmethod
     def model_label(state):
         return 'Claude Sonnet 5.5 · Anthropic cloud' if state['ai']['provider'] == 'claude' else state['ai']['model']
-
-    def render_workflow(self):
-        self.clear_guidance()
-        w = self.selected_workflow()
-        self.confirm_btn.setEnabled(bool(w and w['status'] == 'active'))
-        self.resume_btn.setEnabled(bool(w))
-        if not w:
-            self.workflow_text.setPlainText(('Some saved tasks are hidden because their company sources are no longer accessible.\n' if self.unavailable_tasks else '')+'No accessible saved tasks yet. Import onboarding instructions, then create a workflow from the Conversation tab.')
-            return
-        current = w['current_step']
-        lines = [w['title'], f'{current} of {len(w["steps"])} steps confirmed · {w["status"]}', '']
-        prefs = self.service.adaptation.effective(self.service.identity)
-        visible = range(current, min(current+1, len(w['steps']))) if prefs['pacing'] == 'one_step' else range(len(w['steps']))
-        for i in visible:
-            step = w['steps'][i]
-            lines.append(f'{i+1}. {step["instruction"]}')
-            if step['application']:
-                lines.append('Application: '+step['application'])
-            if step['keyboard_hint']:
-                lines.append('Keyboard: '+step['keyboard_hint'])
-            lines.append('Sources: '+', '.join(step['source_ids']))
-            lines.append('')
-        for source in w.get('sources', []):
-            lines.append(f'Source [{source["id"]}]: {source["title"]} · section {source["ordinal"]}\n{source["content"]}\n')
-        self.workflow_text.setPlainText('\n'.join(lines))
 
     def ask(self, checked=False, *, mode='answer', image_data=None, from_mascot=False):
         if self.worker and self.worker.isRunning():
@@ -744,7 +617,7 @@ class CompanionWindow(QMainWindow):
         self.mascot.set_state('thinking')
         screen = self.mascot.screen()
         area = screen.geometry()
-        options = {'mode': mode, 'workflow_id': self.workflow_select.currentData(), 'image_data': image_data,
+        options = {'mode': mode, 'image_data': image_data,
                    'companion_controls': [{'id': str(index), 'label': self.tabs.tabText(index)} for index in self.navigation_pages],
                    'screen_geometry': {'x': area.x(), 'y': area.y(), 'width': area.width(), 'height': area.height(),
                        'usable': {'x': screen.availableGeometry().x(), 'y': screen.availableGeometry().y(),
@@ -756,13 +629,12 @@ class CompanionWindow(QMainWindow):
         self.worker.start()
 
     def set_busy(self, busy):
+        for control in (self.ask_btn, self.capture_btn):
+            control.setEnabled(not busy)
         self.mascot.set_busy(busy)
         if self.voice:
             self.voice.pause() if busy else QTimer.singleShot(0, self.voice_resume)
-        for control in (self.ask_btn, self.plan_btn, self.capture_btn, self.confirm_btn):
             control.setEnabled(not busy)
-        if not busy:
-            self.confirm_btn.setEnabled(bool(self.selected_workflow() and self.selected_workflow()['status'] == 'active'))
         self.statusBar().showMessage('Screen analysis active · waiting for AI' if busy and self.capture_context else
                                      'Waiting for AI…' if busy else 'Ready. Screen and microphone are off.')
 
@@ -777,15 +649,11 @@ class CompanionWindow(QMainWindow):
             geometry = QRect(int(bounds['x']), int(bounds['y']), int(bounds['width']), int(bounds['height']))
             screen = next((s for s in QApplication.screens() if s.geometry() == geometry), None)
             if screen:
-                capture = {'screen': screen, 'geometry': geometry, 'time': visual['captured_monotonic'],
-                           'workflow': self.workflow_select.currentData()}
+                capture = {'screen': screen, 'geometry': geometry, 'time': visual['captured_monotonic']}
         self.latest_response = response['message']
         self.read_btn.setEnabled(self.tts is not None)
         self.record_companion_message(response['message'])
-        for source in response['sources']:
-            self.transcript.appendPlainText(f'[{source["id"]}] {source["title"]} · section {source["ordinal"]}\n{source["content"]}\n')
-        workflow_id = response['workflow']['id'] if response['workflow'] else None
-        self.refresh(workflow_id)
+        self.refresh()
         self.mascot.set_state('guiding' if response['target'] else 'idle', response['message'])
         if response['target'] and capture and time.monotonic()-capture['time'] < 90:
             self.latest_response += '\nSuggested target: '+response['target']['label']
@@ -793,8 +661,6 @@ class CompanionWindow(QMainWindow):
             self.highlight_btn.setEnabled(True)
             self.transcript.appendPlainText('Suggested target: '+response['target']['label']+'\nReview the current screen before showing the highlight.\n')
         self.capture_context = None
-        if response['workflow']:
-            self.tabs.setCurrentIndex(1)
         self.pending_desktop_action = response.get('desktop_action')
         if self.pending_desktop_action and self.pending_desktop_action['type'] == 'click_point':
             action = self.pending_desktop_action
@@ -813,7 +679,7 @@ class CompanionWindow(QMainWindow):
                 self.overlay.hide()
             self.pointer.set_colors(self.mascot.colors)
             self.pointer.point_at(capture['geometry'], action['x'], action['y'], action['label'],
-                reduced_motion=self.service.adaptation.effective(self.service.identity)['reduced_motion'])
+                reduced_motion=self.service.preferences.effective(self.service.identity)['reduced_motion'])
         if not response.get('task_step') and self.pending_desktop_action and self.pending_desktop_action['type'] in ('launch_app', 'browse_url', 'focus_app', 'new_window', 'play_media', 'close_window', 'close_tab', 'quit_app'):
             # The request itself authorizes opening, switching to and closing apps (apps keep
             # their own "save changes?" prompts); model-selected presses still require review.
@@ -828,8 +694,8 @@ class CompanionWindow(QMainWindow):
         if self.pending_desktop_action and self.pending_desktop_action['type'] == 'move_companion':
             # Moves right away, so no "Move to …" button is left behind on the reply.
             moving, self.pending_desktop_action = self.pending_desktop_action['destination'], None
-        full = response['sources'] or response.get('full_text')  # cited answers and emails are shown whole
-        self.mascot_home(response['message'] if full else brief(response['message'], 2, 45), sources=response['sources'])
+        full = response.get('full_text')  # emails are shown whole
+        self.mascot_home(response['message'] if full else brief(response['message'], 2, 45))
         if response.get('read_aloud') and self.tts and not self.voice_conversation:
             self.speak_now(speakable(response['message']))  # "read out my last email" (in a voice chat it is spoken anyway)
         if moving:
@@ -847,7 +713,7 @@ class CompanionWindow(QMainWindow):
                 screen = self.mascot.screen()
             self.pointer.set_colors(self.mascot.colors)
             self.pointer.point_at(screen.geometry(), action['x'], action['y'], action['label'],
-                reduced_motion=self.service.adaptation.effective(self.service.identity)['reduced_motion'])
+                reduced_motion=self.service.preferences.effective(self.service.identity)['reduced_motion'])
             self.move_companion_to(action['x'], action['y'], screen)
             self.transcript.appendPlainText('Companion moving to '+action['label']+'.\n')
 
@@ -920,73 +786,13 @@ class CompanionWindow(QMainWindow):
             self.say('Highlighted '+item.text()+' in A11y settings.', compact=True)
         QTimer.singleShot(0, highlight)
 
-    def confirm_step(self):
-        w = self.selected_workflow()
-        if not w:
-            return
-        try:
-            self.service.confirm_step(w['id'], w['current_step'])
-            self.refresh(w['id'])
-            current = self.selected_workflow()
-            if current and current['status'] == 'active':
-                step = current['steps'][current['current_step']]
-                next_message = f'Progress saved. Step {current["current_step"]+1}: '+step['instruction']
-                if step['keyboard_hint']:
-                    next_message += '\n'+step['keyboard_hint']
-            else:
-                next_message = 'All steps are confirmed. Your task is complete!'
-            self.mascot_home(next_message)
-            self.mascot.set_state('celebrate')
-            QTimer.singleShot(1600, lambda: self.mascot.set_state('idle'))
-        except (ValueError, PermissionError) as e:
-            self.statusBar().showMessage(str(e))
-            self.refresh()
-
-    def resume(self):
-        w = self.selected_workflow()
-        if not w:
-            return
-        self.tabs.setCurrentIndex(0)
-        current = w['current_step']
-        self.transcript.appendPlainText(f'Resumed: {w["title"]}. {current}/{len(w["steps"])} steps confirmed.\n'
-                                       + ('Next: '+w['steps'][current]['instruction'] if w['status'] == 'active' else 'All steps confirmed.')+'\n')
-        self.input.setFocus()
-        self.mascot_home(('Next: '+w['steps'][current]['instruction']) if w['status'] == 'active' else 'All steps are confirmed.')
-
     def save_preferences(self):
         values = {k: c.currentData() for k, c in self.pref_controls.items() if c.currentData() is not None}
-        self.service.adaptation.set_explicit(self.service.identity, values, self.learning.isChecked())
+        self.service.preferences.set_explicit(self.service.identity, values)
         self.refresh()
         self.preferences_status.setText('Preferences saved.')
         self.statusBar().showMessage('Preferences saved and applied to future replies and current guidance.')
-        if not self.setup_active:
-            self.mascot_home('Got it. I’ll use your updated preferences.')
-
-    def decide_preference(self, approve):
-        signal = self.suggestions.currentData()
-        if signal:
-            self.service.adaptation.decide(self.service.identity, signal, approve)
-            self.refresh()
-
-    def reset_preferences(self):
-        from . import routes
-        self.service.adaptation.reset_learned(self.service.identity)
-        routes.forget()  # remembered task routes are learned too
-        self.refresh()
-
-    def import_document(self):
-        path, _ = QFileDialog.getOpenFileName(self, 'Import company instructions', '', 'Text documents (*.md *.txt)')
-        if not path:
-            return
-        try:
-            if Path(path).stat().st_size > 480000:
-                raise ValueError('Document is too large. Maximum is 120,000 text characters.')
-            body = Path(path).read_text(encoding='utf-8')
-            self.service.knowledge.ingest(self.service.identity, Path(path).name, body,
-                                         [r.strip() for r in self.doc_roles.text().split(',') if r.strip()])
-            self.refresh()
-        except (ValueError, OSError, PermissionError) as e:
-            QMessageBox.warning(self, 'Import failed', str(e))
+        self.mascot_home('Got it. I’ll use your updated preferences.')
 
     def capture_screen(self, checked=False, *, from_mascot=False, consented=False):
         self.request_from_mascot = from_mascot
@@ -1046,8 +852,7 @@ class CompanionWindow(QMainWindow):
         buffer.open(QIODevice.OpenModeFlag.WriteOnly)
         pixmap.save(buffer, 'PNG')
         buffer.close()
-        self.capture_context = {'screen': screen, 'geometry': geometry, 'time': captured_at,
-                                'workflow': self.workflow_select.currentData()}
+        self.capture_context = {'screen': screen, 'geometry': geometry, 'time': captured_at}
         self.ask(image_data='data:image/png;base64,'+base64.b64encode(bytes(data)).decode('ascii'),
                  from_mascot=getattr(self, 'capture_from_mascot', False))
 
@@ -1057,13 +862,13 @@ class CompanionWindow(QMainWindow):
         target, capture = self.pending_target
         if (time.monotonic()-capture['time'] >= 90 or capture['screen'] not in QApplication.screens()
                 or capture['screen'].geometry() != capture['geometry']
-                or capture['workflow'] != self.workflow_select.currentData()):
+):
             self.clear_guidance()
             self.statusBar().showMessage('Screen context expired or changed. Capture a fresh screenshot.')
             return
         self.overlay.guide(capture['geometry'], target)
         self.mascot.collapse_chat()
-        if self.show_mascot.isChecked() and not self.service.adaptation.effective(self.service.identity)['reduced_motion']:
+        if self.show_mascot.isChecked() and not self.service.preferences.effective(self.service.identity)['reduced_motion']:
             area = capture['geometry']
             target_x = area.x()+int(target['x']*area.width())
             target_y = area.y()+int(target['y']*area.height())
@@ -1356,7 +1161,7 @@ class CompanionWindow(QMainWindow):
         self.panel_navigation.setObjectName('settingsNavigation')
         self.panel_navigation.setAccessibleName('Companion settings sections')
         self.panel_navigation.setFixedWidth(166)
-        self.navigation_pages = [self.essentials_tab, 2, 1, 0, 3, 4, 5]
+        self.navigation_pages = [self.essentials_tab, 1, 0, 2, 3]
         for index in self.navigation_pages:
             self.panel_navigation.addItem(self.tabs.tabText(index))
         self.panel_navigation.setCurrentRow(self.navigation_pages.index(self.tabs.currentIndex()))
@@ -1367,11 +1172,11 @@ class CompanionWindow(QMainWindow):
         navigation = QVBoxLayout()
         navigation.addWidget(self.panel_navigation)
         self.advanced_navigation = QCheckBox('Advanced')
-        self.advanced_navigation.setToolTip('History, documents, AI model and desktop tools')
+        self.advanced_navigation.setToolTip('History, AI model and desktop tools')
         navigation.addStretch()
         navigation.addWidget(self.advanced_navigation)
         content.addLayout(navigation)
-        self.advanced_pages = {0, 3, 4, 5}
+        self.advanced_pages = {0, 2, 3}
         self.advanced_navigation.toggled.connect(self.update_navigation)
         self.tabs.currentChanged.connect(self.ensure_page_visible)
         self.update_navigation(False)
@@ -1385,10 +1190,6 @@ class CompanionWindow(QMainWindow):
         self.setCentralWidget(root)
 
     def update_navigation(self, advanced):
-        self.inspect_profile.setVisible(advanced)
-        self.reset_learning_button.setVisible(advanced)
-        if not advanced:
-            self.profile_view.hide()
         if not advanced and self.tabs.currentIndex() in self.advanced_pages:
             self.tabs.setCurrentIndex(self.essentials_tab)
         for index in self.advanced_pages:
@@ -1443,7 +1244,7 @@ class CompanionWindow(QMainWindow):
             self.mascot.end_stretch(self.move_target)
         start = QRect(self.mascot.geometry())
         distance = ((position.x()-start.x())**2+(position.y()-start.y())**2)**0.5
-        if self.service.adaptation.effective(self.service.identity)['reduced_motion'] or distance < 2:
+        if self.service.preferences.effective(self.service.identity)['reduced_motion'] or distance < 2:
             self.mascot.move(position)
             if finished:
                 QTimer.singleShot(0, finished)
@@ -1797,7 +1598,7 @@ class CompanionWindow(QMainWindow):
                 routes.remember(task.goal, task.receipts)  # offered as a hint the next time
             return
         label = step['action'].get('label') or 'Working'
-        response = {'message': label+'…', 'sources': [], 'workflow': None, 'target': None,
+        response = {'message': label+'…', 'target': None,
                     'desktop_action': step['action'], 'visual_capture': step['visual_capture'], 'task_step': True}
         self.received(response)
         if self.pending_desktop_action is None:
@@ -1986,7 +1787,7 @@ class CompanionWindow(QMainWindow):
                 height = min(rect['height']/area.height(), 1-y)
                 self.overlay.guide(area, {'label': current['label'], 'x': x, 'y': y, 'width': width, 'height': height})
                 self.mascot.collapse_chat()
-                if not self.service.adaptation.effective(self.service.identity)['reduced_motion']:
+                if not self.service.preferences.effective(self.service.identity)['reduced_motion']:
                     beside = int(rect['x'])-self.mascot.width()-18
                     if beside < area.left():
                         beside = int(rect['x']+rect['width'])+18
@@ -2013,21 +1814,12 @@ class CompanionWindow(QMainWindow):
         self.connection_fields = {}
         self.connection_details = Disclosure('Connection details', expanded=not isinstance(self.service.provider, OllamaProvider))
         details = self.connection_details.body
-        self.provider_choice = QComboBox()
-        self.provider_choice.addItem('Ollama · local model', 'ollama')
-        self.provider_choice.addItem('Compatible cloud/API provider', 'compatible')
-        self.provider_choice.setCurrentIndex(0 if isinstance(self.service.provider, OllamaProvider) else 1)
-        details.addWidget(self.provider_choice)
         form = QFormLayout()
         for key, title, value in [('base_url', 'API base URL', config.base_url),
                                   ('model', 'Chat model', config.model),
-                                  ('vision_model', 'Vision model (optional)', config.vision_model),
-                                  ('key', 'API key (session only)', '')]:
+                                  ('vision_model', 'Vision model (optional)', config.vision_model)]:
             field = QLineEdit(value)
             field.setAccessibleName(title)
-            if key == 'key':
-                field.setEchoMode(QLineEdit.EchoMode.Password)
-                field.setPlaceholderText('Leave blank to keep the key for the same endpoint')
             form.addRow(title, field)
             self.connection_fields[key] = field
         details.addLayout(form)
@@ -2064,7 +1856,7 @@ class CompanionWindow(QMainWindow):
         layout.addLayout(claude_row)
         self.connection_status = label('Changes apply to this session.')
         layout.addWidget(self.connection_status)
-        details.addWidget(label('API keys stay in memory. Applying settings does not test the connection.'))
+        details.addWidget(label('Applying local model settings does not test the connection.'))
         layout.addWidget(self.connection_details)
         layout.addStretch()
         self.tabs.addTab(scroll_page(page), 'AI model')
@@ -2109,10 +1901,8 @@ class CompanionWindow(QMainWindow):
     def select_local_model(self, index=None):
         model = self.local_models.currentData()
         if model:
-            self.provider_choice.setCurrentIndex(0)
             self.connection_fields['base_url'].setText(OllamaProvider().config.base_url)
             self.connection_fields['model'].setText(model)
-            self.connection_fields['key'].clear()
 
     def connect_provider(self):
         self.stop_computer_task(announce=False)
@@ -2120,29 +1910,20 @@ class CompanionWindow(QMainWindow):
             self.connection_status.setText('Wait for the current request to finish before changing provider.')
             return
         values = {key: field.text().strip() for key, field in self.connection_fields.items()}
-        old = getattr(self.service.provider, 'config', AIConfig())
-        if not values['key'] and values['base_url'].rstrip('/') == old.base_url.rstrip('/'):
-            values['key'] = old.key
         try:
             config = AIConfig(**values)
-            if self.provider_choice.currentData() == 'ollama':
-                local_url(config.base_url)
-                if not config.model:
-                    raise ProviderError('Choose an installed local model first.')
-            else:
-                config.validate()
+            local_url(config.base_url)
+            if not config.model:
+                raise ProviderError('Choose an installed local model first.')
         except ProviderError as e:
             self.connection_status.setText(str(e))
             return
-        self.service.provider = OllamaProvider(AIConfig(base_url=config.base_url, model=config.model, vision_model=config.vision_model, timeout=120)) if self.provider_choice.currentData() == 'ollama' else ChatProvider(config)
-        self.connection_fields['key'].clear()
-        if self.provider_choice.currentData() == 'ollama':
-            from .paths import save_ai_settings
-            save_ai_settings(model=config.model, vision_model=config.vision_model, provider='ollama')
+        self.service.provider = OllamaProvider(AIConfig(base_url=config.base_url, model=config.model, vision_model=config.vision_model, timeout=120))
+        from .paths import save_ai_settings
+        save_ai_settings(model=config.model, vision_model=config.vision_model, provider='ollama')
         self.connection_status.setText('Model saved. Ask me a question to test it.')
         self.refresh()
-        if not self.setup_active:
-            self.mascot_home('Connection settings are ready. What would you like to work on?')
+        self.mascot_home('Connection settings are ready. What would you like to work on?')
 
     def use_claude(self):
         from .claude import ClaudeProvider, save_key, save_workspace, saved_key
@@ -2157,7 +1938,7 @@ class CompanionWindow(QMainWindow):
             return
         if not self.access_preferences.approved('cloud_ai') and not self.confirm_access('Use Claude in the cloud?',
                 'Claude Sonnet runs on Anthropic’s servers, so what you ask A11y is sent there.',
-                ['Sent: your requests, recent conversation, app and window names, and company excerpts a question uses.',
+                ['Sent: your requests, recent conversation, app and window names.',
                  'Screen images only if you also allow screen vision for Claude.',
                  'Mail, Calendar, Reminders, Notes and Contacts are read on this computer and shown directly.',
                  'Your key is saved only on this computer. Switch back to the local model any time.'], 'Use Claude'):
@@ -2182,8 +1963,7 @@ class CompanionWindow(QMainWindow):
             note = ' Screen vision is paused: turn it on again to allow screen images for Claude.'
         self.connection_status.setText('Using Claude Sonnet 5.5.'+note)
         self.refresh()
-        if not self.setup_active:
-            self.mascot_home('Claude is ready. What can I help you with?'+note)
+        self.mascot_home('Claude is ready. What can I help you with?'+note)
 
     def forget_claude(self):
         from .claude import save_key, save_workspace
@@ -2225,32 +2005,7 @@ class CompanionWindow(QMainWindow):
         self.mascot.set_state(state)
         self.voice_say(message, choices)
 
-    def show_setup_question(self):
-        data = self.introduction.get()
-        if data['step'] == len(QUESTIONS):
-            self.say('Here’s what I’ve learned about how you want to work:\n\n'+self.introduction.summary()+
-                     '\n\nSave these settings? Working preferences are included with future AI requests. '
-                     'Your saved name, work role and preferences help personalize replies and are sent to your configured AI provider. Ollama runs locally. You can edit them by restarting this introduction.',
-                     [('Save my preferences', 'setup:save'), ('Go back', 'setup:back'), ('Finish later', 'setup:later')],
-                     stage='Your choices · review before saving')
-            return
-        key, question, options = QUESTIONS[data['step']]
-        choices = []
-        if options:
-            choices.extend((title, 'setup:choice:'+json.dumps(value)) for title, value in options)
-        choices.append(('Skip this question', 'setup:skip'))
-        if data['step']:
-            choices.append(('Go back', 'setup:back'))
-        choices.append(('Finish later', 'setup:later'))
-        name = data['answers'].get('display_name')
-        prefix = f'Nice to meet you, {name}!\n\n' if key == 'work_role' and name else ''
-        self.say(prefix+question, choices,
-                 placeholder=('Your name (optional)' if key == 'display_name' else 'Your role, e.g. software engineer (optional)') if not options else None,
-                 value=data['answers'].get(key, '') if not options else '', submit_action='setup',
-                 stage=f'Getting to know you · {data["step"]+1} of {len(QUESTIONS)} · optional')
-
-    def mascot_home(self, message=None, *, sources=()):
-        self.setup_active = False
+    def mascot_home(self, message=None):
         choices = []
         if self.pending_target:
             choices.append(('Show me where', 'guide'))
@@ -2268,17 +2023,11 @@ class CompanionWindow(QMainWindow):
 
     def mascot_submit(self, request, action):
         try:
-            if action == 'setup':
-                if not self.setup_active:
-                    return
-                self.introduction.answer(request)
-                self.show_setup_question()
-                return
             if action == 'computer':
                 self.offer_computer_task(request)
                 return
             self.input.setPlainText(request)
-            self.ask(mode='plan' if action == 'plan' else 'assist', from_mascot=True)
+            self.ask(mode='assist', from_mascot=True)
         except (ValueError, PermissionError) as e:
             self.note(str(e))
 
@@ -2328,7 +2077,7 @@ class CompanionWindow(QMainWindow):
         if action == 'guide':
             self.show_guidance()
             return
-        if action in ('talk', 'tasks', 'setup:restart', 'setup:start') or action.startswith('task:'):
+        if action == 'talk':
             self.mascot.expand_chat()
         if action.startswith('context:') or action.startswith('desktop:'):
             self.desktop_action(action)
@@ -2343,8 +2092,7 @@ class CompanionWindow(QMainWindow):
                 if isinstance(self.service.provider, OllamaProvider):
                     self.check_readiness(always=True)
                 else:
-                    self.mascot_home('Local setup applies to Ollama. '+('Claude' if getattr(self.service.provider, 'cloud', False)
-                                     else 'A compatible cloud provider')+' is in use instead.')
+                    self.mascot_home('Local setup applies to Ollama. '+'Claude'+' is in use instead.')
             elif action in ('settings', 'history'):
                 self.tabs.setCurrentIndex(0 if action == 'history' else self.essentials_tab)
                 self.reveal()
@@ -2356,69 +2104,11 @@ class CompanionWindow(QMainWindow):
             elif action == 'stop_speech':
                 self.stop_speech()
             elif action == 'talk':
-                if self.setup_active:
-                    self.show_setup_question() if self.introduction.get()['status'] == 'in_progress' else self.start_companion()
-                else:
-                    self.mascot_home()
-            elif action == 'tasks':
-                workflows = self.service.state()['workflows']
-                choices = [(w['title'][:64]+' · '+w['status'], 'task:'+w['id']) for w in workflows]
-                self.say('Choose where we should pick up. Your last confirmed step is saved.' if workflows else
-                         'No saved tasks yet. Tell me what you want to do, then choose “Make a plan from my reply”.',
-                         choices+[('Back to our conversation', 'talk')])
-            elif action.startswith('task:'):
-                self.refresh(action[5:])
-                self.mascot_home('Let’s pick up where we left off.')
-            elif action == 'confirm':
-                self.confirm_step()
+                self.mascot_home()
             elif action == 'highlight':
                 self.show_guidance()
-            elif action in ('plan', 'screen'):
-                request = self.mascot.input.text().strip()
-                if not request and action == 'screen':
-                    request = 'Help me with the current step on this screen.' if self.selected_workflow() else 'Explain this screen and the available controls.'
-                if not request:
-                    self.mascot_home('Describe the task in the prompt, then ask me to make a plan.')
-                    self.mascot.expand_chat()
-                    self.mascot.input.setFocus()
-                    return
-                self.input.setPlainText(request)
-                if action == 'plan':
-                    self.ask(mode='plan', from_mascot=True)
-                else:
-                    current_screen = self.mascot.screen()
-                    index = self.screens.findData(current_screen)
-                    if index >= 0:
-                        self.screens.setCurrentIndex(index)
-                    self.capture_screen(from_mascot=True)
-            elif action.startswith('adapt:'):
-                _, decision, signal = action.split(':', 2)
-                self.service.adaptation.decide(self.service.identity, signal, decision == 'yes')
-                self.refresh()
-                self.mascot_home('Got it. Your preference choice is saved.')
             elif action == 'setup:wizard':
                 self.open_setup()
-            elif action in ('setup:start', 'setup:restart'):
-                self.introduction.start(restart=action == 'setup:restart')
-                self.setup_active = True
-                self.show_setup_question()
-            elif action == 'setup:later':
-                self.mascot_home('No rush. You can restart our introduction from Companion menu whenever you like.')
-            elif action == 'setup:back':
-                self.introduction.back()
-                self.show_setup_question()
-            elif action == 'setup:skip':
-                self.introduction.answer(skip=True)
-                self.show_setup_question()
-            elif action.startswith('setup:choice:'):
-                self.introduction.answer(json.loads(action[len('setup:choice:'):]))
-                self.show_setup_question()
-            elif action == 'setup:save':
-                data = self.introduction.save()
-                self.refresh()
-                name = data['answers'].get('display_name', '')
-                self.mascot_home((f'We’re all set, {name}!' if name else 'We’re all set!')+
-                                 ' I’ve saved your choices. You can talk to me right here. What are we working on first?')
         except (ValueError, PermissionError) as e:
             self.note(str(e))
 

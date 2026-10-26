@@ -41,14 +41,12 @@ validation and platform tools responsible for safe execution.
 ## Product and stack
 
 A workplace accessibility companion: floating cloud mascot, text interaction,
-optional speech output, company document retrieval, explicit/adaptive preferences,
-saved workflows and desktop guidance. Normal use should happen through the mascot.
+optional speech output, explicit accessibility preferences and desktop guidance. Normal use should happen through the mascot.
 
 - Python / PyQt6 desktop entry point: `a11y_desktop.py`.
 - Shared service and SQLite stores: `companion/service.py`, `storage.py`,
-  `knowledge.py`, `adaptation.py`, `onboarding.py`.
-- No separate backend is required for desktop use. `server.py` and the HTML/JS files
-  provide the browser fallback; preserve it.
+  `preferences.py`, `onboarding.py`.
+- The application is desktop-only; no separate backend is required.
 - Default data directory: `.data/`, configurable with `A11Y_DATA_DIR`.
 - Windows launcher uses a local Windows venv and `%LOCALAPPDATA%\A11y`.
 - Current local model used by the user: `qwen3-vl:8b-instruct` via Ollama.
@@ -60,8 +58,8 @@ saved workflows and desktop guidance. Normal use should happen through the masco
 | Area | Files | Why it matters |
 |---|---|---|
 | Request routing | `companion/request_plan.py`, `service.py` | Intent, full-goal preservation, deterministic app/browser shortcuts, validation and verification |
-| Task loop | `companion/computer_task.py` | Scope classification, fresh observations, text/image decision paths, repair budget and review rules |
-| Model transport | `companion/ollama.py`, `provider.py` | Local inference, output budgets, schema handling, provider errors and timing |
+| Task loop | `companion/computer_task.py` | Scope classification, fresh observations, image decisions, repair budget and review rules |
+| Model transport | `companion/ollama.py`, `claude.py`, `provider.py` | Local inference, output budgets, schema handling, provider errors and timing |
 | Desktop controller | `companion/desktop.py` | Qt workers, action scheduling, UI state, cancellation, shared cloud/History messages |
 | Screen context | `companion/vision.py`, `desktop_context.py` | Permission state, transient captures, native adapters and click guards |
 | macOS tools | `native/DesktopBridge.swift`, `native/ScreenBridge.swift` | AX/window metadata, app/browser actions, input, capture and OCR |
@@ -80,8 +78,7 @@ previously attempted live scenario works.
    browser requests can use direct native tools. A small coverage check protects
    against silently dropping follow-up work.
 2. `preserve_desktop_goal` routes compound desktop goals and direct click/control
-   requests into `ComputerTask`. A compatibility alias retains the former
-   `preserve_browser_goal` name.
+   requests into `ComputerTask`.
 3. The intent call also returns `goal_mode` (`inspect`, `draft` or `change`), carried
    on `start_task` into `ComputerTask`; only tasks started without a plan still make
    the separate classifier call. Inspection rejects compose/post/send/change
@@ -91,19 +88,13 @@ previously attempted live scenario works.
 4. The task obtains current desktop metadata and one transient screenshot. macOS
    can return OCR text rectangles from the same frame. The app excludes its own
    windows; sensitive/protected app checks remain important.
-5. When at least three OCR regions or AX/UIA controls are available, the first model
-   call is text-only. It can select an exact control ID or a point grounded in a
-   text/control rectangle. Missing visual detail returns `needs_vision`; ungrounded
-   points or uncertainty fall back to a full image. Thin evidence goes straight to
-   the image path. Both passes share ONE system prompt and observation message; only
-   the final message (pass instructions, corrections, image) differs, so Ollama can
-   reuse the evaluated prefix. `installed_apps` is sent as names; `launch_app` names
-   are resolved to catalog IDs by `resolve_app` after inference.
+5. The model receives the screenshot with native accessibility targets and OCR text.
+   Deterministic tools resolve exact targets before inference when possible.
+   `installed_apps` is sent as names; `launch_app` names resolve to catalog IDs in code.
 6. The structured schema separates action responses from terminal responses:
    `status=action` requires one operation; `done`/`needs_user` require `action=null`.
-   The fast schema also allows `needs_vision` with a null action.
 7. At most two decision calls are allowed per observation, shared between correction,
-   pause reconsideration, image fallback and one recheck of a `done` reported when
+   pause reconsideration and one recheck of a `done` reported when
    only opening/focus/navigation actions have run. Invalid proposals never execute.
    Ollama requests stream; Stop sets the task's cancel event, which closes the socket
    (Ollama then aborts generation) and no late action is proposed.
@@ -129,7 +120,7 @@ means every platform adapter implements an action.
   when the fast recognizer returns `VNErrorNotImplemented`.
 - The new OCR helper compiles, but its offline synthetic-image probe failed in the
   restricted coding environment. **Native OCR runtime performance is unverified.**
-  AX text-only decisions and image fallback remain available.
+  Accessibility targets and image decisions remain available.
 - A11y settings highlights use a small selector over actual Qt section IDs and
   current Qt bounds, since screenshot capture intentionally excludes A11y's windows.
   Do not “fix” this by hallucinating controls from a screenshot that excludes them.
@@ -229,8 +220,7 @@ pass that produced no valid action on 19/19 steps (~5.5 s), an image pass (~10 s
   "teams" are not turned into guessed addresses; the model handles those.
 - After `browse_url`/`launch_app` the loop recaptures every 0.6 s (≤4 times) until
   OCR text is stable instead of spending a model step on `wait`.
-- The text-only pass is opt-in (`A11Y_TEXT_PASS=1`); OCR text still goes in the
-  image-pass prompt. The model gets a 1280-px image copy (`A11Y_MODEL_IMAGE_WIDTH`); Ollama upscales smaller images to its 1024-token minimum, so going lower saves nothing there.
+- OCR text and accessibility targets accompany every image decision. The model gets a 1280-px image copy (`A11Y_MODEL_IMAGE_WIDTH`); Ollama upscales smaller images to its 1024-token minimum, so going lower saves nothing there.
 - `move_geometry` requests naming an edge/corner/center move without a second call.
 - Text-only calls use `A11Y_AI_MODEL` and image calls `A11Y_VISION_MODEL`, so a
   small fast text model can handle routing/chat while the VL model does vision.
@@ -239,7 +229,7 @@ pass that produced no valid action on 19/19 steps (~5.5 s), an image pass (~10 s
 
 - Model calls per task start: intent + (shortcut coverage check) + per-step calls.
   The separate scope-classifier call is gone when the intent supplied `goal_mode`.
-- Shared cacheable prompt prefix for text/image passes; app catalog sent as names.
+- Stable goal/catalog prompt prefix; app catalog sent as names.
 - Streaming, cancellable Ollama transport (`OllamaProvider.stream`, `RequestCancelled`).
 - `task.step.summary` timing per step (classify/metadata/capture/OCR/context size/each
   model call) and `action.executed` timing; no screen content is logged.
@@ -257,7 +247,7 @@ pass that produced no valid action on 19/19 steps (~5.5 s), an image pass (~10 s
 These changes followed merged commit `f576bfc` (PRs #2/#3 plus earlier task/UI work):
 
 - Corrected contradictory status/action schemas and added one bounded repair attempt.
-- Added goal-scope checks, smaller task context, native OCR and text-first grounding.
+- Added goal-scope checks, smaller task context, native OCR and image grounding.
 - Unified cloud/History messages and removed duplicate action narration and false
   claims that ephemeral computer-task progress had been saved.
 - Added own-settings highlights via Qt bounds and stronger highlight-only intent.
@@ -269,21 +259,22 @@ These changes followed merged commit `f576bfc` (PRs #2/#3 plus earlier task/UI w
 
 Keep the current visual direction: dark settings, rounded popup with transparent
 corners, small white pointer without the blue badge, and one thin white highlight.
-The mascot is a white cloud; the user may provide different assets later.
+The current mascot is a small terminal-style text face; see `CLAUDE.md` for native and frameless window behavior.
 
 ## Validation status: be precise
 
-- Latest full automated run (Linux container, PyQt6 offscreen): **303 Python tests
-  passed**; **4 web tests passed**; `compileall` passed. Swift was not compiled in this
-  pass (no Swift changes were made).
+- Prototype-removal validation (Oct 26, 2026): 772 discovered Python tests. The
+  sandbox-compatible run passes 752; 20 require unavailable AppKit menus, Notes
+  AppleScript resolution or loopback socket binding. These tests remain in the suite.
+  Changed Python/spec files pass `py_compile`. No live app or Windows hardware
+  validation was performed for this cleanup.
 - Streaming/cancellation was verified over real loopback sockets against a local
   NDJSON server (`tests/test_ollama_stream.py`): cancel during a 3 s silent prompt
   phase returns in <1 s and the server observes the disconnect. Not yet measured
   against a real Ollama process.
-- Prompt size for a realistic step (150 installed apps, 30 controls, 60 OCR lines):
-  text pass 20.1k → 17.8k chars, image pass 23.6k → 17.6k chars, and the two passes
-  now share a 17.2k-char prefix (previously none). Whether Ollama reuses it must be
-  confirmed with `prompt_eval_count` in the benchmark's `ollama_calls` output.
+- Historical image-prompt size for a realistic step (150 installed apps, 30 controls,
+  60 OCR lines) fell from 23.6k to 17.6k characters. Re-measure current prompt sizes
+  and cache behavior with the benchmark before making new performance claims.
 - Tests include actual Qt workers/UI sequencing, but model responses and OS action
   submission are doubled. They do **not** prove real Teams/Calculator/TextEdit success.
 - The synthetic native OCR runtime probe failed here; both fast and accurate paths
@@ -310,15 +301,14 @@ the startup build ID in the log with `companion.instance.build_id()` when uncert
 
 ```sh
 # macOS, foreground (useful while debugging)
-A11Y_AI_PROVIDER=ollama A11Y_AI_MODEL=qwen3-vl:8b-instruct .venv/bin/python a11y_desktop.py --admin
+A11Y_AI_PROVIDER=ollama A11Y_AI_MODEL=qwen3-vl:8b-instruct .venv/bin/python a11y_desktop.py
 
 # App logs when using the user's nohup launcher
 tail -f /private/tmp/a11y-desktop.log
 
 # Automated checks
 QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest discover -s tests -q
-node --test tests/web.test.cjs
-.venv/bin/python -m compileall -q companion scripts a11y_desktop.py server.py
+.venv/bin/python -m compileall -q companion scripts a11y_desktop.py
 
 # Stage latency on this machine (real capture/OCR/model; never executes actions)
 A11Y_AI_MODEL=qwen3-vl:8b-instruct .venv/bin/python scripts/benchmark_pipeline.py --runs 5
@@ -329,7 +319,7 @@ A11Y_AI_MODEL=qwen3-vl:8b-instruct .venv/bin/python scripts/benchmark_pipeline.p
 
 ```bat
 rem Windows: use native Windows Python, not a WSL GUI session
-run_windows.bat --admin
+run_windows.bat
 ```
 
 The Swift `ScreenBridge` also accepts `--ocr-image <fixture.png>` for an offline
@@ -344,8 +334,7 @@ that diagnostic result from actual application task completion.
   invented model description. Verify the relevant outcome using fresh evidence.
 - No arbitrary LLM shell commands, password entry, secret/clipboard capture or
   continuous screen recording. Do not persist screenshots/OCR unnecessarily.
-- Preserve consent, access pause/restoration, keyboard alternatives, reduced motion,
-  source access/citations and the separation of company knowledge from preferences.
+- Preserve consent, access pause/restoration, keyboard alternatives, reduced motion and sensitive-action confirmations.
 - If an external dependency is useful, integrate it behind a small tested adapter;
   do not add a new heavyweight agent framework just to wrap existing functionality.
 - Start with a short concrete implementation plan, implement it, and report the

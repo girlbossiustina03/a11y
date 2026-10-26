@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 import urllib.error
 import urllib.request
 from .models import RESPONSE_SCHEMA
-from .provider import AIConfig, ChatProvider, NoRedirect, ProviderError
+from .provider import AIConfig, NoRedirect, ProviderError
 from .timing import timing
 
 
@@ -452,10 +452,8 @@ def provider_from_env():
     """The environment wins; otherwise the provider chosen in Settings (local Ollama by default)."""
     from .paths import saved_ai_settings
     kind = os.getenv('A11Y_AI_PROVIDER', '').lower()
-    if kind not in ('', 'ollama', 'compatible', 'claude'):
-        raise ProviderError('A11Y_AI_PROVIDER must be ollama, claude or compatible.')
-    if kind == 'compatible' or (not kind and (os.getenv('A11Y_AI_BASE_URL') or os.getenv('A11Y_AI_KEY') or os.getenv('OPENAI_API_KEY'))):
-        return ChatProvider()
+    if kind not in ('', 'ollama', 'claude'):
+        raise ProviderError('A11Y_AI_PROVIDER must be ollama or claude.')
     if kind == 'claude' or (not kind and saved_ai_settings().get('provider') == 'claude'):
         from .claude import ClaudeProvider
         return ClaudeProvider()

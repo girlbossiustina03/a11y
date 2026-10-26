@@ -180,24 +180,24 @@ class ClickTests(unittest.TestCase):
         self.desktop.bridge.click.return_value = {'submitted': True}
 
     def test_click_requires_pixels_and_finite_interior_coordinates(self):
-        raw = {'request_kind': 'click_point', 'message': 'Click proposal', 'source_ids': [], 'workflow': None, 'target': None,
+        raw = {'request_kind': 'click_point', 'message': 'Click proposal', 'target': None,
                'desktop_action': {key: self.action[key] for key in ('type', 'x', 'y', 'label')}}
         with self.assertRaises(ValidationError):
-            validate_response(raw, set(), desktop=object())
+            validate_response(raw, desktop=object())
         for number in (-1, 1, float('nan'), True):
             with self.assertRaises(ValidationError):
-                validate_response(dict(raw, desktop_action=dict(raw['desktop_action'], x=number)), set(), desktop=object(), has_screen=True)
+                validate_response(dict(raw, desktop_action=dict(raw['desktop_action'], x=number)), desktop=object(), has_screen=True)
 
     def test_click_variants_are_bounded_and_retain_image_guard_requirement(self):
-        raw = {'request_kind': 'click_point', 'message': 'Click', 'source_ids': [], 'workflow': None, 'target': None,
+        raw = {'request_kind': 'click_point', 'message': 'Click', 'target': None,
                'desktop_action': {'type': 'click_point', 'x': .2, 'y': .3, 'label': 'Folder'}}
         for button, count in [('left', 2), ('right', 1)]:
             action = dict(raw['desktop_action'], button=button, click_count=count)
-            result = validate_response(dict(raw, desktop_action=action), set(), desktop=object(), has_screen=True)
+            result = validate_response(dict(raw, desktop_action=action), desktop=object(), has_screen=True)
             self.assertEqual(result['desktop_action']['click_count'], count)
         for button, count in [('middle', 1), ('left', 3), ('right', 2), ('left', True)]:
             with self.assertRaises(ValidationError):
-                validate_response(dict(raw, desktop_action=dict(raw['desktop_action'], button=button, click_count=count)), set(), desktop=object(), has_screen=True)
+                validate_response(dict(raw, desktop_action=dict(raw['desktop_action'], button=button, click_count=count)), desktop=object(), has_screen=True)
 
     def test_matching_fresh_capture_allows_one_click_and_observation(self):
         with patch.object(self.vision, 'capture', return_value=self.frame()):

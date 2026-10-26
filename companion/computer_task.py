@@ -35,21 +35,20 @@ _terminal_step = deepcopy(SCHEMA)
 _terminal_step['properties']['status'] = {'enum': ['done', 'needs_user']}
 _terminal_step['properties']['action'] = {'type': 'null'}
 SCHEMA = {'anyOf': [_action_step, _terminal_step]}
-FAST_SCHEMA = deepcopy(SCHEMA)
-FAST_SCHEMA['anyOf'][1]['properties']['status']['enum'].append('needs_vision')
+
 # Tools a platform adapter does not implement are removed from the grammar, so the
 # model cannot spend a step proposing them. New windows are a macOS feature today.
 UNSUPPORTED = {'Windows': {'new_window'}}
 
 
-def schema_for(platform, fast, control_ids=None, target_ids=None):
+def schema_for(platform, control_ids=None, target_ids=None):
     """The step grammar for this platform. With control_ids, press_control can name only a
     control in the current observation (or is left out when there are none): a model that
     invented IDs got two rejected steps and a blocked task (live, Teams in Safari)."""
     excluded = set(UNSUPPORTED.get(platform, set()))
     if control_ids is not None and not control_ids:
         excluded.add('press_control')
-    schema = deepcopy(FAST_SCHEMA if fast else SCHEMA)
+    schema = deepcopy(SCHEMA)
     if control_ids:
         for variant in schema['anyOf'][0]['properties']['action']['anyOf']:
             if 'press_control' in variant['properties']['type']['enum']:
@@ -82,16 +81,7 @@ def schema_for(platform, fast, control_ids=None, target_ids=None):
         schema['anyOf'][0]['properties']['action']['anyOf'] = [v for v in variants if v['properties']['type']['enum']]
     return schema
 
-# Pass-specific instructions go in the LAST message. The system prompt and the
-# observation stay byte-identical between the text pass and the image pass of a
-# step, so Ollama can reuse their evaluated prefix instead of re-reading it.
-TEXT_PASS = '''TEXT PASS: no image is attached. You have the numbered targets (accessibility and OCR)
-read from the current screen. Prefer click_target with a listed id; otherwise an exact
-press_control ID or a click_point at an OCR line's x,y (its center, in image fractions).
-Never invent a coordinate for an icon or unlabelled object. Use status=needs_vision,
-action=null when pixels, icons, uncertain state or missing text require the image.
-Do not infer there are no tasks/activity just because OCR omitted them. done requires
-explicit current evidence of the full requested outcome.'''
+# Keep the observation before the final image instructions.
 ANSWER_SYSTEM = '''Answer the user's goal from what is on their screen now: its text lines (top to bottom)
 and a first reading of the screenshot. One or two short, plain sentences with the concrete
 facts the goal asks for: who, what, when, how many. If the text does not answer it, say what is
@@ -155,12 +145,6 @@ READING_GOAL = re.compile(r'^\W*(?:please\s+)?(?:check|see|look|read|find|tell m
 OPENING_ACTIONS = {'launch_app', 'focus_app', 'browse_url', 'new_window', 'wait'}
 SETTLE_AFTER = {'launch_app', 'browse_url'}
 
-
-def text_pass_enabled():
-    # Off by default: in two live macOS runs the text-only pass produced no valid
-    # action on 19 of 19 steps, adding ~5.5 s each. A11Y_TEXT_PASS=1 re-enables it.
-    import os
-    return os.getenv('A11Y_TEXT_PASS', '0').strip().lower() in ('1', 'true', 'on')
 
 SYSTEM = '''You operate a desktop toward ONE user-approved goal. Observe the fresh
 metadata, OCR text and (in an image pass) screenshot, choose exactly ONE next action,
@@ -433,17 +417,6 @@ def compact_desktop(snapshot):
     return result
 
 
-def text_grounded_click(action, regions, snapshot, screen):
-    if any(r['x'] <= action['x'] < r['x']+r['width'] and r['y'] <= action['y'] < r['y']+r['height'] for r in regions):
-        return True
-    x, y = screen['x']+action['x']*screen['width'], screen['y']+action['y']*screen['height']
-    for control in snapshot.get('controls', []):
-        b = control.get('bounds') or {}
-        if all(key in b for key in ('x', 'y', 'width', 'height')) and b['x'] <= x < b['x']+b['width'] and b['y'] <= y < b['y']+b['height']:
-            return True
-    return False
-
-
 def browser_launch_as_navigation(action, goal, catalog):
     """Launching only the browser for "open <web app> in <browser>" becomes the
     navigation itself, instead of a rejected step."""
@@ -706,7 +679,7 @@ def validate_step(raw, desktop, snapshot, *, goal_mode=None, screen=None, text_r
     if action['type'] == 'click_point' and snap:  # a numbered target's position is already exact
         action = snap_click(normalize_click(action), text_regions, snapshot.get('controls', []) if isinstance(snapshot, dict) else (), screen)
     validated = validate_response({'request_kind': 'answer', 'message': message, 'desktop_action': action,
-        'target': None, 'source_ids': [], 'workflow': None}, set(), has_screen=True, desktop=desktop, desktop_snapshot=snapshot)
+        'target': None}, has_screen=True, desktop=desktop, desktop_snapshot=snapshot)
     action = validated['desktop_action']
     if action['type'] == 'choose_menu' and FULL_SCREEN_MENU.search(action.get('path', '')) and not WINDOW_SIZE_WORDS.search(goal or ''):
         raise ValidationError('Leave the window as it is: full screen moves it to its own Space. Choose another way.')
@@ -762,7 +735,6 @@ class ComputerTask:
         self.last_proposal = None
         # Apps where the text-only pass already failed to produce an action. Live
         # logs showed it failing on every Teams step, doubling each step's cost.
-        self.text_pass_misses = set()
         self.stale_retries = 0
         # The request interpreter can classify scope in the same call that routes
         # the goal; only tasks started without that plan need a separate call.
@@ -1934,15 +1906,10 @@ class ComputerTask:
             stages['classify_ms'] = round((time.monotonic()-classify_at)*1000)
             if self.cancelled.is_set() or not desktop.enabled or not vision.enabled or desktop.generation != desktop_generation or vision.generation != vision_generation:
                 raise ValueError('Computer task stopped or access was paused. No next action was submitted.')
-        # A text pass over one or two OCR fragments almost always ends in
-        # needs_vision; skip straight to the image instead of paying twice.
-        app_key = (snapshot.get('app') or {}).get('bundle_id', '')
-        fast_available = ((len(regions) >= 3 or (isinstance(visual.get('text_regions'), list) and bool(snapshot.get('controls'))))
-                          and app_key not in self.text_pass_misses and text_pass_enabled())
         stages['text_regions'] = len(regions)
         stages['controls'] = len(snapshot.get('controls') or [])
         if progress:
-            progress('Reading the screen…' if fast_available else 'Deciding the next step…')
+            progress('Deciding the next step…')
         # Before/after snapshots in old receipts duplicate the current observation
         # and grow every turn. Keep only compact action outcomes in model context.
         history = []
@@ -1996,31 +1963,26 @@ class ComputerTask:
         for attempt in range(2):
             check_active()
             if attempt and progress:
-                progress('Looking closer…' if fast_available else 'Double-checking…')
+                progress('Double-checking…')
             check_active()
             inference_at = time.monotonic()
-            fast_pass = fast_available and attempt == 0
-            if not fast_pass and model_image is None:
+            if model_image is None:
                 scale = getattr(type(vision), 'model_image', None)
                 model_image = scale(image_data) if callable(scale) else image_data
                 stages['image_scaled_ms'] = round((time.monotonic()-inference_at)*1000)
                 inference_at = time.monotonic()
-            final = ((correction+'\n\n') if correction else '')+(TEXT_PASS if fast_pass else IMAGE_PASS)
+            final = ((correction+'\n\n') if correction else '')+IMAGE_PASS
             request_messages = messages + [{'role': 'user', 'content': final}]
             try:
                 raw = provider.complete_structured(SYSTEM, request_messages,
-                                                   schema=schema_for(snapshot.get('platform'), fast_pass, control_ids, target_ids),
-                                                   image_data=None if fast_pass else model_image,
+                                                   schema=schema_for(snapshot.get('platform'), control_ids, target_ids),
+                                                   image_data=model_image,
                                                    max_tokens=1200, thinking=False, **cancel_kwargs)
             finally:
-                stages['model'].append({'mode': 'text' if fast_pass else 'image', 'ms': round((time.monotonic()-inference_at)*1000)})
-            timing('task.model.finished', inference_at, step=len(self.receipts)+1, attempt=attempt+1, mode='text' if fast_pass else 'image')
+                stages['model'].append({'mode': 'image', 'ms': round((time.monotonic()-inference_at)*1000)})
+            timing('task.model.finished', inference_at, step=len(self.receipts)+1, attempt=attempt+1, mode='image')
             check_active()
-            if fast_pass and isinstance(raw, dict) and raw.get('status') in ('needs_vision', 'needs_user') and raw.get('action') is None:
-                self.text_pass_misses.add(app_key)
-                correction = 'Full screen image is now attached. Resolve the missing visual evidence for the original goal. Do not invent success, and do not repeat an action: no action has run on this observation.'
-                continue
-            if not fast_pass and pixel_model(provider) and isinstance(raw, dict) and isinstance(raw.get('action'), dict) \
+            if pixel_model(provider) and isinstance(raw, dict) and isinstance(raw.get('action'), dict) \
                     and raw['action'].get('type') == 'click_point' and model_image:
                 raw = dict(raw, action=pixels_to_fractions(raw['action'], model_image))
             if desktop.context().get('status') == 'stale':
@@ -2038,8 +2000,6 @@ class ComputerTask:
                                      text_regions=regions, catalog=self._catalog or (), goal=self.goal)
                 step = self.app_click(step, desktop, snapshot, visual)
                 step = self.address_typed(step, desktop, snapshot)
-                if fast_pass and step['status'] == 'action' and step['action']['type'] == 'click_point' and not text_grounded_click(step['action'], regions, snapshot, visual['screen']):
-                    raise ValidationError('That point is not grounded in OCR text or a current accessible control. Inspect the supplied full image before choosing a click.')
                 if step['status'] == 'action' and step['action']['type'] == 'type_text' and self.goal_mode != 'inspect' and already_typed(step['action'].get('text', ''), getattr(self, 'typed', [])):
                     # The shopping list was typed, then typed again five times (live, v2): the model doesn't see it worked.
                     raise ValidationError('That text is already typed in this task. If the goal is done, report status=done; '
@@ -2067,8 +2027,6 @@ class ComputerTask:
                         'did not progress. Do not repeat it. If the current screen already shows the requested information, '
                         'report it with status=done and quote the evidence; otherwise choose a different target.')
             except ValidationError as error:
-                if fast_pass:
-                    self.text_pass_misses.add(app_key)
                 timing('task.step.invalid', inference_at, step=len(self.receipts)+1, attempt=attempt+1,
                        status_action_mismatch=isinstance(raw, dict) and raw.get('status') in ('done', 'needs_user') and raw.get('action') is not None,
                        action_type=str(((raw.get('action') if isinstance(raw, dict) else None) or {}).get('type', ''))[:20],

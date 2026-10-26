@@ -1,11 +1,11 @@
-"""Local, resumable introduction. This is setup UI, not a simulated AI response."""
-from .adaptation import Adaptation, CHOICES
+"""Reviewed setup profile and explicit settings."""
+from .preferences import Preferences, CHOICES
 from .models import text
 from .storage import now
 
-QUESTIONS = (
+FIELDS = (
     ('display_name', 'First things first: what should I call you?', None),
-    ('work_role', 'What kind of work do you do? This helps me get to know you; it does not change document access.', None),
+    ('work_role', 'What kind of work do you do? This helps me get to know you.', None),
     ('detail', 'How do you like things explained?',
      (('Keep it short', 'concise'), ('A little context', 'balanced'), ('Walk me through the details', 'detailed'))),
     ('pacing', 'When we work through a task together, what feels better?',
@@ -14,9 +14,6 @@ QUESTIONS = (
      (('Yes, keyboard first', 'keyboard'), ('No preference', 'any'))),
     ('reduced_motion', 'How much should I move around?',
      (('Keep things still', True), ('Gentle animation is okay', False))),
-    ('learning_enabled', 'May I notice repeated requests about how you like to work and suggest changes? '
-     'I will always ask before applying a learned preference.',
-     (('Yes, offer suggestions', True), ('No, use only my settings', False))),
 )
 
 
@@ -26,7 +23,7 @@ class Introduction:
 
     def get(self):
         return self.store.introduction(self.identity) or {
-            'version': 1, 'status': 'new', 'step': 0, 'answers': {}, 'saved_at': None}
+            'version': 1, 'status': 'new', 'answers': {}, 'saved_at': None}
 
     def user_details(self):
         """Only reviewed personal details belong in model context, never setup drafts."""
@@ -35,58 +32,38 @@ class Introduction:
         return {key: answers[key] for key in ('display_name', 'work_role')
                 if isinstance(answers.get(key), str) and answers[key].strip()}
 
-    def start(self, *, restart=False):
+    def draft(self, answers):
         data = self.get()
-        if restart or data['status'] == 'new':
-            data['approved_details'] = self.user_details()
-            profile = Adaptation(self.store).get(self.identity)
-            answers = dict(profile['explicit'], learning_enabled=profile['learning_enabled'])
-            answers.update({k: v for k, v in data['answers'].items() if k in ('display_name', 'work_role')})
-            data.update(status='in_progress', step=0, answers=answers)
+        data['approved_details'] = self.user_details()
+        data.update(status='in_progress', answers=dict(answers))
         self.store.save_introduction(self.identity, data)
-        return data
 
-    def answer(self, value=None, *, skip=False):
-        data = self.get()
-        if data['status'] != 'in_progress' or data['step'] >= len(QUESTIONS):
-            raise ValueError('No introduction question is pending.')
-        key, _, options = QUESTIONS[data['step']]
-        if not skip:
+    def save(self, answers):
+        values = {}
+        for key, _, options in FIELDS:
+            if key not in answers:
+                continue
+            value = answers[key]
             if options is None:
+                if not value:
+                    continue
                 value = text(value, key, 80 if key == 'display_name' else 160)
             elif not any(type(value) is type(option) and value == option for _, option in options):
                 raise ValueError('Please choose one of the offered answers.')
-            data['answers'][key] = value
-        data['step'] += 1
-        self.store.save_introduction(self.identity, data)
-        return data
-
-    def back(self):
+            values[key] = value
+        preferences = Preferences(self.store)
+        explicit = preferences.explicit(self.identity)
+        explicit.update({k: v for k, v in values.items() if k in CHOICES})
+        preferences.set_explicit(self.identity, explicit)
         data = self.get()
-        if data['status'] != 'in_progress':
-            raise ValueError('Start the introduction first.')
-        data['step'] = max(0, data['step']-1)
-        self.store.save_introduction(self.identity, data)
-        return data
-
-    def save(self):
-        data = self.get()
-        if data['status'] != 'in_progress' or data['step'] != len(QUESTIONS):
-            raise ValueError('Review the introduction before saving.')
-        answers = data['answers']
-        adaptation = Adaptation(self.store)
-        profile = adaptation.get(self.identity)
-        explicit = dict(profile['explicit'])
-        explicit.update({k: v for k, v in answers.items() if k in CHOICES})
-        adaptation.set_explicit(self.identity, explicit, answers.get('learning_enabled', profile['learning_enabled']))
-        data.update(status='completed', saved_at=now())
+        data.update(status='completed', answers=values, saved_at=now())
         self.store.save_introduction(self.identity, data)
         return data
 
     def summary(self):
         answers = self.get()['answers']
         lines = []
-        for key, _, options in QUESTIONS:
+        for key, _, options in FIELDS:
             if key not in answers:
                 continue
             value = answers[key]

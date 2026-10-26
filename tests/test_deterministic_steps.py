@@ -7,7 +7,7 @@ from copy import deepcopy
 import time
 import unittest
 from unittest.mock import Mock, patch
-from companion.computer_task import ComputerTask, text_pass_enabled
+from companion.computer_task import ComputerTask
 from companion.desktop_context import DesktopContext
 from companion.request_plan import preserve_desktop_goal
 from companion.service import geometric_destination
@@ -132,12 +132,6 @@ class OpeningTaskTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'stopped'):
                 task.propose(self.desktop, self.vision, self.provider, {'x': 0, 'y': 0})
         self.provider.complete_structured.assert_not_called()
-
-    def test_text_only_pass_is_opt_in(self):
-        with patch.dict('os.environ', {}, clear=True):
-            self.assertFalse(text_pass_enabled())
-        with patch.dict('os.environ', {'A11Y_TEXT_PASS': '1'}):
-            self.assertTrue(text_pass_enabled())
 
 
 class PlanTests(unittest.TestCase):

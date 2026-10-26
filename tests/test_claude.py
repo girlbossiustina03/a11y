@@ -81,7 +81,7 @@ class ClaudeTransport(unittest.TestCase):
         self.env.stop()
 
     def test_structured_answer_and_request_shape(self):
-        reply = {'request_kind': 'answer', 'desktop_action': None, 'target': None, 'message': 'Hi.', 'source_ids': [], 'workflow': None}
+        reply = {'request_kind': 'answer', 'desktop_action': None, 'target': None, 'message': 'Hi.'}
         self.fake.replies.append((200, sse(json.dumps(reply))))
         result = self.provider.complete_structured('SYSTEM', [{'role': 'assistant', 'content': 'old'},
                                                               {'role': 'user', 'content': 'hello'}], schema=RESPONSE_SCHEMA)
@@ -109,7 +109,7 @@ class ClaudeTransport(unittest.TestCase):
                 'action': {'type': 'click_point', 'label': 'Chat', 'x': 0.1, 'y': 0.2}}
         self.fake.replies.append((200, sse(json.dumps({'result': step}))))
         result = self.provider.complete_structured('TASK', [{'role': 'user', 'content': 'observation'}],
-                                                   schema=schema_for('Darwin', False), max_tokens=1200, thinking=False,
+                                                   schema=schema_for('Darwin'), max_tokens=1200, thinking=False,
                                                    image_data='data:image/png;base64,iVBORw0KGgo=')
         self.assertEqual(result, step)
         body = self.fake.requests[0]['body']
