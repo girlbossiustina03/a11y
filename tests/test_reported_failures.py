@@ -1978,6 +1978,9 @@ class WindowlessAppTests(unittest.TestCase):
         provider.complete_structured.side_effect = [{'met': True, 'evidence': '12+30'}, {'message': 'Your history is open: 12+30 = 42.'}]
         step = task.goal_met(provider, {'app': {'name': 'Calculator'}, 'window': {'title': 'Calculator'}}, regions, {})
         self.assertEqual((step['status'], step['message']), ('done', 'Your history is open: 12+30 = 42.'))
+        provider.complete_structured.side_effect = [{'evidence': '12+30', 'missing': 'a ten-minute timer running', 'met': True}]
+        task.screen_seen = 'open'
+        self.assertIsNone(task.goal_met(provider, {'app': {'name': 'Calculator'}, 'window': {}}, regions, {}))  # something still left (live, Clock)
         provider.complete_structured.side_effect = [{'met': True, 'evidence': 'Show Sidebar'}]  # only the button it clicked
         task.screen_seen, regions = 'open', regions+[{'text': 'Show Sidebar', 'x': .2, 'y': .1}]
         self.assertIsNone(task.goal_met(provider, {'app': {'name': 'Calculator'}, 'window': {}}, regions, {}))
@@ -2169,3 +2172,15 @@ class AppNamedTests(unittest.TestCase):
         self.assertEqual((plan['operation'], plan['opening']['operation'], plan['opening']['app_name']), ('computer_task', 'launch_app', 'Calendar'))
         self.route('focus_app', app_name='Calendar')
         self.assertEqual(self.app.prepare_request('go back to Calendar')['operation'], 'focus_app')
+
+    def test_reported_editing_the_front_document_is_a_task(self):
+        # Live (broad): "make all the text bold" was routed to typing, then to a chat refusal.
+        self.route('type_text', 'bold', app_name='TextEdit', acts_on_computer=True)
+        self.assertEqual(self.app.prepare_request('Make all the text in this document bold.')['operation'], 'computer_task')
+        self.route('type_text', 'Ana', acts_on_computer=False)
+        self.assertEqual(self.app.prepare_request('My name is Ana')['operation'], 'answer')
+
+    def test_reported_a_reminder_operation_in_another_app_is_a_task(self):
+        # Live (broad): "Delete only the note titled …" searched Reminders.
+        self.route('delete_reminder', 'A11y test 12', app_name='Notes', acts_on_computer=True)
+        self.assertEqual(self.app.prepare_request('Delete only the note titled A11y test 12.')['operation'], 'computer_task')

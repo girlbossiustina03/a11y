@@ -768,6 +768,11 @@ class Companion:
             plan = self.last_request_plan = dict(plan, resolved_request=resolved)
         if plan is not None and (plan.get('operation') not in TELLS_ONLY or plan.get('app_write')):  # a note or reminder to confirm too
             self.last_task = resolved[:500]
+        from .timing import timing
+        import time
+        # Which way a request went (no text): a live run otherwise can't tell a chat reply from a lost task.
+        timing('route', time.monotonic(), operation=str((plan or {}).get('operation', 'none')), computed=bool((plan or {}).get('computed')),
+               opening=str(((plan or {}).get('opening') or {}).get('operation', '')))
         return plan
 
     def route_request(self, request):
@@ -978,8 +983,15 @@ class Companion:
                 interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
             if interpreted.get('operation') == 'type_text' and not TYPING_WORDS.search(request):
                 # "My name is Ana" was proposed as typing "Ana" into Safari (live): typing needs a request to type.
-                interpreted = dict(interpreted, operation='answer', app_name='', target='', remaining_request='',
-                                   reply=str(interpreted.get('reply', '')).strip() or 'Got it.')
+                # "Make all the text in this document bold" is work on the screen, not chat (live, broad).
+                interpreted = (dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='', goal_mode='change')
+                               if acts else dict(interpreted, operation='answer', app_name='', target='', remaining_request='',
+                                                 reply=str(interpreted.get('reply', '')).strip() or 'Got it.'))
+            if (interpreted.get('operation') in ('add_reminder', 'complete_reminder', 'delete_reminder', 'read_reminders')
+                    and str(interpreted.get('app_name', '')).strip() and 'remind' not in str(interpreted.get('app_name', '')).casefold()):
+                # "Delete only the note titled …" became delete_reminder with app Notes (live, broad): a reminder
+                # operation for another app is work in that app.
+                interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
             if interpreted.get('operation') == 'read_mail' and not MAIL_WORDS.search(request) and not after_mail:
                 # "Are there any notifications that require my attention" read the last email (live).
                 interpreted = dict(interpreted, operation='computer_task', app_name='', target=request, remaining_request='')
