@@ -692,7 +692,7 @@ class Mascot(QWidget):
     def eventFilter(self, watched, event):
         if (watched is self.reply_window and self.native and event.type() in self.QT_BUTTON_UPDATES
                 and self.reply_window.property('prepared')):
-            QTimer.singleShot(0, self.reply_window, lambda: mac_window.enable_buttons(self.reply_window, zoom=False))
+            self.relight(self.reply_window, zoom=False)
         if watched is self.reply_window and event.type() == QEvent.Type.Close:
             # Its red button closes the reply only; the conversation and she stay.
             if self.reply_shown:
@@ -899,8 +899,20 @@ class Mascot(QWidget):
     def event(self, event):
         handled = super().event(event)
         if getattr(self, 'titlebar_styled', False) and self.native and event.type() in self.QT_BUTTON_UPDATES:
-            QTimer.singleShot(0, self, lambda: mac_window.enable_buttons(self))
+            self.relight(self)
         return handled
+
+    def relight(self, window, zoom=True):
+        """Re-enable the window's yellow and green once Qt has finished updating it. The timer belongs
+        to the window, so it goes with it."""
+        timer = window.findChild(QTimer, 'relight')
+        if timer is None:
+            timer = QTimer(window)
+            timer.setObjectName('relight')
+            timer.setSingleShot(True)
+            timer.setInterval(0)
+            timer.timeout.connect(lambda: mac_window.enable_buttons(window, zoom=zoom))
+        timer.start()
 
     def moveEvent(self, event):
         self.character.owner_moved(self.pos())
