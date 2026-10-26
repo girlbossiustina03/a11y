@@ -555,9 +555,13 @@ class App:
             start = self.call({'cmd': 'state', 'since': 10**9})['event_count']
             time.sleep(0.3)
         deadline, events, state = time.monotonic()+timeout, [], {}
+        samples = []
         while time.monotonic() < deadline:
             state = self.call({'cmd': 'state', 'since': start+len(events)})
             events.extend(state['events'])
+            if 'ui' in state:
+                samples.append({'t': state['now'], 'steps': (state.get('task') or {}).get('steps', 0), **state['ui']})
+                state['_ui_samples'] = samples
             if state['idle'] and state['quiet_for'] >= 1.6:
                 return state, events, False
             time.sleep(0.2)
@@ -1098,7 +1102,7 @@ def main():
     parser.add_argument('--only', action='append', help='run only requests containing this text (repeatable)')
     parser.add_argument('--out', default=str(ROOT/'.data'/'live_eval'))
     parser.add_argument('--compare', help='an earlier summary.json to show next to the results')
-    parser.add_argument('--suite', choices=('requests', 'navigation', 'varied', 'v2', 'v3', 'heldout', 'answers', 'conversation', 'broad', 'harder', 'all'), default='requests',
+    parser.add_argument('--suite', choices=('requests', 'navigation', 'varied', 'v2', 'v3', 'heldout', 'answers', 'conversation', 'broad', 'harder', 'features', 'all'), default='requests',
                         help='requests: the reported requests; navigation: getting somewhere by clicking; '
                              'varied: new random tasks across many apps every run')
     parser.add_argument('--tasks', type=int, default=14, help='varied suite: how many random tasks')
@@ -1114,7 +1118,7 @@ def main():
     print('build', build_id(), '→', out, flush=True)
     app = App(ROOT/'.data', out/'app.log')
     eval_window = EvalWindow()
-    if args.suite in ('conversation', 'broad', 'harder'):
+    if args.suite in ('conversation', 'broad', 'harder', 'features'):
         import importlib
         from live_conversation import run
         cases = importlib.import_module('live_'+args.suite).build(eval_window)

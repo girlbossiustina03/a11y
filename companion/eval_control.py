@@ -193,5 +193,20 @@ class EvalControl:
                      'receipts': [{key: receipt.get(key) for key in ('type', 'label', 'status')} for receipt in task.receipts]} if task else None,
             'mascot': {'x': mascot.x(), 'y': mascot.y(), 'width': mascot.width(), 'height': mascot.height()},
             'screen': {'x': area.x(), 'y': area.y(), 'width': area.width(), 'height': area.height()},
+            'ui': self.ui_state(),
             'last_action': {key: (window.service.last_action_result or {}).get(key) for key in ('type', 'label', 'status')},
         }
+
+    def ui_state(self):
+        """Read-only source-eval instrumentation; never changes focus or consent."""
+        from .cursor_flight import CURSOR, system_cursor_scale
+        mascot = self.window.mascot
+        face = mascot.character
+        center = face.mapToGlobal(face.rect().center())
+        cursor = self.window.cursor_flight
+        return dict(pid=os.getpid(), face=[center.x(), center.y()],
+                    input_visible=mascot.input.isVisible(), input_focused=mascot.input.hasFocus(),
+                    mascot_visible=mascot.isVisible(), minimized=mascot.isMinimized(),
+                    reply_visible=mascot.reply_shown,
+                    cursor_visible=cursor.isVisible(), cursor_phase=cursor.phase,
+                    cursor_size=CURSOR, system_pointer_size=18*system_cursor_scale())
