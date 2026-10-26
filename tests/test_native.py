@@ -1170,6 +1170,16 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(reply.windowTitle(), '💬 reply')
         reply.deleteLater()
 
+    def test_native_surface_draws_black_rule_under_title_bar(self):
+        from companion.mascot import Surface
+        from PyQt6.QtGui import QColor
+        surface = Surface(self.window.mascot, 'probe', system=True)
+        surface.resize(80, 40)
+        image = surface.grab().toImage()
+        self.assertEqual(QColor(image.pixel(40, 0)).getRgb()[:3], (0, 0, 0))
+        self.assertNotEqual(QColor(image.pixel(40, 5)).getRgb()[:3], (0, 0, 0))
+        surface.deleteLater()
+
     def test_offscreen_user_clicks_never_call_appkit(self):
         mascot = self.window.mascot
         self.assertFalse(mascot.native)

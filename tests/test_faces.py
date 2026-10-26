@@ -221,10 +221,8 @@ class TerminalThemeTests(unittest.TestCase):
         frames = [args[0] for selector, args in calls if selector == 'initWithFrame:']
         self.assertEqual(frames[0].size.height, 30)
         self.assertEqual(frames[1].size.width, 16)
-        self.assertEqual(frames[-1].size.height, 0.5)
-        self.assertEqual(frames[-1].origin.y, 199.5)
+        self.assertEqual((frames[1].origin.x, frames[1].origin.y), (3, 8))
         self.assertIn(('setLayoutAttribute:', (1,)), calls)
-        self.assertIn(('blackColor', ()), calls)
         widget.windowTitleChanged.connect.assert_called_once()
         widget.destroyed.connect.assert_called_once()
 

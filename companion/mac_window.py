@@ -394,7 +394,7 @@ def install_title(widget, window):
     ctypes.cdll.LoadLibrary('/System/Library/Frameworks/CoreImage.framework/CoreImage')
     accessory = send(send(objc.objc_getClass(b'NSTitlebarAccessoryViewController'), 'alloc'), 'init')
     view = send(send(objc.objc_getClass(b'NSView'), 'alloc'), 'initWithFrame:', rect(0, 0, max(1, widget.width()-90), 30), argtypes=(Rect,))
-    icon = send(send(objc.objc_getClass(b'NSImageView'), 'alloc'), 'initWithFrame:', rect(0, 7, 16, 16), argtypes=(Rect,))
+    icon = send(send(objc.objc_getClass(b'NSImageView'), 'alloc'), 'initWithFrame:', rect(3, 8, 16, 16), argtypes=(Rect,))
     label = send(objc.objc_getClass(b'NSTextField'), 'labelWithString:', ns_string(widget.windowTitle()), argtypes=(ctypes.c_void_p,))
     send(label, 'setFrame:', rect(0, 5, max(1, widget.width()-90), 20), restype=None, argtypes=(Rect,))
     font = send(objc.objc_getClass(b'NSFont'), 'boldSystemFontOfSize:', 13.0, argtypes=(ctypes.c_double,))
@@ -405,21 +405,23 @@ def install_title(widget, window):
     send(accessory, 'setView:', view, restype=None, argtypes=(ctypes.c_void_p,))
     send(accessory, 'setLayoutAttribute:', 1, restype=None, argtypes=(ctypes.c_long,))  # left, after buttons
     send(window, 'addTitlebarAccessoryViewController:', accessory, restype=None, argtypes=(ctypes.c_void_p,))
-    # Replace the system separator with Terminal's one-device-pixel black rule.
-    # This is a native content subview; no Qt stylesheet or cross-platform paint change.
+    # Terminal's one-device-pixel black rule under the title bar. It sits in the frame view above
+    # the content, because AppKit draws a light edge over the content's first row.
     content = send(window, 'contentView')
-    bounds = send(content, 'bounds', restype=Rect)
-    scale = send(window, 'backingScaleFactor', restype=ctypes.c_double) or 1.0
-    rule = send(send(objc.objc_getClass(b'NSBox'), 'alloc'), 'initWithFrame:',
-                rect(0, bounds.size.height-1/scale, bounds.size.width, 1/scale), argtypes=(Rect,))
-    send(rule, 'setBoxType:', 4, restype=None, argtypes=(ctypes.c_long,))
-    send(rule, 'setContentViewMargins:', Size(0, 0), restype=None, argtypes=(Size,))
-    send(rule, 'setBorderType:', 0, restype=None, argtypes=(ctypes.c_long,))
-    black = send(objc.objc_getClass(b'NSColor'), 'blackColor')
-    send(rule, 'setFillColor:', black, restype=None, argtypes=(ctypes.c_void_p,))
-    send(rule, 'setAutoresizingMask:', 10, restype=None, argtypes=(ctypes.c_ulong,))
-    send(content, 'addSubview:', rule, restype=None, argtypes=(ctypes.c_void_p,))
-    send(rule, 'release', restype=None)
+    frame_view = send(content, 'superview')
+    top = send(content, 'frame', restype=Rect)
+    if frame_view and isinstance(top, Rect):
+        scale = send(window, 'backingScaleFactor', restype=ctypes.c_double) or 1.0
+        rule = send(send(objc.objc_getClass(b'NSBox'), 'alloc'), 'initWithFrame:',
+                    rect(0, top.origin.y+top.size.height-1/scale, top.size.width, 1/scale), argtypes=(Rect,))
+        send(rule, 'setBoxType:', 4, restype=None, argtypes=(ctypes.c_long,))  # custom
+        send(rule, 'setBorderType:', 0, restype=None, argtypes=(ctypes.c_long,))
+        send(rule, 'setFillColor:', send(objc.objc_getClass(b'NSColor'), 'blackColor'),
+             restype=None, argtypes=(ctypes.c_void_p,))
+        send(rule, 'setAutoresizingMask:', 2 | 8, restype=None, argtypes=(ctypes.c_ulong,))  # width, stays at top
+        send(frame_view, 'addSubview:positioned:relativeTo:', rule, 1, None,
+             restype=None, argtypes=(ctypes.c_void_p, ctypes.c_long, ctypes.c_void_p))
+        send(rule, 'release', restype=None)
     _titles[window] = (accessory, label, icon)
     def update(text):
         send(label, 'setStringValue:', ns_string(text), restype=None, argtypes=(ctypes.c_void_p,))
@@ -472,7 +474,7 @@ def set_proxy_icon(widget, path, png):
         if not image:
             return False
         send(_titles[window][2], 'setImage:', image, restype=None, argtypes=(ctypes.c_void_p,))
-        send(_titles[window][1], 'setFrame:', rect(20, 5, max(1, widget.width()-110), 20),
+        send(_titles[window][1], 'setFrame:', rect(19, 5, max(1, widget.width()-109), 20),
              restype=None, argtypes=(Rect,))
         send(image, 'release', restype=None)
         refresh_titles()

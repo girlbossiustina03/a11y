@@ -19,6 +19,11 @@ xcrun swiftc -parse-as-library -O -module-cache-path build/swift-cache native/Sc
 
 "$PYTHON" -m PyInstaller --noconfirm --clean --distpath dist --workpath build/pyinstaller packaging/a11y.spec
 
+# PyInstaller's prebuilt launcher is linked against the macOS 12 SDK, and macOS gives such apps
+# the old title bar (taller, buttons placed differently from a source run). Declare SDK 26.
+xcrun vtool -set-build-version macos 14.0 26.0 -replace \
+    -output dist/A11y.app/Contents/MacOS/A11y dist/A11y.app/Contents/MacOS/A11y
+
 IDENTITY="${MACOS_SIGN_IDENTITY:--}"
 if [ "$IDENTITY" = "-" ]; then
   codesign --force --deep --sign - dist/A11y.app

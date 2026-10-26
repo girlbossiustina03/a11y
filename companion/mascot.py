@@ -182,8 +182,9 @@ class Surface(QFrame):
         background = QColor(p.background)
         background.setAlphaF(p.opacity*SEE_THROUGH)
         painter.setPen(QPen(QColor(p.border), 1.2))
-        if self.system:  # under a real title bar: just the background
+        if self.system:  # under a real title bar: the background and Terminal's black rule
             painter.fillRect(self.rect(), background)
+            painter.fillRect(QRectF(0, 0, self.width(), 1/self.devicePixelRatioF()), QColor('black'))
             return
         path = QPainterPath()
         path.addRoundedRect(body, RADIUS, RADIUS)
