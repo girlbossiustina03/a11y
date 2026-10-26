@@ -235,6 +235,11 @@ def run(app, window, out, cases, runs=1):
                                       passed=all(ok for _,ok in checks) and not timeout, seconds=seconds,
                                       reply=answer(events), task_started=task_started(events), checks=checks, timed_out=timeout,
                                       observed=state.get('_observed', {}))
+                        if state.get('_observed', {}).get('skipped'):
+                            record['status'] = 'skipped'
+                            record['skip_reason'] = state['_observed']['skipped']
+                        elif state.get('_observed', {}).get('needs_owner'):
+                            record['status'] = 'needs_owner'
                         # Keep the executed actions, not just timing events, so a failed
                         # check can be distinguished from a failed task after cleanup.
                         record['receipts'] = (state.get('task') or {}).get('receipts', [])
