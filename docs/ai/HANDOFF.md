@@ -44,6 +44,72 @@ removed safety guards and edited existing tests to match a behaviour change.
 
 #### Morning continuation (2026-10-27)
 
+#### Gym testing window (2026-10-27, 19:02–21:02 +02)
+
+- Requested work committed locally as **d09ca4a** on main; not pushed. Subsequent
+  gym-window changes remain uncommitted. Training stays off to isolate live timings.
+- Focused Finder baseline `finder-workflow-6/20261027-190244/`: **2/5** (select and
+  explicit double-click pass; nested navigation/document workflow fails). Initial
+  interaction correction produced **4/5** in workflow-7, but repeats 8–10 regressed
+  to 2/5; do not present that single 4/5 as a stable improvement.
+- Current work interprets only open versus select for an already grounded native
+  file item using a small, fixed local schema. Exact pointer/target checks and
+  sensitive confirmations remain. Duplicate AX labels at the same center are one
+  physical target. Explicit click gestures retain their requested behavior.
+- Desktop observations now serialize native collection and return an atomic copy,
+  so a background basic poll cannot replace the detailed sample before consumption.
+  Access disable/Stop uses a separate state lock and remains immediate.
+- Verifier experiments exposed two real issues: free-form paragraphs in the exact
+  evidence field, and relative instructions being reinterpreted after navigation.
+  The final prototype keeps the original verifier instructions and fields, but
+  constrains evidence to an enum of real observed values. Assessment-first and
+  missing-first replacement protocols were tested and rejected after false
+  positives or widespread false negatives. Executed openings retain native
+  parent/item identity on their receipt.
+  Native path comparison computes whether that precise folder was entered; a false
+  comparison prevents completion even if the model says met. Compound outcomes
+  still need the independent full-goal check. Boolean completion-shortcut experiments
+  were rejected after false positives; no such shortcut remains.
+- File-opening transitions now use bounded settling of BOTH native identity and OCR,
+  as app launches already did. This addresses metadata/image disagreement after a
+  double-click. Seventeen focused tests pass, including Stop during settling and
+  rejection of a selected parent/wrong parent. Related reported-failure suites have
+  also passed during development; final full suite is still pending.
+- Diagnostics 11–13 confirmed `navigation.entered=true` but `met=false`: the
+  4B verifier reapplied “continue into” from the new folder and demanded another
+  same-named child. The existing planner's original `done_when` now accompanies
+  the full original request for that native folder attempt; it is explicitly NOT
+  evidence. Exact native values
+  can prove completion even when the full path is not rendered on screen.
+- `finder-workflow-14/20261027-195958/`, build `800a39890c`: **10/10 turns across
+  two complete five-turn conversations**, versus baseline workflow-6 2/5. Select
+  8.31–8.56 s; explicit folder double-click 16.24–16.88 s; implicit nested entry
+  26.97–30.87 s; document opening 22.24–24.31 s; content answer 25.61–26.82 s.
+  Cropped screenshots independently show Supplies open and the manifest content.
+  This is a narrow result, not a full-suite success rate. Subsequent OCR settling
+  compares sorted text to avoid waiting merely because OCR ordering changed.
+- New screen-free `scripts/completion_eval.py` uses the actual verifier prompt,
+  schema and evidence check on 12 paired synthetic scenes; `--with-plan` generates
+  criteria through the app planner. It reports false positives separately and
+  never adopts a model. An exploratory 8B probe got 9/11 but falsely accepted an
+  unread compound task and a Settings sidebar label; **not adopted**. Handwritten
+  criteria experiments are diagnostics, not an app-quality benchmark.
+- Capability manifests now vary counts and destination with the suite seed, and
+  their checks derive answers from the fixture. Old constant “Cedar ridge/43”
+  cannot pass every run. The conversation-suite CLI now actually forwards `--seed`.
+  Random fixture content remains test data only; no production task phrase rules.
+- Final screen-free verifier check, `completion-eval-final-seed7.json`: **11/12,
+  zero false positives**, using actual planner-generated criteria for folder attempts.
+  One readable-document case returns `met=true` but `missing="}"`; the code correctly
+  refuses that contradictory response. This is a small development set, not an
+  adoption benchmark. The Settings sidebar/native-title guard now applies to the
+  final report check too, rather than only early completion.
+- Full unit suite before that final verifier simplification: **939 passed in
+  89.525 s**; newest focused block **35 passed**. Final full recheck is running.
+- Saved artifacts are evaluation-only cropped owned fixtures. Broader capability
+  validation and the final full suite are pending. No private apps, cloud inference,
+  messaging, push, training, or Arch setup occurred in this window.
+
 - Owner requested a local commit on main. Review/checks: **913 unit tests passed
   in 87.430 s**, plus four focused router-gate tests after adding per-row
   acts_on_computer regression protection (aggregate gains cannot offset a new

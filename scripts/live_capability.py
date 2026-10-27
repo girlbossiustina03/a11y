@@ -6,6 +6,7 @@ No external service, private application, sending or automatic write confirmatio
 """
 from pathlib import Path
 import re
+import random
 import shutil
 import tempfile
 import time
@@ -54,6 +55,7 @@ def action_seen(state, events, kind, **attributes):
 
 def build(window, count=0, seed=0):
     cases = []
+    rng=random.Random(seed)
     marker = 'A11y test %d' % (time.time_ns() % 100000000)
 
     def turn(name, request, check, app='', setup=None):
@@ -61,13 +63,14 @@ def build(window, count=0, seed=0):
                     wanted_app=app, setup=setup, timeout=180)
 
     def fixture(name):
-        state = {}
+        state = dict(amber=rng.randint(11,39),violet=rng.randint(41,79),
+                     destination=rng.choice(['Cedar ridge','Juniper pass','Birch valley','Copper summit']))
         def setup(runner):
             root = Path(tempfile.mkdtemp(prefix='a11y-capability-'))
             state['root'] = root
             (root/'Expedition'/'Supplies').mkdir(parents=True)
             (root/'Expedition'/'Supplies'/(marker+' manifest.txt')).write_text(
-                'Equipment inventory\nAmber packs: 17\nViolet packs: 26\nDestination: Cedar ridge\n')
+                f'Equipment inventory\nAmber packs: {state["amber"]}\nViolet packs: {state["violet"]}\nDestination: {state["destination"]}\n')
             for index in range(90):
                 (root/('item%03d %s.txt' % (index, marker))).write_text('Fixture item %d\n' % index)
             osa('tell application "Finder" to activate')
@@ -118,15 +121,14 @@ end tell''', root)
     turns.append(turn('double_document', f'Double-click {marker} manifest.txt so I can read it in TextEdit.',
                       lambda s,e: document_is(state, s) and action_seen(s,e,'click_point',click_count=2), 'TextEdit'))
     turns.append(turn('read_inventory', 'From that document, tell me the destination and how many packs there are altogether.',
-                      lambda s,e: document_is(state, s) and contains_answer('Cedar ridge')(s,e) and
-                      bool(re.search(r'\b43\b', answer(e))), 'TextEdit'))
+                      lambda s,e: document_is(state, s) and inventory_answer(state,s,e), 'TextEdit'))
 
     state2, turns2 = fixture('finder_scroll_and_plan')
     turns2.append(turn('scroll_select', f'Scroll down this Finder list and select item089 {marker}.txt. Leave the file closed.',
                        lambda s,e: le.same_path(selected_path(s),state2['root']/('item089 '+marker+'.txt')) and
                        any(r.get('type') == 'scroll' for r in (s.get('task') or {}).get('receipts', [])), 'Finder'))
     turns2.append(turn('multi_level_plan', 'Open Expedition, then Supplies, then read the manifest there and tell me the destination. Work through the folders yourself.',
-                       lambda s,e: contains_answer('Cedar ridge')(s,e) and
+                       lambda s,e: contains_answer(state2['destination'])(s,e) and
                        (finder_at(state2['root']/'Expedition'/'Supplies', s) or document_is(state2,s)), 'Finder'))
 
     memory, sequence = fixture('long_conversation')
@@ -150,8 +152,8 @@ end tell''', root)
     sequence.append(turn('distant_fact', 'What expedition code did I tell you near the beginning of this conversation?', contains_answer(code)))
     sequence.append(turn('distant_task', 'Return to the Finder folder I asked you to open near the beginning of this conversation.',
                          lambda s,e: finder_at(memory['root']/'Expedition',s), 'Finder'))
-    sequence.append(turn('distant_extension', 'In that folder, continue into Supplies and read the manifest. Which ridge is the destination?',
-                         lambda s,e: contains_answer('Cedar ridge')(s,e), 'Finder'))
+    sequence.append(turn('distant_extension', 'In that folder, continue into Supplies and read the manifest. What is the destination?',
+                         lambda s,e: contains_answer(memory['destination'])(s,e), 'Finder'))
     sequence.append(turn('fact_after_task', 'Tell me my expedition code again, without opening anything.', contains_answer(code)))
 
     web = {}
@@ -214,3 +216,10 @@ def document_is(fixture, state):
     state.setdefault('_observed', {})['document_path'] = path
     return le.front_app()=='TextEdit' and le.same_path(path,fixture['root']/'Expedition'/'Supplies'/next(
         p.name for p in (fixture['root']/'Expedition'/'Supplies').iterdir()))
+
+
+def inventory_answer(fixture,state,events):
+    expected=dict(destination=fixture['destination'],total_packs=fixture['amber']+fixture['violet'])
+    state.setdefault('_observed',{})['inventory_expected']=expected
+    return contains_answer(expected['destination'])(state,events) and bool(
+        re.search(r'\b'+str(expected['total_packs'])+r'\b',answer(events)))

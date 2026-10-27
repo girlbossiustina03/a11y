@@ -1162,14 +1162,14 @@ def main():
     if args.suite in ('conversation', 'broad', 'harder', 'features', 'capability'):
         import importlib
         from live_conversation import run
-        cases = importlib.import_module('live_'+args.suite).build(eval_window)
+        cases = importlib.import_module('live_'+args.suite).build(eval_window,seed=args.seed if args.seed is not None else 0)
         if ONLY:
             cases = [case for case in cases if any(text.casefold() in turn.request.casefold()
                      for turn in case['turns'] for text in ONLY)]
         full_turns=sum(len(case['turns']) for case in cases)
         if args.max_turns:
             cases=[dict(case,turns=case['turns'][:args.max_turns]) for case in cases]
-        (out/'scope.json').write_text(json.dumps(dict(suite=args.suite,full_turns=full_turns,
+        (out/'scope.json').write_text(json.dumps(dict(suite=args.suite,seed=args.seed if args.seed is not None else 0,full_turns=full_turns,
             scheduled_turns=sum(len(case['turns']) for case in cases),max_turns=args.max_turns,only=ONLY),indent=2))
         return run(app, eval_window, out, cases, args.runs)
     if args.suite in ('v2', 'v3', 'heldout'):

@@ -64,6 +64,15 @@ class CapabilitySuiteTests(unittest.TestCase):
                 self.assertNotRegex(t.request+' '+t.wanted_app, r'(?i)\b(mail|messages|photos|contacts|teams|whatsapp|facetime|youtube)\b')
                 self.assertEqual(len(t.checks), 2)
 
+    def test_inventory_checker_requires_the_fixture_facts_not_the_old_constant_answer(self):
+        fixture=dict(amber=23,violet=41,destination='Birch valley')
+        for message,wanted in [('Birch valley, 64 packs.',True),('Cedar ridge, 43 packs.',False),
+                               ('Birch valley, 43 packs.',False),('Cedar ridge, 64 packs.',False)]:
+            events=[{'kind':'say','data':{'message':message}}]
+            state={}
+            self.assertEqual(suite.inventory_answer(fixture,state,events),wanted)
+            self.assertEqual(state['_observed']['inventory_expected']['total_packs'],64)
+
     def test_double_click_requires_actual_double_click_not_just_destination(self):
         state = {}
         def event(n):

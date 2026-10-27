@@ -73,14 +73,24 @@ def finder_facts(snapshot):
     bundle = (snapshot.get('app') or {}).get('bundle_id')
     if sys.platform != 'darwin' or bundle != 'com.apple.finder':
         return {}
+    started=time.monotonic()
+    outcome='empty'
     try:
         result = subprocess.run(['osascript', '-e', FINDER_FACTS_SCRIPT, bundle],
                                 capture_output=True, text=True, timeout=1)
         lines = result.stdout.strip().splitlines()
         if result.returncode == 0 and len(lines) >= 2:
+            outcome='available'
             return dict(zip(('target', 'view', 'sort'), (line[:1024] for line in lines)))
-    except (OSError, subprocess.TimeoutExpired):
-        pass
+        if result.returncode:
+            outcome='error'
+    except subprocess.TimeoutExpired:
+        outcome='timeout'
+    except OSError:
+        outcome='unavailable'
+    finally:
+        from .timing import timing
+        timing('finder.facts',started,status=outcome)
     return {}
 
 
@@ -250,6 +260,7 @@ class DesktopContext:
     def __init__(self, bridge, *, clock=time.monotonic):
         self.bridge, self.clock = bridge, clock
         self.lock = threading.RLock()
+        self.collection_lock = threading.Lock()
         self.enabled = False
         self.snapshot = {}
         self.observed = 0
@@ -294,6 +305,12 @@ class DesktopContext:
             stop.wait(2)
 
     def collect_once(self, *, generation=None, target_bundle=None, targets=False):
+        # Keep a background poll from publishing over an in-flight detailed
+        # sample. Access/Stop uses the separate state lock and remains immediate.
+        with self.collection_lock:
+            return self._collect_once(generation=generation,target_bundle=target_bundle,targets=targets)
+
+    def _collect_once(self, *, generation=None, target_bundle=None, targets=False):
         with self.lock:
             if not self.enabled:
                 return
@@ -317,6 +334,7 @@ class DesktopContext:
                 else:
                     self.snapshot = value
                     self.observed = now
+                return self.context()  # copy while holding the state lock, before the next poll
         except RuntimeError as e:
             with self.lock:
                 if generation is None or generation == self.generation:
