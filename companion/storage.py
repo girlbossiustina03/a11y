@@ -1,5 +1,6 @@
 """Local settings and conversation history; no screenshot storage."""
 from contextlib import contextmanager
+from collections import defaultdict, deque
 import json
 from pathlib import Path
 import sqlite3
@@ -11,7 +12,9 @@ def now():
 
 
 class Store:
-    def __init__(self, directory):
+    def __init__(self, directory, *, persist_history=True):
+        self.persist_history = persist_history
+        self.session_history = defaultdict(lambda: deque(maxlen=100))
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         with self.employee() as db:
@@ -84,6 +87,9 @@ class Store:
                        (self.owner(identity), json.dumps(value)))
 
     def history(self, identity, limit=12):
+        if not self.persist_history:
+            rows = list(self.session_history[self.owner(identity)])
+            return [dict(row) for row in (rows if limit < 0 else rows[-limit:] if limit else [])]
         # Never replay legacy answers whose document permissions can no longer be checked.
         with self.employee() as db:
             rows = db.execute('SELECT role,content,source_documents FROM messages WHERE owner=? ORDER BY id DESC LIMIT ?',
@@ -92,6 +98,10 @@ class Store:
                 if not json.loads(r['source_documents'])]
 
     def add_exchange(self, identity, request, reply):
+        if not self.persist_history:
+            self.session_history[self.owner(identity)].extend(
+                ({'role':'user','content':request}, {'role':'assistant','content':reply}))
+            return
         with self.employee() as db:
             for role, content in [('user', request), ('assistant', reply)]:
                 db.execute('INSERT INTO messages(owner,role,content,created_at) VALUES (?,?,?,?)',
@@ -101,5 +111,8 @@ class Store:
                        (self.owner(identity), self.owner(identity)))
 
     def clear_history(self, identity):
+        if not self.persist_history:
+            self.session_history[self.owner(identity)].clear()
+            return
         with self.employee() as db:
             db.execute('DELETE FROM messages WHERE owner=?', (self.owner(identity),))

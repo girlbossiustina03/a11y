@@ -44,11 +44,49 @@ TEAMS_HOSTS = ('teams.microsoft.com', 'teams.cloud.microsoft', 'teams.live.com')
 # --- the Mac ---------------------------------------------------------------------------------
 
 def osa(*lines, timeout=30):
-    result = subprocess.run(['osascript', *sum((['-e', line] for line in lines), [])],
+    result = subprocess.run(native_command('osascript', *sum((['-e', line] for line in lines), [])),
                             capture_output=True, text=True, timeout=timeout)
     if result.returncode:
         raise RuntimeError(result.stderr.strip()[:300])
     return result.stdout.strip()
+
+
+def native_command(*arguments):
+    # Only short native probes, never inference/training. Background I/O policy
+    # made each AppleScript launch take seconds while doing no model work.
+    return (['/bin/sh', '-c', 'taskpolicy -B -p $$ && exec "$@"', 'native-probe']
+            if sys.platform == 'darwin' else [])+list(arguments)
+
+
+def same_path(actual, expected):
+    """macOS aliases /var and /tmp to /private; compare filesystem identity paths."""
+    if not actual or not expected:
+        return False
+    try:
+        return Path(actual).resolve() == Path(expected).resolve()
+    except (OSError,TypeError,ValueError):
+        return False
+
+
+def park_test_pointer(runner):
+    """Keep fixture windows from appearing under the pointer's traffic-light hover.
+
+    Move only, to the test companion's observed face, before fixture setup.
+    No click, hot corner, OS setting or application data is changed.
+    """
+    if sys.platform != 'darwin':
+        return
+    state = runner.call({'cmd':'state','since':10**9})
+    face = state.get('ui',{}).get('face')
+    if not isinstance(face,list) or len(face)!=2 or any(type(v) not in (int,float) for v in face):
+        return
+    import ctypes
+    class Point(ctypes.Structure):
+        _fields_=[('x',ctypes.c_double),('y',ctypes.c_double)]
+    core = ctypes.CDLL('/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics')
+    core.CGWarpMouseCursorPosition.argtypes=[Point]
+    core.CGWarpMouseCursorPosition.restype=ctypes.c_int32
+    core.CGWarpMouseCursorPosition(Point(*face))
 
 
 def running(process):
@@ -1102,12 +1140,15 @@ def main():
     parser.add_argument('--only', action='append', help='run only requests containing this text (repeatable)')
     parser.add_argument('--out', default=str(ROOT/'.data'/'live_eval'))
     parser.add_argument('--compare', help='an earlier summary.json to show next to the results')
-    parser.add_argument('--suite', choices=('requests', 'navigation', 'varied', 'v2', 'v3', 'heldout', 'answers', 'conversation', 'broad', 'harder', 'features', 'all'), default='requests',
+    parser.add_argument('--suite', choices=('requests', 'navigation', 'varied', 'v2', 'v3', 'heldout', 'answers', 'conversation', 'broad', 'harder', 'features', 'capability', 'all'), default='requests',
                         help='requests: the reported requests; navigation: getting somewhere by clicking; '
                              'varied: new random tasks across many apps every run')
     parser.add_argument('--tasks', type=int, default=14, help='varied suite: how many random tasks')
     parser.add_argument('--seed', type=int, help='varied suite: repeat an earlier run (printed at the start)')
+    parser.add_argument('--max-turns',type=int,help='diagnostic prefix only: first N turns of each selected conversation')
     args = parser.parse_args()
+    if args.max_turns is not None and args.max_turns<1:
+        parser.error('--max-turns must be positive')
     # A sleeping display locks the screen: its password field pauses screen vision and every task
     # failed as "protected" (live, 2026-10-26). Keep the Mac awake for as long as this run lasts.
     subprocess.Popen(['caffeinate', '-dimsu', '-w', str(os.getpid())])
@@ -1118,13 +1159,18 @@ def main():
     print('build', build_id(), '→', out, flush=True)
     app = App(ROOT/'.data', out/'app.log')
     eval_window = EvalWindow()
-    if args.suite in ('conversation', 'broad', 'harder', 'features'):
+    if args.suite in ('conversation', 'broad', 'harder', 'features', 'capability'):
         import importlib
         from live_conversation import run
         cases = importlib.import_module('live_'+args.suite).build(eval_window)
         if ONLY:
             cases = [case for case in cases if any(text.casefold() in turn.request.casefold()
                      for turn in case['turns'] for text in ONLY)]
+        full_turns=sum(len(case['turns']) for case in cases)
+        if args.max_turns:
+            cases=[dict(case,turns=case['turns'][:args.max_turns]) for case in cases]
+        (out/'scope.json').write_text(json.dumps(dict(suite=args.suite,full_turns=full_turns,
+            scheduled_turns=sum(len(case['turns']) for case in cases),max_turns=args.max_turns,only=ONLY),indent=2))
         return run(app, eval_window, out, cases, args.runs)
     if args.suite in ('v2', 'v3', 'heldout'):
         return run_v2(app, eval_window, out, args.tasks, args.seed if args.seed is not None else int(time.time()) % 100000,

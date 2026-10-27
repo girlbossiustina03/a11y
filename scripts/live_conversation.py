@@ -195,7 +195,11 @@ def run(app, window, out, cases, runs=1):
             if case.get('skipped'):
                 print('skip:', case['skipped'], flush=True)
             for attempt in range(1, runs+1):
+                # Each source process starts its screenshot counter at one.
+                # A separate case directory keeps evidence from being overwritten.
+                app.shots = out/'shots'/('%s-%d' % (case['name'], attempt))
                 app.launch()
+                le.park_test_pointer(app)
                 before_apps = le.app_names()
                 before = {a: le.window_ids(a) for a in le.WINDOW_APPS if a in before_apps}
                 empty_windows = []
@@ -235,6 +239,12 @@ def run(app, window, out, cases, runs=1):
                                       passed=all(ok for _,ok in checks) and not timeout, seconds=seconds,
                                       reply=answer(events), task_started=task_started(events), checks=checks, timed_out=timeout,
                                       observed=state.get('_observed', {}))
+                        record['plan'] = state.get('plan', {})
+                        record['task_status'] = (state.get('task') or {}).get('status')
+                        record['pending_action'] = state.get('pending_action')
+                        record['family'] = turn.family
+                        record['observation'] = state.get('observation',{})
+                        record['events'] = events
                         if state.get('_observed', {}).get('skipped'):
                             record['status'] = 'skipped'
                             record['skip_reason'] = state['_observed']['skipped']
@@ -247,6 +257,7 @@ def run(app, window, out, cases, runs=1):
                         completed = index
                         with (out/'runs.jsonl').open('a') as f:
                             f.write(json.dumps(record, ensure_ascii=False)+'\n')
+                        (out/'summary.json').write_text(json.dumps(records, indent=2, ensure_ascii=False))
                         print(record['passed'], case['name'], index, record['seconds'], flush=True)
                 except Exception as error:
                     for index, turn in enumerate(case['turns'][completed:], completed+1):
@@ -266,9 +277,12 @@ def run(app, window, out, cases, runs=1):
                         except Exception as error:
                             records.append(dict(case=case['name'], passed=False, cleanup_error=str(error)))
                     window.close()
+                    # A single native inventory instead of one AppleScript process per
+                    # possible app. On the host each launch cost several seconds.
+                    now_apps = le.app_names()
                     # Only close windows created by these suites, never inspect private apps.
                     for name in ('Safari', 'Google Chrome', 'Finder', 'TextEdit', 'Preview'):
-                        if le.running(name):
+                        if name in now_apps:
                             for wid in le.window_ids(name)-before.get(name,set()):
                                 try:
                                     script = 'tell application (item 1 of argv) to close (window id (item 2 of argv as integer))'
@@ -288,10 +302,9 @@ end repeat
 end tell''', name)
                         except (RuntimeError, subprocess.TimeoutExpired) as error:
                             records.append(dict(case=case['name'], passed=False, cleanup_error=str(error)))
-                    for name in SAFE_APPS - before_apps:
+                    for name in (SAFE_APPS - before_apps) & now_apps:
                         try:
-                            if le.running(name):
-                                osa('tell application (item 1 of argv) to quit saving no', name)
+                            osa('tell application (item 1 of argv) to quit saving no', name)
                         except (RuntimeError, subprocess.TimeoutExpired) as error:  # an app that won't quit must not end the run
                             records.append(dict(case=case['name'], passed=False, cleanup_error=str(error)))
                     if not case.get('scoped_documents') and any(t.wanted_app == 'TextEdit' for t in case['turns']):

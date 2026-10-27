@@ -69,14 +69,14 @@ def messages(request, label, recent=(), context=None, last_task=None):
 @lru_cache(maxsize=1)
 def harder_strings():
     """Conservative superset: exclude every literal, including f-string fragments."""
-    tree = ast.parse('\n'.join((ROOT / 'scripts' / name).read_text() for name in ('live_harder.py', 'live_features.py')))
+    tree = ast.parse('\n'.join((ROOT / 'scripts' / name).read_text() for name in ('live_harder.py', 'live_features.py', 'live_capability.py')))
     return {' '.join(n.value.casefold().split()) for n in ast.walk(tree)
             if isinstance(n, ast.Constant) and isinstance(n.value, str) and n.value.strip()}
 
 @lru_cache(maxsize=1)
 def harder_patterns():
     """Also protect variable fixture names and concatenated live requests."""
-    tree = ast.parse('\n'.join((ROOT / 'scripts' / name).read_text() for name in ('live_harder.py', 'live_features.py')))
+    tree = ast.parse('\n'.join((ROOT / 'scripts' / name).read_text() for name in ('live_harder.py', 'live_features.py', 'live_capability.py')))
     patterns = []
     def pattern(node):
         if isinstance(node, ast.Constant) and isinstance(node.value, str):

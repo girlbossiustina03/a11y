@@ -1651,6 +1651,14 @@ class CompanionWindow(QMainWindow):
             self.say(proposal.get('label', proposal['type'])+'…', [('Stop', 'computer:stop')], compact=True)
         else:
             self.mascot.collapse_chat()
+        if self.mascot.native:
+            # An NSPanel can own the keyboard while the target app is still
+            # 'active'. Its first click then only dismisses our focus.
+            from . import mac_window
+            self.mascot.input.clearFocus()
+            mac_window.release_key(self.mascot)
+            if self.mascot.reply_window is not None:
+                mac_window.release_key(self.mascot.reply_window)
         self.set_busy(True)
         worker = ComputerActionWorker(self.desktop_monitor, proposal, self, vision=self.vision, provider=self.service.provider)
         self.worker = worker

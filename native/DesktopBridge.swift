@@ -21,6 +21,22 @@ func element(_ value: CFTypeRef?) -> AXUIElement? {
     guard let value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
     return (value as! AXUIElement)
 }
+func containerRoles(_ node: AXUIElement) -> [String] {
+    var roles: [String] = []
+    var ancestor = element(attr(node, "AXParent"))
+    for _ in 0..<3 {
+        guard let parent = ancestor else { break }
+        roles.append(string(parent, "AXRole"))
+        ancestor = element(attr(parent, "AXParent"))
+    }
+    return roles
+}
+func finderItem(_ node: AXUIElement) -> Bool {
+    var pid: pid_t = 0
+    AXUIElementGetPid(node, &pid)
+    guard NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.apple.finder" else { return false }
+    return ([string(node, "AXRole")] + containerRoles(node)).contains { ["AXRow", "AXCell"].contains($0) }
+}
 func bounds(_ node: AXUIElement) -> [String: Double]? {
     guard let position = attr(node, "AXPosition"), let size = attr(node, "AXSize"),
           CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else { return nil }
@@ -268,6 +284,14 @@ if let index = args.firstIndex(of: "--hit"), index+2 < args.count {
     var result: [String: Any] = ["role": string(found, "AXRole"), "subrole": string(found, "AXSubrole"),
                                  "title": String((string(found, "AXTitle").isEmpty ? string(found, "AXDescription") : string(found, "AXTitle")).prefix(100)),
                                  "owner": owner?.bundleIdentifier ?? "", "owner_name": owner?.localizedName ?? ""]
+    if finderItem(found) {
+        result["finder_item"] = true
+        // Finder's filename label is a field value. Do not read arbitrary
+        // values in other apps, or a secure field.
+        if (result["title"] as? String ?? "").isEmpty && string(found, "AXSubrole") != "AXSecureTextField" {
+            result["title"] = string(found, "AXValue")
+        }
+    }
     if string(found, "AXRole") == "AXDockItem", let url = attr(found, "AXURL") as? URL, let bundle = Bundle(url: url)?.bundleIdentifier {
         result["app"] = bundle  // the app this Dock icon opens
     }
@@ -334,6 +358,9 @@ if let index = args.firstIndex(of: "--click"), index+4 < args.count {
                                           "AXPopUpButton", "AXMenuBarItem", "AXMenuItem", "AXDisclosureTriangle", "AXCell", "AXRow"]
             let fields: Set<String> = ["AXTextField", "AXSearchField", "AXTextArea", "AXComboBox"]
             for _ in 0..<4 where owner == pid {
+                // Focusing a filename field enters rename mode. File rows need
+                // a real mouse selection/opening, never generic field focus.
+                if let found, finderItem(found) { break }
                 let role = string(node, "AXRole")
                 var names: CFArray?
                 AXUIElementCopyActionNames(node, &names)
@@ -963,6 +990,7 @@ if let focused = element(attr(app, "AXFocusedUIElement")) {
     output["focused_role"] = (string(focused, "AXSubrole") == "AXSecureTextField" || role == "AXSecureTextField") ? "secure_input" : role
     if string(focused, "AXSubrole") != "AXSecureTextField" && role != "AXSecureTextField" {
         output["focused_bounds"] = bounds(focused) ?? [:]
+        output["focused_container_roles"] = containerRoles(focused)
         func readable(_ node: AXUIElement) -> [String: String]? {
             if string(node, "AXSubrole") == "AXSecureTextField" || string(node, "AXRole") == "AXSecureTextField" { return nil }
             var result = ["role": string(node, "AXRole")]
@@ -1046,15 +1074,18 @@ if pressIndex == nil, args.contains("--targets"), let window, let frame = bounds
         if string(node, "AXSubrole") == "AXSecureTextField" { continue }
         let role = string(node, "AXRole")
         // Greyed-out controls are not offered: the model could not tell them from ones that work (owner).
-        if clickable.contains(role), let box, box.width >= 4, box.height >= 4, windowRect.contains(CGPoint(x: box.midX, y: box.midY)),
+        let filename = front.bundleIdentifier == "com.apple.finder" && (role == "AXTextField" || role == "AXStaticText") && finderItem(node)
+        if (clickable.contains(role) || filename), let box, box.width >= 4, box.height >= 4, windowRect.contains(CGPoint(x: box.midX, y: box.midY)),
            (attr(node, "AXEnabled") as? Bool) != false {
             var label = string(node, "AXTitle")
             if label.isEmpty { label = string(node, "AXDescription") }
             if label.isEmpty { label = string(node, "AXHelp") }
             if label.isEmpty && fields.contains(role) { label = string(node, "AXPlaceholderValue") }
+            if label.isEmpty && filename { label = string(node, "AXValue") }  // exact Finder item name only
             if !label.isEmpty {
                 var target: [String: Any] = ["role": role, "label": String(label.prefix(80)), "page": inPage,
                                              "bounds": ["x": box.minX, "y": box.minY, "width": box.width, "height": box.height]]
+                if filename { target["file_item"] = true }
                 // Which tab or option is chosen (a state, not a value): Activity Monitor's Memory tab was
                 // clicked and nothing could tell it had switched (live).
                 if role == "AXRadioButton" || role == "AXTab", let chosen = attr(node, "AXValue") as? Int { target["selected"] = chosen == 1 }

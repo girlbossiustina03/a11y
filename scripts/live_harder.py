@@ -102,15 +102,15 @@ def build(window, count=30, seed=0):
             return osa('tell application "Finder" to return POSIX path of (target of front Finder window as alias)').rstrip('/')
         if kind == 'nested':
             request = 'In this Finder folder, go into Recipes and then Saturday.'
-            check = lambda s,e,state=state,target=target: target() == str(state['folder']/'Recipes'/'Saturday')
+            check = lambda s,e,state=state,target=target: le.same_path(target(),state['folder']/'Recipes'/'Saturday')
         elif kind == 'sort':
             request = 'Put this Finder folder into list view and arrange its items by name.'
             def check(s,e,state=state,target=target):
                 values = dict(finder_target=target(), finder_view=osa('tell application "Finder" to return current view of front Finder window'),
                               finder_column=osa('tell application "Finder" to return name of sort column of list view options of front Finder window'))
                 s.setdefault('_observed', {}).update(values)
-                predicates = dict(target_matches=values['finder_target'] == str(state['folder']),
-                                  list_view=values['finder_view'] == 'list view', name_column=values['finder_column'].casefold() == 'name')
+                predicates = dict(target_matches=le.same_path(values['finder_target'],state['folder']),
+                                  list_view=values['finder_view'] == 'list view', name_column=values['finder_column'].casefold() in ('name', 'name column'))
                 s['_observed'].update(predicates)
                 return all(predicates.values())
         elif kind == 'info':
@@ -127,7 +127,7 @@ end tell''', folder_name+' Info')
             request = f'Open the file called {marker} packing.txt from this Finder folder and tell me what it says to pack.'
             def check(s,e,state=state):
                 path = state['folder']/(marker+' packing.txt')
-                return path.read_text() == 'A11y test 314159\nPack the amber lantern.\n' and osa('tell application "TextEdit" to return POSIX path of (path of front document as alias)') == str(path) and 'amber lantern' in answer(e).casefold()
+                return path.read_text() == 'A11y test 314159\nPack the amber lantern.\n' and le.same_path(osa('tell application "TextEdit" to return POSIX path of (path of front document as alias)'),path) and 'amber lantern' in answer(e).casefold()
         case(name, [turn(name, request, 'Finder', check)], setup, [cleanup],
              'v3 Documents sort/date added; broad finder_downloads; v2 TextEdit typing')
 
@@ -201,7 +201,7 @@ end tell''', folder_name+' Info')
             osa('tell application "TextEdit" to open POSIX file (item 1 of argv)', str(state['path']))
             le.activate('TextEdit')
         def check(s,e,state=state,content=content):
-            return osa('tell application "TextEdit" to return POSIX path of (path of front document as alias)') == str(state['path']) and osa('tell application "TextEdit" to return text of front document').strip() == content
+            return le.same_path(osa('tell application "TextEdit" to return POSIX path of (path of front document as alias)'),state['path']) and osa('tell application "TextEdit" to return text of front document').strip() == content
         def cleanup(state=state):
             try:
                 if state.get('path'):

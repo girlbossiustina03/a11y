@@ -171,6 +171,10 @@ def with_opening(plan, request):
     result = dict(plan, operation='computer_task', target=text(request, 'computer task', 2000), remaining_request='')
     if opening:
         result['opening'] = opening
+        # This operation is now owned by the app/browser opening, rather than
+        # the router's auxiliary referent. Revalidating the prepared task must
+        # not turn an app launch into movement of the companion.
+        result['referent'] = 'destination'
     return result
 
 
@@ -275,8 +279,8 @@ For highlight return a bounded normalized target rectangle and a clear label.
 Do not claim any action has executed: this is only a proposal for the native executor.
 Current pixels override older metadata. If evidence is insufficient, ask a short
 clarification with request_kind=answer and no action/target. No shell commands.
-message is one short sentence to the user ("Which Safari window: Google or GitHub?"), never
-your reasoning, the request's interpretation or the evidence you used.'''
+message is one short sentence to the user, never your reasoning or a restatement of the
+request. A clarification may mention only choices supported by the current observation.'''
 
 
 def _normalized(value):
@@ -302,6 +306,10 @@ def highlight_only(request, plan=None):
 def semantic_plan(plan, request):
     """Validate operation ownership against the model's interpretation, not phrase matches."""
     plan = validate_plan(plan)
+    # Addressing or talking about the companion is not an instruction to move
+    # her. An explicitly conversational answer must survive auxiliary referents.
+    if plan['operation'] == 'answer' and plan.get('acts_on_computer') is False:
+        return plan
     if (str(plan.get('app_name', '')).casefold() in ('system settings', 'system preferences')
             and not re.search(r'https?://', request, re.I)
             and (plan['operation'] in ('browser_open', 'browser_search')

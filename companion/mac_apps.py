@@ -201,7 +201,7 @@ NOTE_TEXT = '''on run argv
 end run'''
 NOTE_CREATE = '''on run argv
   tell application id "com.apple.Notes"
-    set n to make new note at (default folder of default account) with properties {name:(item 1 of argv), body:(item 2 of argv)}
+    set n to make new note at (default folder of default account) with properties {body:(item 2 of argv)}
     return name of n
   end tell
 end run'''

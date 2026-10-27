@@ -93,6 +93,14 @@ class RouterFormattingTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         subprocess.run(['bash', '-n', str(root/'scripts/router_pipeline.sh')], check=True)
 
+    def test_pipeline_scores_base_and_adapter_on_same_snapshot(self):
+        root = Path(__file__).resolve().parents[1]
+        pipeline = (root/'scripts/router_pipeline.sh').read_text()
+        for name,model in [('eval-base-ollama','qwen3:4b-instruct'),('eval-ollama','a11y-router-test')]:
+            stage = pipeline.split('stage '+name+' ',1)[1].split('\nstage ',1)[0]
+            self.assertIn('--model '+model,stage)
+            self.assertIn('--data "$RUN/data/test.jsonl"',stage)
+
 
 if __name__ == '__main__':
     unittest.main()

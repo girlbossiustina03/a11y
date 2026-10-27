@@ -25,11 +25,22 @@ TEST_MARKER = 'A11y test'  # only changes whose label carries it can be confirme
 _shots = {'count': 0}
 
 
-def step_shot(image_data, step, action=None, status=''):
+def step_shot(image_data, step, action=None, status='', *, observation=None, screen=None):
     """Evaluation only: the step's screenshot (960 px, the click drawn in red) and what was done,
     in the run folder the harness gave (A11Y_EVAL_SHOTS). The normal app never writes screenshots."""
     folder = os.getenv('A11Y_EVAL_SHOTS', '')
     if not enabled() or not folder or not isinstance(image_data, str) or ',' not in image_data:
+        return
+    from .input_actions import BLOCKED
+    owner = (observation or {}).get('app') or {}
+    if owner.get('bundle_id') in BLOCKED or owner.get('name') in ('Notes','Reminders','Mail','Messages','Photos','Contacts','Teams','WhatsApp','FaceTime'):
+        return  # evidence must not save private app/terminal content or unrelated note titles
+    # Saved evidence is opt-in and limited to the observed test window. Other
+    # windows can contain private titles even when a safe app is in front.
+    bounds = ((observation or {}).get('window') or {}).get('bounds') or {}
+    if not screen or not all(isinstance(bounds.get(k), (int,float)) for k in ('x','y','width','height')):
+        return
+    if (observation or {}).get('status') == 'private_app' or (observation or {}).get('focused_role') == 'secure_input':
         return
     import base64
     from PyQt6.QtCore import QPointF
@@ -38,19 +49,53 @@ def step_shot(image_data, step, action=None, status=''):
     image = QImage.fromData(base64.b64decode(image_data.split(',', 1)[1]))
     if image.isNull():
         return
-    image = image.scaledToWidth(960, Qt.TransformationMode.SmoothTransformation)
     action = action or {}
     if isinstance(action.get('x'), (int, float)) and isinstance(action.get('y'), (int, float)):
         painter = QPainter(image)
         painter.setPen(QPen(QColor('red'), 3))
         painter.drawEllipse(QPointF(action['x']*image.width(), action['y']*image.height()), 14, 14)
         painter.end()
+    crop = evidence_rect(bounds, screen, image.width(), image.height())
+    if crop is None:
+        return
+    image = image.copy(*crop)
+    if image.width() > 960:
+        image = image.scaledToWidth(960, Qt.TransformationMode.SmoothTransformation)
     _shots['count'] += 1
     name = 'shot-%04d.jpg' % _shots['count']
     os.makedirs(folder, exist_ok=True)
     image.save(os.path.join(folder, name), 'JPG', 70)
     timing_module.timing('eval.shot', time.monotonic(), file=name, step=step, status=status,
-                         action={key: action.get(key) for key in ('type', 'label', 'x', 'y', 'key', 'text', 'url', 'bundle_id') if key in action})
+                         action={key: action.get(key) for key in ('type', 'label', 'x', 'y', 'key', 'text', 'url', 'bundle_id', 'button', 'click_count') if key in action})
+
+
+def evidence_rect(bounds, screen, width, height):
+    """Map logical desktop bounds to image pixels, clipped to this capture."""
+    import math
+    try:
+        values = [bounds[k] for k in ('x','y','width','height')]+[screen[k] for k in ('x','y','width','height')]
+        if any(isinstance(v,bool) or not isinstance(v,(int,float)) or not math.isfinite(v) for v in values):
+            return None
+        if min(bounds['width'],bounds['height'],screen['width'],screen['height'],width,height) <= 0:
+            return None
+        sx,sy = width/screen['width'],height/screen['height']
+        x=max(0,math.ceil((bounds['x']-screen['x'])*sx))
+        y=max(0,math.ceil((bounds['y']-screen['y'])*sy))
+        right=min(width,math.floor((bounds['x']+bounds['width']-screen['x'])*sx))
+        bottom=min(height,math.floor((bounds['y']+bounds['height']-screen['y'])*sy))
+        return (x,y,right-x,bottom-y) if right>x and bottom>y else None
+    except (KeyError,TypeError,ValueError):
+        return None
+
+
+def observation_state(snapshot):
+    """Debug geometry/folder state only; no field values or other-app window titles."""
+    if not isinstance(snapshot,dict):
+        return {}
+    result = {key:snapshot[key] for key in ('focused_role','focused_container_roles','finder') if key in snapshot}
+    result['app'] = {key:(snapshot.get('app') or {}).get(key) for key in ('name','bundle_id')}
+    result['window_bounds'] = ((snapshot.get('window') or {}).get('bounds') or {})
+    return result
 
 
 class _Bridge(QObject):
@@ -187,6 +232,7 @@ class EvalControl:
         return {
             'now': round(now, 3), 'idle': idle, 'quiet_for': round(quiet, 3) if idle else 0, 'events': events, 'event_count': count,
             'ready': {'app_awareness': window.desktop_monitor.enabled, 'screen_vision': window.vision.enabled},
+            'observation': observation_state(window.desktop_monitor.context()),
             'plan': {key: plan.get(key) for key in ('operation', 'app_name', 'target', 'goal_mode', 'computed', 'remaining_request', 'opening')},
             'pending_action': {key: pending.get(key) for key in ('type', 'label', 'goal')} if pending else None,
             'task': {'status': task.status, 'goal': task.goal, 'steps': len(task.receipts), 'timings': task.timings,

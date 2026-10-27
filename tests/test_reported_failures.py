@@ -55,6 +55,15 @@ class Harness(unittest.TestCase):
 
 
 class StopsAfterLaunchTests(Harness):
+    def test_finder_filename_editor_is_cancelled_without_typing_or_model_call(self):
+        self.desktop.bridge.value.update(app={'bundle_id':'com.apple.finder','name':'Finder'},
+            focused_role='AXTextField',focused_container_roles=['AXCell','AXRow','AXOutline'])
+        task=ComputerTask('Double-click the folder in Finder.',automatic=True,goal_mode='inspect')
+        step=self.propose(task)
+        self.assertEqual((step['action']['type'],step['action']['key']),('press_key','escape'))
+        self.assertFalse(step['review'])
+        self.provider.complete_structured.assert_not_called()
+
     def test_calculator_arithmetic_continues_after_a_premature_done(self):
         task = ComputerTask('Open Calculator and compute (2+2)*3', automatic=True, goal_mode='inspect')
         task.record({'type': 'launch_app', 'label': 'Open Calculator', 'status': 'submitted'})

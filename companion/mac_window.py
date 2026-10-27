@@ -99,6 +99,21 @@ _button_imp = None
 _button_callbacks = {}
 
 
+def weak_callback(callback):
+    """Resolve Python and Qt bound methods without retaining their widget."""
+    try:
+        return weakref.WeakMethod(callback)
+    except TypeError:
+        owner, name = getattr(callback, '__self__', None), getattr(callback, '__name__', None)
+        if owner is None or not name:
+            return weakref.ref(callback)
+        reference = weakref.ref(owner)
+        def resolve():
+            instance = reference()
+            return getattr(instance, name, None) if instance is not None else None
+        return resolve
+
+
 def _dispatch_window_button(this, selector, sender):
     callback = _button_callbacks.get(sender)
     callback = callback() if callback else None
@@ -129,7 +144,7 @@ def bind_window_button(widget, button, callback):
             objc.class_addMethod(cls, objc.sel_registerName(b'perform:'), ctypes.cast(_button_imp, ctypes.c_void_p), b'v@:@')
             objc.objc_registerClassPair(cls)
         _button_target = send(send(cls, 'alloc'), 'init')
-    _button_callbacks[button] = weakref.WeakMethod(callback)
+    _button_callbacks[button] = weak_callback(callback)
     widget.destroyed.connect(lambda *args, key=button: _button_callbacks.pop(key, None))
     send(button, 'setTarget:', _button_target, restype=None, argtypes=(ctypes.c_void_p,))
     send(button, 'setAction:', objc.sel_registerName(b'perform:'), restype=None, argtypes=(ctypes.c_void_p,))
@@ -173,6 +188,19 @@ def make_key(widget):
         send(window, 'makeKeyWindow', restype=None)
         return True
     except (AttributeError, TypeError, ValueError, OSError, ctypes.ArgumentError):
+        return False
+
+
+def release_key(widget):
+    """Yield a non-activating panel's keyboard before acting in another app."""
+    try:
+        window = ns_window(widget)
+        if not window:
+            return False
+        if send(window,'isKeyWindow',restype=ctypes.c_bool):
+            send(window,'resignKeyWindow',restype=None)
+        return True
+    except (AttributeError,TypeError,ValueError,OSError,ctypes.ArgumentError):
         return False
 
 

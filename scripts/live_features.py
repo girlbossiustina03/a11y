@@ -40,10 +40,16 @@ def ui(r):
 
 def face_click(r, right=False):
     state = ui(r)
+    if right:
+        from eval_mouse import right_click
+        right_click(state['pid'], *state['face'])
+        time.sleep(.4)
+        return
+    click = 'click at {(item 2 of argv as integer), (item 3 of argv as integer)}'
     osa('''tell application "System Events"
 set p to first application process whose unix id is (item 1 of argv as integer)
 set frontmost of p to true
-click at {(item 2 of argv as integer), (item 3 of argv as integer)}''' + (' using {control down}' if right else '') + '\nend tell',
+''' + click + '\nend tell',
         state['pid'], *state['face'])
     time.sleep(.4)
 
@@ -53,11 +59,12 @@ def button(r, title, role, press=True):
 set p to first application process whose unix id is (item 1 of argv as integer)
 tell p
 set frontmost to true
-set b to first button of window (item 2 of argv) whose subrole is (item 3 of argv)
+set w to first window whose name ends with (item 2 of argv)
+set b to first button of w whose subrole is (item 3 of argv)
 if item 4 of argv is "press" then perform action "AXPress" of b
 return enabled of b
 end tell
-end tell''', ui(r)['pid'], title, role, 'press' if press else 'read')
+end tell''', ui(r)['pid'], title.strip(), role, 'press' if press else 'read')
 
 
 def space_monitors():
@@ -176,7 +183,7 @@ def build(window, count=30, seed=0):
     def recovered(s,e):
         target = osa('tell application "Finder" to return POSIX path of (target of front Finder window as alias)').rstrip('/')
         observed(s, target=target)
-        return task_started(e) and target == str(recovery['root']/'Recovered')
+        return task_started(e) and le.same_path(target,recovery['root']/'Recovered')
     def recover_cleanup():
         try:
             if recovery.get('root'):
@@ -201,8 +208,10 @@ end tell''', recovery['root'])
     # Native companion controls: stimulus goes through System Events, never a socket action.
     for index, kind in enumerate(('face', 'menus', 'right_click', 'green', 'yellow', 'reply_buttons', 'spaces')):
         saved = {}
-        def setup(r, saved=saved):
+        def setup(r, saved=saved, kind=kind):
             saved['runner'] = r
+            if kind == 'reply_buttons':
+                face_click(r)
         def check(s,e,kind=kind,saved=saved):
             r = saved['runner']
             before = ui(r)
@@ -261,8 +270,9 @@ end tell''', before['pid'])
             if kind == 'reply_buttons':
                 title = osa('''tell application "System Events"
 set p to first application process whose unix id is (item 1 of argv as integer)
-return name of first window of p whose name is not "a11y" and name is not "A11y cursor"
-end tell''', before['pid'])
+set frontmost of p to true
+return "TITLE:" & (name of first window of p whose name is not "a11y" and name is not "A11y cursor")
+end tell''', before['pid']).removeprefix('TITLE:')
                 disabled = button(r, title, 'AXZoomButton', False) == 'false'
                 button(r, title, 'AXMinimizeButton'); time.sleep(.4)
                 after = ui(r)
@@ -375,7 +385,7 @@ end tell''', marker)
                 text = osa('tell application "TextEdit" to return text of front document')
                 font = osa('tell application "TextEdit" to return font of every character of front document')
                 observed(s, path=path, text=text, fonts=font)
-                return path == str(state['document']) and text.strip() == marker+' violet compass' and all('bold' in f.casefold() for f in font.split(', '))
+                return le.same_path(path,state['document']) and text.strip() == marker+' violet compass' and all('bold' in f.casefold() for f in font.split(', '))
             if kind == 'drag':
                 pending = s.get('pending_action')
                 moved = (state['dest']/state['file'].name).exists() and not state['file'].exists()
@@ -400,7 +410,7 @@ end tell''', marker)
             # Selection alone can be achieved without scrolling; require actual scroll receipts too.
             receipts = (s.get('task') or {}).get('receipts', [])
             observed(s, selection=selection, receipts=receipts)
-            return selection == str(state['file']) and any('scroll' in str(x).casefold() for x in receipts)
+            return le.same_path(selection,state['file']) and any('scroll' in str(x).casefold() for x in receipts)
         request = {
             'scroll': f'Scroll down through this Finder list and select 179 {marker}.txt near the bottom.',
             'drag': f'Drag 179 {marker}.txt from Source into its sibling Destination folder; ask me before moving it.',

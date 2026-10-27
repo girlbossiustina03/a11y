@@ -141,9 +141,17 @@ end tell''', app, label)
             deadline = time.monotonic()+3
             while True:
                 values = ax_values(app)
+                front = le.front_app()
+                source = 'accessibility'
+                if not values.strip() and front == app:
+                    # Some native apps expose no named AX text. Use the same
+                    # cropped current-window OCR that independently sees their UI.
+                    values = '\n'.join(le.screen_lines(window_only=True))
+                    source = 'window OCR'
                 position = values.casefold().find(label.casefold())
                 observed = s.setdefault('_observed', {})
-                observed['front_app'] = le.front_app()
+                observed['front_app'] = front
+                observed['evidence_source'] = source
                 observed['ax_text'] = values[max(0, position-100):max(0, position-100)+300]
                 if observed['front_app'] == app and position >= 0:
                     return True
@@ -179,7 +187,7 @@ end tell''', app, label)
         timer_setup, [timer_cleanup])
     for view, other in [('Day','2'), ('Week','1')]:
         add('calendar_'+view.lower(), f'Switch Calendar to the {view.lower()} view.', 'Calendar',
-            checked_menu('Calendar','View',view), lambda r, other=other: (le.activate('Calendar'), keys('Calendar',other)))
+            checked_menu('Calendar','View','By '+view), lambda r, other=other: (le.activate('Calendar'), keys('Calendar',other)))
     add('maps_place', 'Show me the Eiffel Tower in Maps.', 'Maps',
         app_visible('Maps','Eiffel Tower'), lambda r: subprocess.run(['open','maps://?q=Reykjavik'],check=True,timeout=20))
     # Lookup is a URL navigation, never typing into Dictionary's search field.

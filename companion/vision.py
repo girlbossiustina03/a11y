@@ -195,6 +195,10 @@ class ScreenVision:
             raise ValueError('The target or its window changed. No click was sent; ask for a fresh target.')
         if not self.enabled or self.generation != generation:
             raise ValueError('Screen vision was paused. No click was sent.')
+        if proposal.get('type') != 'drag' and hasattr(desktop.bridge,'hit'):
+            hit = desktop.bridge.hit(screen['x']+proposal['x']*screen['width'], screen['y']+proposal['y']*screen['height'])
+            if self.named_hit_conflict(proposal,hit):
+                raise ValueError('A different file or menu command is under that point. No click was sent; ask for a fresh target.')
         result = desktop.bridge.drag(proposal, guard) if proposal.get('type') == 'drag' else desktop.bridge.click(proposal, guard)
         # How it clicked: "press" (accessibility, the user's pointer untouched), "focus", or "pointer" (borrowed, put back).
         timing('click.method', time.monotonic(), method=str(result.get('method', 'pointer'))[:10])
@@ -202,3 +206,12 @@ class ScreenVision:
             raise RuntimeError('The click result is uncertain. Check the app before trying again.')
         desktop.collect_once()
         return result
+
+    @staticmethod
+    def named_hit_conflict(proposal, hit):
+        if not isinstance(hit,dict) or not (hit.get('finder_item') or hit.get('role')=='AXMenuItem'):
+            return False
+        import unicodedata
+        actual=unicodedata.normalize('NFC',str(hit.get('title',''))).casefold().strip()
+        wanted=unicodedata.normalize('NFC',str(proposal.get('label',''))).casefold().strip()
+        return bool(actual and wanted and actual != wanted)

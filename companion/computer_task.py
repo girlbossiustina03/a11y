@@ -41,7 +41,7 @@ SCHEMA = {'anyOf': [_action_step, _terminal_step]}
 UNSUPPORTED = {'Windows': {'new_window'}}
 
 
-def schema_for(platform, control_ids=None, target_ids=None):
+def schema_for(platform, control_ids=None, target_ids=None, file_target_ids=None):
     """The step grammar for this platform. With control_ids, press_control can name only a
     control in the current observation (or is left out when there are none): a model that
     invented IDs got two rejected steps and a blocked task (live, Teams in Safari)."""
@@ -69,6 +69,9 @@ def schema_for(platform, control_ids=None, target_ids=None):
         variants.insert(1, {'type': 'object', 'additionalProperties': False, 'required': ['type', 'target_id', 'text'],
                             'properties': {'type': {'enum': ['type_into']}, 'target_id': {'enum': list(target_ids)}, 'text': {'type': 'string'}}})
     variants = schema['anyOf'][0]['properties']['action']['anyOf']
+    if file_target_ids:
+        variants.insert(0, {'type':'object','additionalProperties':False,'required':['type','target_id'],
+                            'properties':{'type':{'enum':['open_target']},'target_id':{'enum':list(file_target_ids)}}})
     variants.append({'type': 'object', 'additionalProperties': False, 'required': ['type', 'query'],
                      'properties': {'type': {'enum': ['search_in_app']}, 'query': {'type': 'string'}}})
     variants.append({'type': 'object', 'additionalProperties': False, 'required': ['type', 'text'],
@@ -209,8 +212,13 @@ missing control names are NOT missing screen access. The supplied screenshot is 
 visual evidence. Click the center of the target, then inspect the NEW screenshot
 after execution. This works across apps, not only the apps named in examples.
 Optional button left/right and click_count 1/2 support double-clicking
-(left only) and context menus. drag_target presses on one target and releases on another: from one
-text line to another selects that text. press_key cmd_s saves (the user confirms). Use type_text only when metadata confirms a focused non-password text field,
+(left only) and context menus.
+In file lists a single-click selects; double-click opens. Slow repeated clicks on a filename can
+start renaming. To open a selected file/folder use a double-click or File > Open, not another single-click.
+Use open_target with a listed file/folder target_id to open or enter it; code performs the opening gesture.
+click_target only selects a file. A filename field is not a search box: do not type into it to navigate.
+drag_target presses on one target and releases on another: from one text line to another selects that text.
+press_key cmd_s saves (the user confirms). Use type_text only when metadata confirms a focused non-password text field,
 with literal user-requested text OR text you compose when the goal explicitly asks
 you to write/draft a summary or other content. Do not invent recipient data or secrets.
 It does not press Enter. To search: if desktop.focused_role is not already a text field, click
@@ -264,7 +272,7 @@ def search_field_focused(snapshot):
 DECLINE = re.compile(r"^\W*(?:don'?t allow|do not allow|not now|no,? thanks|reject(?: all)?|decline|deny|close|cancel|dismiss|skip|"
                      r"maybe later|later|only (?:necessary|essential)(?: cookies)?|(?:necessary|essential) only|use necessary cookies only|got it)\W*$", re.I)
 # Menu items that change or end something; the user confirms them.
-MENU_CHANGES = re.compile(r'\b(quit|delete|empty|erase|log ?out|sign ?out|restart|shut ?down|sleep|force quit|move to (?:bin|trash)|send|remove|format|reset)\b', re.I)
+MENU_CHANGES = re.compile(r'\b(quit|delete|rename|empty|erase|log ?out|sign ?out|restart|shut ?down|sleep|force quit|move to (?:bin|trash)|send|remove|format|reset)\b', re.I)
 
 
 def needs_review(action, risk):
@@ -279,7 +287,7 @@ def needs_review(action, risk):
     if action.get('type') == 'drag' and not action.get('selects_text'):
         return True  # a drag can move files, windows or items; selecting text in a field is only selecting
     import re
-    return bool(re.search(r'\b(send|post|delete|remove|buy|pay|purchase|subscribe|install|download|upload|allow|permission|password|sign.?in|log.?in|submit|'
+    return bool(re.search(r'\b(send|post|delete|rename|remove|buy|pay|purchase|subscribe|install|download|upload|allow|permission|password|sign.?in|log.?in|submit|'
                           r'turn on|turn off|enable|disable|accept|block|unsubscribe|save|continue (?:as|with))\b', action.get('label', ''), re.I))
 
 
@@ -331,7 +339,7 @@ def screen_marks(targets, regions, screen, limit=160):
             x, y = (b['x']-screen.get('x', 0))/screen['width'], (b['y']-screen.get('y', 0))/screen['height']
             width, height = b['width']/screen['width'], b['height']/screen['height']
             if 0 <= x+width/2 < 1 and 0 <= y+height/2 < 1:
-                marks.append({'kind': ('page ' if target.get('page') else '')+ROLE_NAMES.get(target.get('role'), 'control')
+                marks.append({'kind': ('file or folder' if target.get('file_item') else ('page ' if target.get('page') else '')+ROLE_NAMES.get(target.get('role'), 'control'))
                               + (', selected' if target.get('selected') is True else ''), 'label': target['label'][:80],
                               'x': x, 'y': y, 'width': width, 'height': height})
     covered = list(marks)
@@ -382,13 +390,17 @@ def resolve_target(raw, marks):
         to_x, to_y = (second['x']+second['width']-0.001 if text else second['x']+second['width']/2), second['y']+second['height']/2
         label = ('Select from “%s” to “%s”' if text else 'Drag “%s” to “%s”') % (first['label'][:40], second['label'][:40])
         return dict(raw, action={'type': 'drag', 'x': round(x, 4), 'y': round(y, 4), 'to_x': round(to_x, 4), 'to_y': round(to_y, 4), 'label': label})
-    if not isinstance(action, dict) or action.get('type') != 'click_target':
+    if not isinstance(action, dict) or action.get('type') not in ('click_target','open_target'):
         return raw
     mark = next((m for m in marks if m['id'] == action.get('target_id')), None)
     if mark is None:
         raise ValidationError('That target number is not on the current screen. Choose a listed target.')
+    if action['type']=='open_target' and not mark.get('kind','').startswith('file or folder'):
+        raise ValidationError('open_target requires an observed file or folder, not another control.')
     click = {'type': 'click_point', 'x': round(mark['x']+mark['width']/2, 4), 'y': round(mark['y']+mark['height']/2, 4), 'label': mark['label']}
     click.update({key: action[key] for key in ('button', 'click_count') if key in action})
+    if action['type']=='open_target':
+        click.update(button='left',click_count=2)
     return dict(raw, action=click)
 
 
@@ -505,10 +517,49 @@ def click_goal(goal):
     if not match:
         return None
     want = label_words(match.group('target'))
-    if not want or len(want) > 4:
+    if not want or len(want) > 24:
         return None
     verb = match.group('verb').casefold()
     return want, 'right' if verb.startswith('right') else 'left', 2 if verb.startswith('double') else 1
+
+
+def scoped_click_goal(goal, app_name):
+    """Strip an observed app/window qualifier; the label must still match one target."""
+    if not app_name:
+        return click_goal(goal)
+    scope = r'\s+(?:in|on)\s+(?:(?:this|the|my)\s+)?(?:(?:current|front|open)\s+)?(?:'+re.escape(app_name)+r'\s+)?window\s*[.!?]*$'
+    return click_goal(re.sub(scope,'',goal,flags=re.I))
+
+
+def requested_gesture(action, goal):
+    """Keep the user's explicit gesture when the model identifies its named target.
+
+    Qualifiers and subsequent work can make a click goal too long for the exact
+    shortcut. They do not turn a requested double-click into a single-click.
+    Only the named prefix matches: intermediate toolbar/navigation clicks keep
+    the model's gesture. Target validation still runs after this normalization.
+    """
+    if action.get('type') != 'click_point':
+        return action
+    match = CLICK_GOAL.match(goal or '')
+    if not match:
+        return action
+    label = label_words(str(action.get('label','')).strip('“”\"'))
+    wanted = label_words(match.group('target').strip('“”\"'))
+    if not label or wanted[:len(label)] != label:
+        return action
+    verb = match.group('verb').casefold()
+    return dict(action, button='right' if verb.startswith('right') else 'left',
+                click_count=2 if verb.startswith('double') else 1)
+
+
+def finder_name_editor(snapshot):
+    """A native filename editor inside Finder's item tree, never its search box."""
+    snapshot = snapshot or {}
+    return ((snapshot.get('app') or {}).get('bundle_id') == 'com.apple.finder'
+            and snapshot.get('focused_role') == 'AXTextField'
+            and (bool({'AXCell','AXRow'} & set(snapshot.get('focused_container_roles') or []))
+                 or snapshot.get('focused_container_roles')==['AXApplication'] and not (snapshot.get('window') or {}).get('bounds')))
 
 
 MENU_GOAL = re.compile(r"^\W*(?:please\s+)?(?:open|show(?: me)?|click(?: on)?)\s+(?:the\s+)?(?P<menu>[\w&'-]+(?:\s+[\w&'-]+)?)\s+menu"
@@ -599,7 +650,7 @@ def labelled_targets(want, regions, controls, screen):
                 and all(isinstance(bounds.get(key), (int, float)) for key in ('x', 'y', 'width', 'height'))):
             x = (bounds['x']+bounds['width']/2-screen.get('x', 0))/screen['width']
             y = (bounds['y']+bounds['height']/2-screen.get('y', 0))/screen['height']
-            if 0 <= x < 1 and 0 <= y < 1:
+            if 0 <= x < 1 and 0 <= y < 1 and not any(abs(x-fx)<.001 and abs(y-fy)<.001 for fx,fy,_ in found):
                 found.append((x, y, control))
     for region in regions:
         if label_words(region.get('text', '')) == want:
@@ -691,6 +742,7 @@ def validate_step(raw, desktop, snapshot, *, goal_mode=None, screen=None, text_r
     action = raw['action']
     if not isinstance(action, dict) or not isinstance(action.get('type'), str) or action['type'] not in TOOLS:
         raise ValidationError('That task action is not supported.')
+    action = requested_gesture(action, goal)
     if action['type'] == 'launch_app' and isinstance(action.get('bundle_id'), str):
         navigation = browser_launch_as_navigation(action, goal, catalog)
         if navigation:
@@ -725,6 +777,8 @@ def validate_step(raw, desktop, snapshot, *, goal_mode=None, screen=None, text_r
     validated = validate_response({'request_kind': 'answer', 'message': message, 'desktop_action': action,
         'target': None}, has_screen=True, desktop=desktop, desktop_snapshot=snapshot)
     action = validated['desktop_action']
+    if finder_name_editor(snapshot) and (action['type'] == 'type_text' or action['type'] == 'press_key' and action.get('key') == 'enter'):
+        raw = dict(raw, risk='change')  # changing/committing a filename always needs review
     if action['type'] == 'choose_menu' and FULL_SCREEN_MENU.search(action.get('path', '')) and not WINDOW_SIZE_WORDS.search(goal or ''):
         raise ValidationError('Leave the window as it is: full screen moves it to its own Space. Choose another way.')
     if goal_mode == 'inspect' and action['type'] == 'choose_menu' and MENU_CHANGES.search(action.get('path', '')):
@@ -741,7 +795,7 @@ def validate_step(raw, desktop, snapshot, *, goal_mode=None, screen=None, text_r
                 if all(key in bounds for key in ('x', 'y', 'width', 'height')) and bounds['x'] <= x < bounds['x']+bounds['width'] and bounds['y'] <= y < bounds['y']+bounds['height']:
                     labels.append(control.get('label', ''))
         import re
-        sensitive = (r'\b(post|send|reply|compose|delete|remove|buy|pay|purchase|subscribe|install|download|upload|allow|permission|password|sign.?in|log.?in|'
+        sensitive = (r'\b(post|send|reply|compose|delete|rename|remove|buy|pay|purchase|subscribe|install|download|upload|allow|permission|password|sign.?in|log.?in|'
                      r'submit|turn on|turn off|enable|disable|accept|block|unsubscribe|save|continue (?:as|with))\b|\bnew message\b')
         found = {match.group(0).casefold().replace(' ', '').replace('-', '') for label in labels if not DECLINE.match(label)
                  for match in re.finditer(sensitive, label, re.I)}
@@ -889,10 +943,13 @@ class ComputerTask:
 
         The model is not needed to find "Chat" when the accessibility tree or OCR shows one
         "Chat" (live: five model calls and ~20 s for this click). Anything else is left to it."""
-        if self.click is None or self.receipts:
+        if self.receipts:
+            return None
+        self.click = scoped_click_goal(self.goal,(snapshot.get('app') or {}).get('name',''))
+        if self.click is None:
             return None
         want, button, count = self.click
-        found = labelled_targets(want, regions, snapshot.get('controls') or [], visual.get('screen'))
+        found = labelled_targets(want, regions, (snapshot.get('controls') or [])+(snapshot.get('targets') or []), visual.get('screen'))
         if len(found) != 1:
             self.click = None  # none or several: the model chooses, from now on
             return None
@@ -940,6 +997,17 @@ class ComputerTask:
         self.click = None  # the row is the target; no label search
         label = next(word for word, value in ORDINALS.items() if value == position).capitalize()+' '+noun
         action = {'type': 'click_point', 'x': round(point[0], 4), 'y': round(point[1], 4), 'label': label}
+        # The ordinal is grounded in the observed list geometry. Bind a Finder
+        # row to its current native name too, so the execution hit guard can
+        # reject a changed item without mistaking 'first file' for a filename.
+        if hasattr(desktop.bridge,'hit'):
+            try:
+                screen=visual['screen']
+                hit=desktop.bridge.hit(screen['x']+point[0]*screen['width'],screen['y']+point[1]*screen['height'])
+                if isinstance(hit,dict) and hit.get('finder_item') and hit.get('title'):
+                    action['label']=hit['title']
+            except (RuntimeError,ValueError,OSError,KeyError,TypeError):
+                pass
         if button != 'left' or count != 1:
             action.update(button=button, click_count=count)
         step = validate_step({'status': 'action', 'message': 'Clicking the '+label.lower()+'.', 'risk': 'navigation', 'action': action},
@@ -1143,6 +1211,18 @@ class ComputerTask:
             return step
         if not isinstance(hit, dict):
             return step
+        from .vision import ScreenVision
+        if ScreenVision.named_hit_conflict(action, hit):
+            raise ValidationError('That point is a different Finder item or menu command. Use its actual visible name; '
+                                  'scroll or navigate until the requested item is visible instead of guessing its position.')
+        last = self.receipts[-1] if self.receipts else {}
+        if (hit.get('finder_item') and action.get('button', 'left') == 'left'
+                and action.get('click_count', 1) == 1 and last.get('type') == 'click_point'
+                and last.get('button', 'left') == 'left' and last.get('click_count', 1) == 1
+                and str(last.get('label', '')).casefold() == str(action.get('label', '')).casefold()):
+            raise ValidationError('That file or folder was just selected. Another slow single click can rename it. '
+                                  'Use the observed open_target or a double-click to open it; '
+                                  'if selection was the goal, verify the current selection instead.')
         window_button = {'AXFullScreenButton': 'full-screen', 'AXZoomButton': 'full-screen', 'AXMinimizeButton': 'minimise'}.get(hit.get('subrole'))
         skipped = [r for r in self.receipts[-3:] if r.get('type') == 'wait' and 'skipped' in str(r.get('label', ''))]
         if (window_button and not WINDOW_SIZE_WORDS.search(self.goal) or hit.get('app') == (snapshot.get('app') or {}).get('bundle_id')) and skipped:
@@ -1911,7 +1991,14 @@ class ComputerTask:
             timing('task.step.summary', step_started, step=len(self.receipts)+1, status=result['status'], code='click_result')
             return result
         from .eval_control import step_shot
-        step_shot(image_data, len(self.receipts)+1, None, 'observed')  # evaluation only: what each step saw, code steps too
+        step_shot(image_data, len(self.receipts)+1, None, 'observed', observation=snapshot, screen=visual.get('screen'))  # evaluation only: what each step saw, code steps too
+        if self.goal_mode == 'inspect' and finder_name_editor(snapshot):
+            # A slow second click on Finder's selected filename starts renaming.
+            # Escape cancels that transient editor; never type/commit a new name.
+            step = validate_step({'status':'action', 'message':'Leaving the filename unchanged.',
+                                  'risk':'navigation', 'action':{'type':'press_key','key':'escape'}},desktop,snapshot)
+            self.pending = step['action']
+            return dict(step, review=not self.automatic, visual_capture=visual)
         met = self.goal_met(provider, snapshot, regions, {'cancel': self.cancelled} if accepts_cancel(provider) else {})
         if met is not None:
             timing('task.step.summary', step_started, step=len(self.receipts)+1, status='done', code='goal_met')
@@ -1941,13 +2028,13 @@ class ComputerTask:
                    or self.click_step(desktop, snapshot, regions, visual, image_data, vision))
         if clicked is not None:
             from .eval_control import step_shot
-            step_shot(image_data, len(self.receipts)+1, clicked.get('action'), 'code')
+            step_shot(image_data, len(self.receipts)+1, clicked.get('action'), 'code', observation=snapshot, screen=visual.get('screen'))
             timing('task.step.summary', step_started, step=len(self.receipts)+1, status='action', code='click')
             return clicked
         queued = self.queued_step(desktop, snapshot, regions, visual, image_data)
         if queued is not None:
             from .eval_control import step_shot
-            step_shot(image_data, len(self.receipts)+1, queued.get('action'), 'tool')
+            step_shot(image_data, len(self.receipts)+1, queued.get('action'), 'tool', observation=snapshot, screen=visual.get('screen'))
             timing('task.step.summary', step_started, step=len(self.receipts)+1, status=queued['status'], code='tool')
             return queued
         if self.goal_mode is None:
@@ -2026,7 +2113,8 @@ class ComputerTask:
             request_messages = messages + [{'role': 'user', 'content': final}]
             try:
                 raw = provider.complete_structured(SYSTEM, request_messages,
-                                                   schema=schema_for(snapshot.get('platform'), control_ids, target_ids),
+                                                   schema=schema_for(snapshot.get('platform'), control_ids, target_ids,
+                                                                     [m['id'] for m in marks if m['kind'].startswith('file or folder')]),
                                                    image_data=model_image,
                                                    max_tokens=1200, thinking=False, **cancel_kwargs)
             finally:
@@ -2045,7 +2133,7 @@ class ComputerTask:
             try:
                 self.next_queue = []
                 raw = self.expand_tool(raw, marks, snapshot)
-                numbered = isinstance(raw, dict) and isinstance(raw.get('action'), dict) and raw['action'].get('type') == 'click_target'
+                numbered = isinstance(raw, dict) and isinstance(raw.get('action'), dict) and raw['action'].get('type') in ('click_target','open_target')
                 raw = resolve_target(raw, marks)
                 step = validate_step(raw, desktop, snapshot, goal_mode=self.goal_mode, screen=visual.get('screen'), snap=not numbered,
                                      text_regions=regions, catalog=self._catalog or (), goal=self.goal)
@@ -2154,7 +2242,7 @@ class ComputerTask:
             self.queue = [{'type': 'press_key', 'key': 'enter', 'bundle': (snapshot.get('app') or {}).get('bundle_id'),
                            'window': (snapshot.get('window') or {}).get('title'), 'risk': 'navigation'}]
         from .eval_control import step_shot
-        step_shot(image_data, len(self.receipts)+1, step.get('action'), step['status'])
+        step_shot(image_data, len(self.receipts)+1, step.get('action'), step['status'], observation=snapshot, screen=visual.get('screen'))
         if step['status'] != 'action':
             return {'status': step['status'], 'message': step['message'], 'action': None}
         action, message = step['action'], step['message']

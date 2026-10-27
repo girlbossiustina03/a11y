@@ -1140,6 +1140,10 @@ class Mascot(QWidget):
                 item.triggered.connect(lambda checked=False, a=entry[1]: self.action_requested.emit(a))
 
     def mousePressEvent(self, event):
+        if self.native and event.button() == Qt.MouseButton.LeftButton and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            self.drag_position = None
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton:
             self.drag_position = event.globalPosition().toPoint()-self.pos()
             self.drag_start, self.body_dragged = event.globalPosition().toPoint(), False
@@ -1273,6 +1277,12 @@ class CharacterButton(QAbstractButton):
         return faces.face(self.owner.skin, state, now//step)
 
     def mousePressEvent(self, event):
+        self.context_press = bool(self.owner.native and event.button() == Qt.MouseButton.LeftButton
+                                  and event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+        if self.context_press:
+            self.press_position = None
+            event.accept()
+            return
         self.wake()
         self.press_position = event.globalPosition().toPoint()
         self.owner_position = self.owner.pos()
@@ -1294,6 +1304,11 @@ class CharacterButton(QAbstractButton):
         event.accept()
 
     def mouseReleaseEvent(self, event):
+        if getattr(self, 'context_press', False):
+            self.context_press = False
+            self.setDown(False)
+            event.accept()
+            return
         if self.dragging or getattr(self, 'double_click', False) or event.button() != Qt.MouseButton.LeftButton:
             self.setDown(False)
         elif self.press_position is not None:
